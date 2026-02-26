@@ -38,12 +38,12 @@ Hint: To toggle the theme, you have click on a certain part of the apps logo
 
 ## Sneak peek - App and Features
 
-![Send to App Flow](./docs/AppsBoth.jpg)
-![Send to App Flow](./docs/CreateAppBoth.jpg)
-![Send to App Flow](./docs/QuickRunsBoth.jpg)
-![Send to App Flow](./docs/ProjectMixedMediaBoth.jpg)
-![Send to App Flow](./docs/SendToAppFlow.jpg)
-![Send to App Flow](./docs/HonorableMentions.jpg)
+![Send to App Flow](./Docs/AppsBoth.jpg)
+![Send to App Flow](./Docs/CreateAppBoth.jpg)
+![Send to App Flow](./Docs/QuickRunsBoth.jpg)
+![Send to App Flow](./Docs/ProjectMixedMediaBoth.jpg)
+![Send to App Flow](./Docs/SendToAppFlow.jpg)
+![Send to App Flow](./Docs/HonorableMentions.jpg)
 
 ---
 
