@@ -1,0 +1,31 @@
+# Build: from WorkflowUI root: docker-compose -f docker/docker-compose.yml up -d
+# Or from docker/: docker-compose up -d (with build context ..)
+
+services:
+  workflowui:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    env_file: .env
+    environment:
+      - PORT=${PORT:-3000}
+      - WORKFLOWUI_DB_PATH=${WORKFLOWUI_DB_PATH:-}
+      - COMFYUI_URL=${COMFYUI_URL:-http://localhost:8188/}
+      - INPUT_DATA_DIR=${INPUT_DATA_DIR:-input_data}
+      - MEDIA_STORAGE_ENABLED=${MEDIA_STORAGE_ENABLED:-false}
+      - MEDIA_STORAGE_ROOT_PATH=${MEDIA_STORAGE_ROOT_PATH:-media_storage}
+      - MEDIA_STORAGE_DELETE_REMOTE=${MEDIA_STORAGE_DELETE_REMOTE:-false}
+    ports:
+      - "${WEB_APP_PORT:-3000}:${PORT:-3000}"
+    volumes:
+      # Optional: one shared mount, or use separate mounts per path (see README).
+      - workflowui-data:/data
+      # Example: separate mounts for media storage and input images (set in .env):
+      # - workflowui-media:/media
+      # - workflowui-inputs:/inputs
+      # Then MEDIA_STORAGE_ROOT_PATH=/media, INPUT_DATA_DIR=/inputs
+
+volumes:
+  workflowui-data:
+  # workflowui-media:
+  # workflowui-inputs:

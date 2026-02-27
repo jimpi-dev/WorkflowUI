@@ -15,7 +15,7 @@
 | **Workflows**      | Stored definitions and versions with detected inputs/outputs; view and manage from the Workflows page.                                                                                                                                                            |
 | **Apps**           | Create *Apps* from any imported workflow version: custom title, form layout, default values. Open any app by its name.                                                                                                                                            |
 | **Projects**       | Organize runs in named projects (name, description, tags) or use  "Quick runs" which is a built-in project for one-off generations.                                                                                                                               |
-| **Run execution**  | Queueing System! - Fill the form → run record → queue → worker sends prompts to ComfyUI → poll until done → outputs in the gallery.                                                                                                                               |
+| **Run execution**  | Queueing System! - Enqueue as much generations as you want! (*until the backend crashes ^^).                                                                                                                                                                      |
 | **Media & config** | Optional local media storage; backend proxies ComfyUI `/view` and `/upload/image`; multi-ComfyUI via app-level URL. *requires [WorkflowUIPlugin](https://github.com/jimpi-dev/WorkflowUIPlugin) for best functionality                                            |
 
 Hint: To toggle the theme, you have click on a certain part of the apps logo
@@ -24,6 +24,7 @@ Hint: To toggle the theme, you have click on a certain part of the apps logo
 - Constantly adding support for more node classes! Check for updates!
 - Create and use App Presets! Save your favorite values into fully customizable App presets
 - App repository - share workflows/apps with others
+- When importing a workflow, check for used models (checkpoints, clip, vae) and highlight models not found for better user experience
 - Multi tenancy
 - Better UI on mobile devices (its not great right now, but it does work 🫡)
 - Improve media viewer, maybe even integrate custom media gallery
