@@ -20,6 +20,7 @@ class Run:
     input_snapshot_json: str | None = None
     metadata_snapshot_json: str | None = None
     comfyui_url: str | None = None
+    comfyui_version_id: str | None = None
     local_storage_status: str | None = "none"
     remote_status: str | None = "unknown"
     local_path: str | None = None

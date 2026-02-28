@@ -865,7 +865,7 @@ class MediaStorageService:
             "execution_time": run.execution_time,
             "prompt_id": run.prompt_id,
             "input_snapshot": json.loads(run.input_snapshot_json) if run.input_snapshot_json else None,
-            "metadata_snapshot": json.loads(run.metadata_snapshot_json) if run.metadata_snapshot_json else None,
+            "metadata_snapshot": self._run_repo.get_resolved_metadata_snapshot(run) if self._run_repo else (json.loads(run.metadata_snapshot_json) if run.metadata_snapshot_json else None),
             "outputs": [
                 {
                     "index": idx,

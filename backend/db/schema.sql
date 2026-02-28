@@ -1,5 +1,6 @@
 PRAGMA journal_mode=WAL;
 PRAGMA foreign_keys=ON;
+PRAGMA auto_vacuum=INCREMENTAL;
 
 CREATE TABLE IF NOT EXISTS workflow_definition (
     id TEXT PRIMARY KEY,
@@ -49,6 +50,14 @@ CREATE TABLE IF NOT EXISTS project (
     archived_at INTEGER NULL
 );
 
+CREATE TABLE IF NOT EXISTS comfyui_version (
+    id TEXT PRIMARY KEY,
+    metadata_hash TEXT NOT NULL UNIQUE,
+    comfyui_base_url TEXT NOT NULL,
+    metadata_json TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS run (
     id TEXT PRIMARY KEY,
     project_id TEXT NOT NULL REFERENCES project(id),
@@ -66,10 +75,13 @@ CREATE TABLE IF NOT EXISTS run (
     metadata_snapshot_json TEXT,
     run_group_id TEXT,
     comfyui_url TEXT,
+    comfyui_version_id TEXT REFERENCES comfyui_version(id),
     local_storage_status TEXT DEFAULT 'none',
     remote_status TEXT DEFAULT 'unknown',
     local_path TEXT
 );
+
+CREATE INDEX IF NOT EXISTS idx_comfyui_version_metadata_hash ON comfyui_version(metadata_hash);
 
 CREATE INDEX IF NOT EXISTS idx_workflow_definition_name ON workflow_definition(name);
 CREATE INDEX IF NOT EXISTS idx_workflow_version_workflow_id ON workflow_version(workflow_id);

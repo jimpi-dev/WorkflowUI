@@ -158,6 +158,20 @@ def merge_comfyui_version_into_metadata(run_entity: Any, comfyui_version_info: d
     return json.dumps(current)
 
 
+def build_slim_metadata_snapshot(run_entity: Any, comfyui_version_id: str) -> str:
+    current: dict = {}
+    if run_entity.metadata_snapshot_json:
+        try:
+            current = json.loads(run_entity.metadata_snapshot_json)
+        except Exception:
+            pass
+    if not isinstance(current, dict):
+        current = {}
+    current.pop("ComfyUI-VersionInfo", None)
+    current["comfyui_version_id"] = comfyui_version_id
+    return json.dumps(current)
+
+
 class RunExecutor:
     def __init__(self, default_comfy_url: str, input_data_dir: Path):
         self._default_comfy_url = default_comfy_url

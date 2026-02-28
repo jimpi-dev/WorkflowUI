@@ -112,6 +112,7 @@ class RunRepository(Protocol):
         metadata_snapshot_json: str | None = None,
         run_group_id: str | None = None,
         comfyui_url: str | None = None,
+        comfyui_version_id: str | None = None,
         local_storage_status: str | None = "none",
         remote_status: str | None = "unknown",
         local_path: str | None = None,
@@ -180,6 +181,7 @@ class RunRepository(Protocol):
         metadata_snapshot_json: str | None = None,
         deleted_outputs_json: str | None = None,
         deleted_at: int | None = None,
+        comfyui_version_id: str | None = None,
     ) -> None: ...
     def delete_run(self, run_id: str) -> bool: ...
     def delete_runs_by_project(
