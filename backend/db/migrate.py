@@ -164,6 +164,26 @@ def migrate(db_path: Path | str) -> None:
             )
         """)
         conn.execute("CREATE INDEX IF NOT EXISTS idx_app_preset_app_id ON app_preset(app_id)")
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS comfyui_version (
+                id TEXT PRIMARY KEY,
+                metadata_hash TEXT NOT NULL UNIQUE,
+                comfyui_base_url TEXT NOT NULL,
+                metadata_json TEXT NOT NULL,
+                created_at INTEGER NOT NULL
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_comfyui_version_metadata_hash ON comfyui_version(metadata_hash)")
+        run_cols = _run_columns(conn, "run")
+        if "comfyui_version_id" not in run_cols:
+            conn.execute("ALTER TABLE run ADD COLUMN comfyui_version_id TEXT REFERENCES comfyui_version(id)")
+        try:
+            mode = conn.execute("PRAGMA auto_vacuum").fetchone()
+            if mode and mode[0] == 0:
+                conn.execute("PRAGMA auto_vacuum=INCREMENTAL")
+                conn.execute("VACUUM")
+        except Exception:
+            pass
         conn.commit()
     finally:
         try:
