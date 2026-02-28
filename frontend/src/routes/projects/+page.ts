@@ -3,7 +3,6 @@ import { getApiBase } from '$lib/config';
 export type ProjectSummary = {
 	id: string;
 	name: string;
-	slug?: string | null;
 	description?: string | null;
 	created_at: number;
 	updated_at: number;

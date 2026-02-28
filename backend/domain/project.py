@@ -4,7 +4,6 @@ from dataclasses import dataclass
 class Project:
     id: str
     name: str
-    slug: str | None
     description: str | None
     created_at: int
     updated_at: int

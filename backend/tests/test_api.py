@@ -117,12 +117,11 @@ def test_get_workflow_definition_not_found(client):
 def test_post_projects_success(client):
     r = client.post(
         "/projects",
-        json={"name": "My Project", "slug": "my-project", "description": "Desc"},
+        json={"name": "My Project", "description": "Desc"},
     )
     assert r.status_code == 200
     data = r.json()
     assert data["name"] == "My Project"
-    assert data["slug"] == "my-project"
     assert "id" in data
 
 
@@ -141,7 +140,7 @@ def test_get_projects_list(client):
 
 
 def test_get_project_detail(client):
-    create = client.post("/projects", json={"name": "DetailProj", "slug": "detail-proj"})
+    create = client.post("/projects", json={"name": "DetailProj"})
     project_id = create.json()["id"]
     r = client.get(f"/projects/{project_id}")
     assert r.status_code == 200

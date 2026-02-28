@@ -61,7 +61,6 @@ class ProjectRepository(Protocol):
         self,
         id: str,
         name: str,
-        slug: str | None,
         description: str | None,
         created_at: int,
         updated_at: int,
@@ -71,7 +70,6 @@ class ProjectRepository(Protocol):
         header_color: str | None = None,
     ) -> Project: ...
     def get_project(self, project_id: str) -> Project | None: ...
-    def get_project_by_slug(self, slug: str) -> Project | None: ...
     def list_projects(
         self,
         tag: str | None = None,
@@ -83,7 +81,6 @@ class ProjectRepository(Protocol):
         project_id: str,
         *,
         name: str | None = None,
-        slug: str | None = None,
         description: str | None = None,
         updated_at: int | None = None,
         metadata_json: str | None = None,

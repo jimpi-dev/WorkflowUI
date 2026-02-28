@@ -112,15 +112,14 @@ def _row_to_project(row: tuple) -> Project:
     return Project(
         id=row[0],
         name=row[1],
-        slug=row[2],
-        description=row[3],
-        created_at=row[4],
-        updated_at=row[5],
-        metadata_json=row[6],
-        tags_json=row[7],
-        storage_mode=row[8] if len(row) > 8 else None,
-        header_color=row[9] if len(row) > 9 else None,
-        archived_at=row[10] if len(row) > 10 else None,
+        description=row[2],
+        created_at=row[3],
+        updated_at=row[4],
+        metadata_json=row[5],
+        tags_json=row[6],
+        storage_mode=row[7] if len(row) > 7 else None,
+        header_color=row[8] if len(row) > 8 else None,
+        archived_at=row[9] if len(row) > 9 else None,
     )
 
 
@@ -352,7 +351,6 @@ class SqliteProjectRepository:
         self,
         id: str,
         name: str,
-        slug: str | None,
         description: str | None,
         created_at: int,
         updated_at: int,
@@ -364,15 +362,14 @@ class SqliteProjectRepository:
         conn = self._conn()
         try:
             conn.execute(
-                """INSERT INTO project (id, name, slug, description, created_at, updated_at, metadata_json, tags_json, storage_mode, header_color)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (id, name, slug, description, created_at, updated_at, metadata_json, tags_json, storage_mode, header_color),
+                """INSERT INTO project (id, name, description, created_at, updated_at, metadata_json, tags_json, storage_mode, header_color)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (id, name, description, created_at, updated_at, metadata_json, tags_json, storage_mode, header_color),
             )
             conn.commit()
             return Project(
                 id=id,
                 name=name,
-                slug=slug,
                 description=description,
                 created_at=created_at,
                 updated_at=updated_at,
@@ -388,19 +385,8 @@ class SqliteProjectRepository:
         conn = self._conn()
         try:
             row = conn.execute(
-                "SELECT id, name, slug, description, created_at, updated_at, metadata_json, tags_json, storage_mode, header_color, archived_at FROM project WHERE id = ?",
+                "SELECT id, name, description, created_at, updated_at, metadata_json, tags_json, storage_mode, header_color, archived_at FROM project WHERE id = ?",
                 (project_id,),
-            ).fetchone()
-            return _row_to_project(row) if row else None
-        finally:
-            conn.close()
-
-    def get_project_by_slug(self, slug: str) -> Project | None:
-        conn = self._conn()
-        try:
-            row = conn.execute(
-                "SELECT id, name, slug, description, created_at, updated_at, metadata_json, tags_json, storage_mode, header_color, archived_at FROM project WHERE slug = ?",
-                (slug,),
             ).fetchone()
             return _row_to_project(row) if row else None
         finally:
@@ -414,7 +400,7 @@ class SqliteProjectRepository:
     ) -> list[Project]:
         conn = self._conn()
         try:
-            base_cols = "id, name, slug, description, created_at, updated_at, metadata_json, tags_json, storage_mode, header_color, archived_at"
+            base_cols = "id, name, description, created_at, updated_at, metadata_json, tags_json, storage_mode, header_color, archived_at"
             if archived is False:
                 where = "WHERE archived_at IS NULL"
             elif archived is True:
@@ -441,7 +427,6 @@ class SqliteProjectRepository:
         project_id: str,
         *,
         name: str | None = None,
-        slug: str | None = None,
         description: str | None = None,
         updated_at: int | None = None,
         metadata_json: str | None = None,
@@ -460,9 +445,6 @@ class SqliteProjectRepository:
             if name is not None:
                 updates.append("name = ?")
                 params.append(name)
-            if slug is not None:
-                updates.append("slug = ?")
-                params.append(slug)
             if description is not None:
                 updates.append("description = ?")
                 params.append(description)

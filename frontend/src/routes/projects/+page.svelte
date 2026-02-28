@@ -172,10 +172,9 @@
 		if (!search.trim()) return true;
 		const q = search.trim().toLowerCase();
 		const name = (p.name ?? '').toLowerCase();
-		const slug = (p.slug ?? '').toLowerCase();
 		const desc = (p.description ?? '').toLowerCase();
 		const tags = (p.tags ?? []).join(' ').toLowerCase();
-		return name.includes(q) || slug.includes(q) || desc.includes(q) || tags.includes(q);
+		return name.includes(q) || desc.includes(q) || tags.includes(q);
 	}
 
 	const distinctHeaderColors = $derived(
@@ -408,7 +407,7 @@
 									<span class="card-quick-badge list-quick-badge" aria-label="Default for Just generate">Just generate</span>
 								{/if}
 								<h3 class="project-name list-name">{p.name ?? ''}</h3>
-								<span class="list-slug-desc">{#if p.description}{p.description}{:else if p.slug}/{p.slug}{:else}—{/if}</span>
+								<span class="list-slug-desc">{#if p.description}{p.description}{:else}—{/if}</span>
 								<div class="list-right-group">
 									{#if showArchive}
 										<button
@@ -447,8 +446,6 @@
 							<h3 class="project-name">{p.name}</h3>
 							{#if p.description}
 								<p class="project-desc">{p.description}</p>
-							{:else if p.slug}
-								<p class="project-slug">/{p.slug}</p>
 							{/if}
 							<div class="project-meta">
 								<span class="meta-item" title="Last used">
@@ -1159,8 +1156,7 @@
 		overflow: hidden;
 	}
 
-	.project-desc,
-	.project-slug {
+	.project-desc {
 		margin: 0;
 		font-size: 0.8rem;
 		color: var(--muted);
@@ -1382,7 +1378,6 @@
 			font-size: 0.9rem;
 		}
 		.project-card .project-desc,
-		.project-card .project-slug,
 		.project-card .project-meta {
 			font-size: 0.75rem;
 		}
