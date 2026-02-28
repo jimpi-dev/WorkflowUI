@@ -39,7 +39,6 @@ CREATE TABLE IF NOT EXISTS workflow_app (
 CREATE TABLE IF NOT EXISTS project (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
-    slug TEXT,
     description TEXT,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL,
@@ -87,6 +86,5 @@ CREATE TABLE IF NOT EXISTS app_preset (
 
 CREATE INDEX IF NOT EXISTS idx_run_app_id ON run(app_id);
 CREATE INDEX IF NOT EXISTS idx_run_prompt_id ON run(prompt_id);
-CREATE INDEX IF NOT EXISTS idx_project_slug ON project(slug);
 CREATE INDEX IF NOT EXISTS idx_app_preset_app_id ON app_preset(app_id);
 /* idx_run_project_id is created in migrate.py when run table is recreated */

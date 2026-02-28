@@ -4,7 +4,6 @@ from pathlib import Path
 
 QUICK_RUNS_PROJECT_ID = "00000000-0000-0000-0000-000000000002"
 QUICK_RUNS_PROJECT_NAME = "Quick runs"
-QUICK_RUNS_PROJECT_SLUG = "quick-runs"
 
 
 def _run_columns(conn: sqlite3.Connection, table: str) -> list[str]:
@@ -20,7 +19,6 @@ def migrate(db_path: Path | str) -> None:
             CREATE TABLE IF NOT EXISTS project (
                 id TEXT PRIMARY KEY,
                 name TEXT NOT NULL,
-                slug TEXT,
                 description TEXT,
                 created_at INTEGER NOT NULL,
                 updated_at INTEGER NOT NULL,
@@ -29,13 +27,12 @@ def migrate(db_path: Path | str) -> None:
                 storage_mode TEXT DEFAULT 'inherit'
             )
         """)
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_project_slug ON project(slug)")
         cur = conn.execute("SELECT 1 FROM project WHERE id = ?", (QUICK_RUNS_PROJECT_ID,))
         if cur.fetchone() is None:
             conn.execute(
-                """INSERT INTO project (id, name, slug, description, created_at, updated_at, metadata_json, tags_json)
-                   VALUES (?, ?, ?, ?, 0, 0, NULL, NULL)""",
-                (QUICK_RUNS_PROJECT_ID, QUICK_RUNS_PROJECT_NAME, QUICK_RUNS_PROJECT_SLUG, "Runs from Just generate—no project needed."),
+                """INSERT INTO project (id, name, description, created_at, updated_at, metadata_json, tags_json)
+                   VALUES (?, ?, ?, 0, 0, NULL, NULL)""",
+                (QUICK_RUNS_PROJECT_ID, QUICK_RUNS_PROJECT_NAME, "Runs from Just generate—no project needed."),
             )
         _LEGACY_PROJECT_ID = "00000000-0000-0000-0000-000000000001"
         cur = conn.execute("SELECT 1 FROM project WHERE id = ?", (_LEGACY_PROJECT_ID,))
@@ -129,6 +126,9 @@ def migrate(db_path: Path | str) -> None:
             conn.execute("ALTER TABLE project ADD COLUMN header_color TEXT")
         if "archived_at" not in proj_cols:
             conn.execute("ALTER TABLE project ADD COLUMN archived_at INTEGER NULL")
+        if "slug" in proj_cols:
+            conn.execute("ALTER TABLE project DROP COLUMN slug")
+            conn.execute("DROP INDEX IF EXISTS idx_project_slug")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_run_project_id ON run(project_id)")
         app_cols = _run_columns(conn, "workflow_app")
         if "comfyui_url" not in app_cols:
