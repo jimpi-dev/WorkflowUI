@@ -1,0 +1,295 @@
+import hashlib
+import logging
+import requests
+from pathlib import Path
+from typing import Any
+
+from fastapi import APIRouter, HTTPException, Depends, UploadFile, File, Response
+
+from config import get_workflowui_embed_config
+from services.comfyui_info import normalize_comfy_url as _normalize_comfy_url
+from services.workflowui_metadata import (
+    build_workflowui_metadata_payload,
+    workflowui_metadata_to_json_string,
+)
+from services.png_metadata import inject_workflowui_chunk
+from services.mp3_metadata import inject_workflowui_metadata as inject_workflowui_metadata_mp3
+
+from dependencies import COMFY_URL, INPUT_DATA_DIR, get_db, get_media_storage_service, get_run_queue_state
+
+logger = logging.getLogger(__name__)
+router = APIRouter()
+
+ALLOWED_IMAGE_EXTENSIONS = frozenset({".png", ".jpg", ".jpeg", ".webp", ".gif"})
+_INTEGER_BINDING_FIELDS = frozenset({
+    "width", "height", "width_override", "height_override", "batch_size",
+    "steps", "cfg", "seed", "noise_seed",
+})
+
+
+def _resolve_comfy_url_for_prompt(prompt_id: str, state, get_db_fn) -> str:
+    with state.queue_lock:
+        for rid, data in state.runs.items():
+            if data.get("prompt_id") == prompt_id:
+                return data.get("comfyui_url") or COMFY_URL
+    run_repo = get_db_fn()[3]
+    run = run_repo.get_run_by_prompt_id(prompt_id) if run_repo else None
+    if run and run.comfyui_url:
+        return _normalize_comfy_url(run.comfyui_url)
+    return COMFY_URL
+
+
+def _ensure_input_data_dir() -> Path:
+    INPUT_DATA_DIR.mkdir(parents=True, exist_ok=True)
+    return INPUT_DATA_DIR
+
+
+def _content_hash_name(content: bytes, ext: str) -> str:
+    h = hashlib.sha256(content).hexdigest()[:16]
+    return f"{h}{ext}"
+
+
+def _media_type_for_path(path: Path) -> str:
+    suffix = (path.suffix or "").lower()
+    if suffix in (".webp", ".jpeg", ".jpg", ".png", ".gif", ".bmp", ".ico"):
+        return "image/" + ("jpeg" if suffix in (".jpeg", ".jpg") else "png" if suffix == ".png" else suffix[1:])
+    if suffix in (".mp4", ".webm", ".ogg", ".mov"):
+        return "video/" + ("mp4" if suffix == ".mp4" else "webm" if suffix == ".webm" else "ogg")
+    if suffix in (".mp3", ".wav", ".ogg", ".m4a"):
+        return "audio/" + ("mpeg" if suffix == ".mp3" else suffix[1:])
+    return "application/octet-stream"
+
+
+def _resolved_embed_on_download(app) -> bool:
+    if getattr(app, "embed_workflowui_metadata_on_download", None) is not None:
+        return bool(app.embed_workflowui_metadata_on_download)
+    return get_workflowui_embed_config().embed_on_download
+
+
+def _coerce_binding_value(field_path: str, value) -> Any:
+    if value is None:
+        return value
+    last_part = field_path.split(".")[-1]
+    if last_part in _INTEGER_BINDING_FIELDS:
+        try:
+            return int(float(value))
+        except (TypeError, ValueError):
+            return value
+    if last_part in ("strength", "strength_model"):
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return value
+    return value
+
+
+def apply_binding(node: dict, field_path: str, value):
+    if "inputs" not in node or not isinstance(node["inputs"], dict):
+        node["inputs"] = {}
+    value = _coerce_binding_value(field_path, value)
+    parts = field_path.split(".")
+    if len(parts) == 1:
+        node["inputs"][parts[0]] = value
+        return
+    if len(parts) == 2:
+        group_key, sub_key = parts
+        if group_key not in node["inputs"]:
+            node["inputs"][group_key] = {}
+        node["inputs"][group_key][sub_key] = _coerce_binding_value(sub_key, value)
+
+
+def resolve_node(prompt: dict, node_id: str):
+    if not isinstance(prompt, dict):
+        return None
+    if node_id in prompt:
+        return prompt[node_id]
+    parts = node_id.split(":")
+    current = prompt
+    for part in parts:
+        if not isinstance(current, dict):
+            return None
+        if part in current:
+            current = current[part]
+            continue
+        if "inputs" in current and part in current["inputs"]:
+            current = current["inputs"][part]
+            continue
+        return None
+    return current
+
+
+@router.get("/outputs/{prompt_id}")
+def get_outputs(prompt_id: str, state=Depends(get_run_queue_state)):
+    comfy_url = _resolve_comfy_url_for_prompt(prompt_id, state, get_db)
+    res = requests.get(f"{comfy_url}/history/{prompt_id}")
+    history = res.json()
+    if prompt_id not in history:
+        return {"status": "running"}
+
+    def _output_type(raw_type: str, filename: str) -> str:
+        if raw_type == "audio":
+            return "audio"
+        if raw_type == "video":
+            return "video"
+        if raw_type == "output" and filename:
+            lower = filename.lower()
+            if any(lower.endswith(ext) for ext in (".mp3", ".wav", ".ogg", ".flac", ".m4a", ".webm")):
+                return "audio"
+        return raw_type if raw_type else "image"
+
+    outputs = []
+    for node in history[prompt_id]["outputs"].values():
+        if "images" in node:
+            for img in node["images"]:
+                raw = img.get("type", "image")
+                outputs.append({
+                    "filename": img["filename"],
+                    "subfolder": img.get("subfolder", ""),
+                    "type": _output_type(raw, img.get("filename", "")),
+                })
+        if "gifs" in node:
+            for gif in node["gifs"]:
+                outputs.append({
+                    "filename": gif["filename"],
+                    "subfolder": gif.get("subfolder", ""),
+                    "type": "video",
+                })
+        if "audio" in node:
+            for aud in node["audio"]:
+                outputs.append({
+                    "filename": aud["filename"],
+                    "subfolder": aud.get("subfolder", ""),
+                    "type": "audio",
+                })
+    return {"status": "done", "images": outputs}
+
+
+@router.post("/upload_image")
+def upload_image(
+    image: UploadFile = File(..., alias="image"),
+    app_id: str | None = None,
+    db=Depends(get_db),
+):
+    if app_id:
+        _, _, app_repo, _, _, _, _ = db
+        app = app_repo.get_app_by_id(app_id) if app_repo else None
+        comfy_url = _normalize_comfy_url(app.comfyui_url or COMFY_URL) if app else COMFY_URL
+    else:
+        comfy_url = COMFY_URL
+    if not image.filename:
+        raise HTTPException(status_code=400, detail="Missing filename")
+    ext = Path(image.filename).suffix.lower()
+    if ext not in ALLOWED_IMAGE_EXTENSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported image format. Use: {', '.join(sorted(ALLOWED_IMAGE_EXTENSIONS))}",
+        )
+    if not image.content_type or not image.content_type.startswith("image/"):
+        raise HTTPException(status_code=400, detail="File must be an image")
+    try:
+        content = image.file.read()
+        _ensure_input_data_dir()
+        hash_name = _content_hash_name(content, ext)
+        local_path = INPUT_DATA_DIR / hash_name
+        if not local_path.exists():
+            with open(local_path, "wb") as f:
+                f.write(content)
+        files = {"image": (hash_name, content, image.content_type)}
+        res = requests.post(
+            f"{comfy_url.rstrip('/')}/upload/image",
+            files=files,
+            timeout=60,
+        )
+        res.raise_for_status()
+        data = res.json()
+        return {
+            "name": hash_name,
+            "subfolder": data.get("subfolder", ""),
+            "type": data.get("type", "input"),
+        }
+    except requests.RequestException as e:
+        raise HTTPException(status_code=502, detail=f"ComfyUI upload failed: {e!s}")
+    finally:
+        image.file.close()
+
+
+@router.get("/image")
+def get_image(
+    filename: str,
+    subfolder: str,
+    type: str,
+    run_id: str | None = None,
+    preview: str | None = None,
+    embed_workflowui_metadata: str | None = None,
+    state=Depends(get_run_queue_state),
+    service=Depends(get_media_storage_service),
+):
+    logger.info("GET /image filename=%s subfolder=%s type=%s run_id=%s preview=%s embed=%s", filename, subfolder, type, run_id, preview, embed_workflowui_metadata)
+    content: bytes
+    media_type: str
+    if run_id:
+        local_path = service.get_local_image_path(run_id, filename, subfolder or "", type or "output")
+        if local_path is not None and local_path.is_file():
+            logger.info("GET /image: serving from local storage %s", local_path)
+            media_type = _media_type_for_path(local_path)
+            content = local_path.read_bytes()
+        else:
+            content = None
+    else:
+        content = None
+    if content is None:
+        if run_id:
+            with state.queue_lock:
+                if run_id in state.runs and state.runs[run_id].get("comfyui_url"):
+                    comfy_url = state.runs[run_id]["comfyui_url"]
+                else:
+                    comfy_url = None
+            if comfy_url is None:
+                run_repo = get_db()[3]
+                run = run_repo.get_run(run_id) if run_repo else None
+                comfy_url = _normalize_comfy_url(run.comfyui_url or COMFY_URL) if run and run.comfyui_url else COMFY_URL
+        else:
+            comfy_url = COMFY_URL
+        comfy_type = "output" if type in ("image", "video", "audio") else type
+        params: dict[str, str] = {"filename": filename, "subfolder": subfolder, "type": comfy_type}
+        if preview:
+            params["preview"] = preview
+        base = comfy_url.rstrip("/")
+        plugin_view_url = f"{base}/workflowui/media/view"
+        try:
+            res = requests.get(plugin_view_url, params=params, timeout=60)
+            if res.ok:
+                logger.info("GET /image: served via WorkflowUIPlugin view (%s?filename=%s)", plugin_view_url, filename)
+                content = res.content
+                media_type = res.headers.get("content-type") or "image/png"
+            else:
+                res = None
+        except requests.RequestException as e:
+            logger.info("GET /image: WorkflowUIPlugin view not available (%s), using ComfyUI /view", e)
+            res = None
+        if res is None or not res.ok:
+            comfy_view_url = f"{base}/view"
+            try:
+                res = requests.get(comfy_view_url, params=params, timeout=60)
+            except requests.RequestException as e:
+                logger.warning("ComfyUI /view request failed: %s", e)
+                raise HTTPException(status_code=502, detail=f"Failed to fetch from ComfyUI: {e!s}")
+            if not res.ok:
+                raise HTTPException(status_code=res.status_code, detail=f"ComfyUI returned {res.status_code}")
+            content = res.content
+            media_type = res.headers.get("content-type") or "image/png"
+    if run_id and embed_workflowui_metadata and str(embed_workflowui_metadata).strip() in ("1", "true", "yes"):
+        _, _, app_repo, run_repo, _, _, _ = get_db()
+        run = run_repo.get_run(run_id) if run_repo else None
+        app = app_repo.get_app_by_id(run.app_id) if (run and run.app_id and app_repo) else None
+        embed_effective = _resolved_embed_on_download(app) if app else get_workflowui_embed_config().embed_on_download
+        if embed_effective:
+            _, workflow_repo, app_repo, run_repo, project_repo, _, _ = get_db()
+            payload = build_workflowui_metadata_payload(run_id, run_repo, workflow_repo, app_repo, project_repo)
+            if payload:
+                json_str = workflowui_metadata_to_json_string(payload)
+                if content.startswith(b"\x89PNG\r\n\x1a\n"):
+                    content = inject_workflowui_chunk(content, json_str)
+                elif type == "audio" and (content[:3] == b"ID3" or (len(content) >= 2 and content[0] == 0xFF and (content[1] & 0xE0) == 0xE0)):
+                    content = inject_workflowui_metadata_mp3(content, json_str)
+    return Response(content=content, media_type=media_type)
