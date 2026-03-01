@@ -163,24 +163,30 @@ export const load = async ({ params, fetch, url }) => {
 				bindings,
 				...(masterSeedInputKey ? { masterSeedInputKey } : {})
 			};
-			const [listRes, objectInfoRes, lorasRes, checkpointsRes, devicesRes] = await Promise.all([
+			const [listRes, objectInfoRes, lorasRes, checkpointsRes, devicesRes, rifeModelsRes, unetGgufModelsRes] = await Promise.all([
 				fetch(`${apiBase}/workflows`),
 				fetch(`${apiBase}/object_info`).catch(() => null),
 				fetch(`${apiBase}/loras`).catch(() => null),
 				fetch(`${apiBase}/checkpoints`).catch(() => null),
-				fetch(`${apiBase}/devices`).catch(() => null)
+				fetch(`${apiBase}/devices`).catch(() => null),
+				fetch(`${apiBase}/rife_models`).catch(() => null),
+				fetch(`${apiBase}/unet_gguf_models`).catch(() => null)
 			]);
 			const objectInfo = objectInfoRes?.ok ? await objectInfoRes.json() : { samplers: [], schedulers: [] };
 			const { samplers = [], schedulers = [] } = objectInfo;
 			const loras = lorasRes?.ok ? (await lorasRes.json())?.loras ?? [] : [];
 			const checkpoints = checkpointsRes?.ok ? (await checkpointsRes.json())?.checkpoints ?? [] : [];
 			const devices = devicesRes?.ok ? (await devicesRes.json())?.devices ?? [] : [];
+			const rifeModels = rifeModelsRes?.ok ? (await rifeModelsRes.json())?.rife_models ?? [] : [];
+			const unetGgufModels = unetGgufModelsRes?.ok ? (await unetGgufModelsRes.json())?.unet_gguf_models ?? [] : [];
 			for (const input of workflowModel.inputs) {
 				if (input.optionSource === 'samplers' && samplers.length) input.options = samplers;
 				if (input.optionSource === 'schedulers' && schedulers.length) input.options = schedulers;
 				if (input.optionSource === 'loras' && Array.isArray(loras) && loras.length) input.options = loras;
 				if (input.optionSource === 'checkpoints' && Array.isArray(checkpoints) && checkpoints.length) input.options = checkpoints;
 				if (input.optionSource === 'devices' && Array.isArray(devices) && devices.length) input.options = devices;
+				if (input.optionSource === 'rife_models' && Array.isArray(rifeModels) && rifeModels.length) input.options = rifeModels;
+				if (input.optionSource === 'unet_gguf_models' && Array.isArray(unetGgufModels) && unetGgufModels.length) input.options = unetGgufModels;
 			}
 			const workflows = listRes.ok ? await listRes.json() : [];
 			const workflowLoraPaths = extractLoraPathsFromDetectedInputs(detectedInputs);
@@ -229,13 +235,15 @@ export const load = async ({ params, fetch, url }) => {
 			};
 		}
 		
-		const [wfRes, listRes, objectInfoRes, lorasRes, checkpointsRes, devicesRes] = await Promise.all([
+		const [wfRes, listRes, objectInfoRes, lorasRes, checkpointsRes, devicesRes, rifeModelsRes, unetGgufModelsRes] = await Promise.all([
 			fetch(`${apiBase}/workflow/${params.id}`),
 			fetch(`${apiBase}/workflows`),
 			fetch(`${apiBase}/object_info`).catch(() => null),
 			fetch(`${apiBase}/loras`).catch(() => null),
 			fetch(`${apiBase}/checkpoints`).catch(() => null),
-			fetch(`${apiBase}/devices`).catch(() => null)
+			fetch(`${apiBase}/devices`).catch(() => null),
+			fetch(`${apiBase}/rife_models`).catch(() => null),
+			fetch(`${apiBase}/unet_gguf_models`).catch(() => null)
 		]);
 
 		if (!wfRes.ok) {
@@ -256,6 +264,8 @@ export const load = async ({ params, fetch, url }) => {
 		const loras = lorasRes?.ok ? (await lorasRes.json())?.loras ?? [] : [];
 		const checkpoints = checkpointsRes?.ok ? (await checkpointsRes.json())?.checkpoints ?? [] : [];
 		const devices = devicesRes?.ok ? (await devicesRes.json())?.devices ?? [] : [];
+		const rifeModels = rifeModelsRes?.ok ? (await rifeModelsRes.json())?.rife_models ?? [] : [];
+		const unetGgufModels = unetGgufModelsRes?.ok ? (await unetGgufModelsRes.json())?.unet_gguf_models ?? [] : [];
 
 		for (const input of workflowModel.inputs) {
 			if (input.optionSource === 'samplers' && samplers.length) {
@@ -272,6 +282,12 @@ export const load = async ({ params, fetch, url }) => {
 			}
 			if (input.optionSource === 'devices' && Array.isArray(devices) && devices.length) {
 				input.options = devices;
+			}
+			if (input.optionSource === 'rife_models' && Array.isArray(rifeModels) && rifeModels.length) {
+				input.options = rifeModels;
+			}
+			if (input.optionSource === 'unet_gguf_models' && Array.isArray(unetGgufModels) && unetGgufModels.length) {
+				input.options = unetGgufModels;
 			}
 		}
 

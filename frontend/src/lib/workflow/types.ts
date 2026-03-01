@@ -3,7 +3,8 @@ export type InputType =
     | 'number'
     | 'seed'
     | 'select'
-    | 'image';
+    | 'image'
+    | 'boolean';
 
 export type WorkflowInputRole =
     | 'seed'

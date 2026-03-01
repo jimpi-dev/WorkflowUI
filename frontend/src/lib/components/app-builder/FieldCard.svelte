@@ -20,6 +20,8 @@
 		availableClipTypes?: string[];
 		availableVaeModels?: string[];
 		availableDevices?: string[];
+		availableRifeModels?: string[];
+		availableUnetGgufModels?: string[];
 		optionSource?: string;
 		onVisibleChange: (visible: boolean) => void;
 		onDefaultOverrideChange: (value: unknown) => void;
@@ -41,6 +43,8 @@
 		availableClipTypes = [],
 		availableVaeModels = [],
 		availableDevices = [],
+		availableRifeModels = [],
+		availableUnetGgufModels = [],
 		optionSource = '',
 		onVisibleChange,
 		onDefaultOverrideChange,
@@ -53,6 +57,8 @@
 	const isClipTypeField = $derived(optionSource === 'clip_types');
 	const isVaeField = $derived(field === 'vae_name' || optionSource === 'vae_models');
 	const isDeviceField = $derived(field === 'device' || optionSource === 'devices');
+	const isRifeModelsField = $derived(field === 'ckpt_name' && optionSource === 'rife_models');
+	const isUnetGgufModelsField = $derived(optionSource === 'unet_gguf_models');
 
 	let expanded = $state(false);
 	let localDefaultDisplay = $state('');
@@ -578,6 +584,50 @@
 						>
 							<option value="">Default (optional)</option>
 							{#each deviceOpts as opt}
+								<option value={opt}>{opt}</option>
+							{/each}
+						</select>
+					{:else}
+						<input
+							type="text"
+							class="default-input"
+							placeholder="Default (optional)"
+							value={displayDefault}
+							oninput={(e) => onDefaultOverrideChange((e.target as HTMLInputElement).value || undefined)}
+						/>
+					{/if}
+				{:else if isRifeModelsField}
+					{#if availableRifeModels.length > 0}
+						{@const rifeOpts = displayDefault && !availableRifeModels.includes(displayDefault) ? [displayDefault, ...availableRifeModels] : availableRifeModels}
+						<select
+							class="default-input"
+							value={displayDefault}
+							onchange={(e) => onDefaultOverrideChange((e.target as HTMLSelectElement).value || undefined)}
+						>
+							<option value="">Default (optional)</option>
+							{#each rifeOpts as opt}
+								<option value={opt}>{opt}</option>
+							{/each}
+						</select>
+					{:else}
+						<input
+							type="text"
+							class="default-input"
+							placeholder="Default (optional)"
+							value={displayDefault}
+							oninput={(e) => onDefaultOverrideChange((e.target as HTMLInputElement).value || undefined)}
+						/>
+					{/if}
+				{:else if isUnetGgufModelsField}
+					{#if availableUnetGgufModels.length > 0}
+						{@const unetOpts = displayDefault && !availableUnetGgufModels.includes(displayDefault) ? [displayDefault, ...availableUnetGgufModels] : availableUnetGgufModels}
+						<select
+							class="default-input"
+							value={displayDefault}
+							onchange={(e) => onDefaultOverrideChange((e.target as HTMLSelectElement).value || undefined)}
+						>
+							<option value="">Default (optional)</option>
+							{#each unetOpts as opt}
 								<option value={opt}>{opt}</option>
 							{/each}
 						</select>

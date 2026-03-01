@@ -378,6 +378,49 @@ NODE_SPECS: dict[str, dict[str, Any]] = {
             "apply_limiter": {"type": "select", "label": "Apply limiter", "options": ["true", "false"]},
         },
     },
+    "ModelSamplingSD3": {
+        "fixedInputs": {
+            "shift": {"type": "number", "label": "Shift", "min": 0, "max": 10, "step": 0.1, "slider": True},
+        },
+    },
+    "INTConstant": {
+        "fixedInputs": {
+            "value": {"type": "number", "label": "Value"},
+        },
+    },
+    "UnetLoaderGGUF": {
+        "fixedInputs": {
+            "unet_name": {"type": "select", "label": "UNet model (GGUF)", "optionSource": "unet_gguf_models"},
+        },
+    },
+    "RIFE VFI": {
+        "fixedInputs": {
+            "ckpt_name": {"type": "select", "label": "RIFE model", "optionSource": "rife_models"},
+            "multiplier": {"type": "number", "label": "Multiplier", "min": 1, "max": 16, "step": 1},
+            "clear_cache_after_n_frames": {"type": "number", "label": "Clear cache after N frames", "min": 1, "max": 64},
+            "fast_mode": {"type": "boolean", "label": "Fast mode"},
+            "ensemble": {"type": "boolean", "label": "Ensemble"},
+            "scale_factor": {"type": "number", "label": "Scale factor", "min": 0.25, "max": 4, "step": 0.25},
+        },
+    },
+    "ImageResizeKJv2": {
+        "fixedInputs": {
+            "width": {"type": "number", "label": "Width", "min": 64, "max": 8192, "step": 8},
+            "height": {"type": "number", "label": "Height", "min": 64, "max": 8192, "step": 8},
+            "upscale_method": {"type": "select", "label": "Upscale method", "options": ["nearest-exact", "bilinear", "area", "bicubic", "lanczos"]},
+            "keep_proportion": {"type": "select", "label": "Keep proportion", "options": ["resize", "crop", "pad"]},
+            "pad_color": {"type": "text", "label": "Pad color"},
+            "crop_position": {"type": "select", "label": "Crop position", "options": ["center", "top", "bottom", "left", "right"]},
+            "divisible_by": {"type": "number", "label": "Divisible by", "min": 1, "max": 64, "step": 1},
+            "device": {"type": "select", "label": "Device", "optionSource": "devices"},
+            "image": {"type": "image", "label": "Image"},
+        },
+    },
+    "Text Multiline": {
+        "fixedInputs": {
+            "text": {"type": "text", "label": "Prompt"},
+        },
+    },
 }
 
 
@@ -396,6 +439,10 @@ def analyze_workflow(workflow: dict[str, Any]) -> dict[str, Any]:
         node_inputs = node.get("inputs") or {}
 
         if class_type == "CLIPTextEncode":
+            text_in = node_inputs.get("text")
+            if isinstance(text_in, list):
+                continue
+        if class_type == "Text Multiline":
             text_in = node_inputs.get("text")
             if isinstance(text_in, list):
                 continue
