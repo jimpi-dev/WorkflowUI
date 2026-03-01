@@ -2,6 +2,7 @@ import { api } from '$lib/api';
 
 const ENDPOINT_RESPONSE_KEY: Record<string, string> = {
     '/loras': 'loras',
+    '/lycoris_types': 'lycoris_types',
     '/checkpoints': 'checkpoints',
     '/clip_models': 'clip_models',
     '/vae_models': 'vae_models',

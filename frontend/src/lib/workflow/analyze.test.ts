@@ -214,6 +214,33 @@ describe('analyzeWorkflow', () => {
 		expect(bindingsForLora1.length).toBe(3);
 	});
 
+	it('includes fixed inputs for LoraLoader (lora_name, strength_model, strength_clip)', () => {
+		const workflow = {
+			'10': {
+				class_type: 'LoraLoader',
+				inputs: { lora_name: 'foo.safetensors', strength_model: 0.8, strength_clip: 1 },
+				_meta: { title: 'LoRA' }
+			}
+		};
+		const result = analyzeWorkflow(workflow);
+		expect(result.inputs.find((i) => i.key === '10.lora_name')).toBeDefined();
+		expect(result.inputs.find((i) => i.key === '10.strength_model')?.default).toBe(0.8);
+		expect(result.inputs.find((i) => i.key === '10.strength_clip')?.default).toBe(1);
+	});
+
+	it('includes fixed inputs for LycorisLoaderNode including lycoris_type', () => {
+		const workflow = {
+			'20': {
+				class_type: 'LycorisLoaderNode',
+				inputs: { lora_name: 'bar.safetensors', strength_model: 1, strength_clip: 0.5, lycoris_type: 'LoHA' },
+				_meta: { title: 'LyCORIS' }
+			}
+		};
+		const result = analyzeWorkflow(workflow);
+		expect(result.inputs.find((i) => i.key === '20.lora_name')).toBeDefined();
+		expect(result.inputs.find((i) => i.key === '20.lycoris_type')?.default).toBe('LoHA');
+	});
+
 	it('detects SaveAudioMP3 as audio output', () => {
 		const workflow = {
 			'50': {
