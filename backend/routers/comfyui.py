@@ -175,6 +175,71 @@ def get_clip_types():
     return {"clip_types": result}
 
 
+@router.get("/devices")
+def get_devices():
+    devices = []
+    seen = set()
+
+    def add_device(s: str) -> None:
+        if not isinstance(s, str) or not s.strip():
+            return
+        s = s.strip()
+        if s not in seen:
+            seen.add(s)
+            devices.append(s)
+
+    def extract_from_options(options) -> None:
+        if not isinstance(options, list):
+            return
+        for o in options:
+            if isinstance(o, str):
+                add_device(o)
+            elif isinstance(o, (list, tuple)) and len(o) > 0 and isinstance(o[0], str):
+                add_device(o[0])
+
+    try:
+        res = requests.get(f"{COMFY_URL}/object_info", timeout=10)
+        res.raise_for_status()
+        obj = res.json()
+    except Exception as e:
+        print("[devices] object_info fetch failed:", e)
+    else:
+        node_info = obj.get("CLIPLoader")
+        if isinstance(node_info, dict):
+            inputs = node_info.get("input") or node_info.get("Input") or {}
+            required = inputs.get("required") or {}
+            optional = inputs.get("optional") or {}
+            for name, spec in {**required, **optional}.items():
+                if name != "device" or not isinstance(spec, list) or len(spec) < 1:
+                    continue
+                options = spec[0]
+                extract_from_options(options)
+                break
+
+    if not devices:
+        try:
+            res = requests.get(f"{COMFY_URL}/system_stats", timeout=5)
+            res.raise_for_status()
+            data = res.json()
+        except Exception as e:
+            print("[devices] system_stats fetch failed:", e)
+        else:
+            raw_devices = data.get("devices") if isinstance(data.get("devices"), list) else []
+            for d in raw_devices:
+                if not isinstance(d, dict):
+                    continue
+                name = d.get("name") or d.get("device_name") or d.get("device")
+                if isinstance(name, str) and name.strip():
+                    add_device(name.strip())
+
+    if not devices:
+        for d in ["default", "cpu", "cuda"]:
+            add_device(d)
+
+    result = sorted(devices)
+    return {"devices": result}
+
+
 @router.get("/vae_models")
 def get_vae_models():
     try:

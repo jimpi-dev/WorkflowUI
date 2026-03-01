@@ -106,6 +106,7 @@ export default defineConfig({
 			'/clip_models': proxyTarget,
 			'/clip_types': proxyTarget,
 			'/vae_models': proxyTarget,
+			'/devices': proxyTarget,
 			'/config': proxyTarget,
 			// /apps: proxy API but not browser document nav (Accept: text/html) so /apps and /apps/create etc. serve the Svelte app
 			'/apps': {
