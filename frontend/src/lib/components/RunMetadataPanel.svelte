@@ -104,7 +104,7 @@
 </script>
 
 <div class="metadata-panel-overlay" role="dialog" aria-modal="true" aria-label={dialogTitle} tabindex="-1" onclick={(e) => { if (e.target === e.currentTarget) onClose(); }} onkeydown={(e) => { if (e.key === 'Escape') onClose(); if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); if (e.target === e.currentTarget) onClose(); } }}>
-	<div class="metadata-panel" role="document" tabindex="-1" onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.stopPropagation()}>
+	<div class="metadata-panel" role="presentation" tabindex="-1" onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.stopPropagation()}>
 		<div class="metadata-panel-header">
 			<h2>{dialogTitle}</h2>
 			<button type="button" class="metadata-panel-close" onclick={onClose} aria-label="Close">×</button>

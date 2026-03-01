@@ -245,9 +245,9 @@
 		<div class="tabs" role="tablist" aria-label="Projects or Archive">
 			<button
 				type="button"
+				role="tab"
 				class="tab-btn"
 				class:active={!showArchive}
-				aria-pressed={!showArchive}
 				aria-selected={!showArchive}
 				bind:this={projectsTabEl}
 				onclick={() => goto('/projects')}
@@ -260,9 +260,9 @@
 			</button>
 			<button
 				type="button"
+				role="tab"
 				class="tab-btn"
 				class:active={showArchive}
-				aria-pressed={showArchive}
 				aria-selected={showArchive}
 				bind:this={archiveTabEl}
 				onclick={() => goto('/projects?tab=archive')}
@@ -376,7 +376,7 @@
 						{#if p.id === QUICK_RUNS_PROJECT_ID}
 							<span class="card-quick-badge" aria-label="Default for Just generate">Just generate</span>
 						{/if}
-						<div class="card-actions-visual" onclick={(e) => (e.preventDefault(), e.stopPropagation())}>
+						<div class="card-actions-visual" role="presentation" tabindex="-1" onclick={(e) => (e.preventDefault(), e.stopPropagation())} onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); } }}>
 							{#if showArchive}
 								<button
 									type="button"
@@ -473,8 +473,8 @@
 	{/if}
 
 	{#if dialogOpen}
-		<div class="dialog-backdrop" role="dialog" aria-modal="true" aria-labelledby="new-project-dialog-title" onclick={closeNewProjectDialog}>
-			<div class="dialog-box" onclick={(e) => e.stopPropagation()}>
+		<div class="dialog-backdrop" role="dialog" aria-modal="true" aria-labelledby="new-project-dialog-title" tabindex="-1" onclick={closeNewProjectDialog} onkeydown={(e) => { if (e.key === 'Escape') closeNewProjectDialog(); }}>
+			<div class="dialog-box" role="presentation" tabindex="-1" onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.stopPropagation()}>
 				<h2 id="new-project-dialog-title" class="dialog-title">New project</h2>
 				<p class="dialog-desc">Give your project a name, or skip to name it later.</p>
 				<label class="dialog-label">

@@ -35,7 +35,7 @@
 					{#if data.run.images[0].remote_deleted && imageLoadFailed.has(imageKey(0))}
 						<div class="run-detail-deleted">Deleted</div>
 					{:else if data.run.images[0].type === 'video'}
-						<video src={imageUrl(data.run.images[0], data.run.id)} controls playsinline class="run-detail-media" onerror={() => markImageLoadFailed(0)}>Output 1</video>
+						<video src={imageUrl(data.run.images[0], data.run.id)} controls playsinline class="run-detail-media" onerror={() => markImageLoadFailed(0)}><track kind="captions" /></video>
 					{:else}
 						<img src={imageUrl(data.run.images[0], data.run.id)} alt="Generation output" class="run-detail-media" onerror={() => markImageLoadFailed(0)} />
 					{/if}
@@ -157,7 +157,7 @@
 								{#if img.remote_deleted && imageLoadFailed.has(imageKey(i))}
 									<div class="output-deleted-placeholder">Deleted</div>
 								{:else if img.type === 'video'}
-									<video src={imageUrl(img, data.run.id)} controls playsinline class="output-media" onerror={() => markImageLoadFailed(i)}>Output {i + 1}</video>
+									<video src={imageUrl(img, data.run.id)} controls playsinline class="output-media" onerror={() => markImageLoadFailed(i)}><track kind="captions" /></video>
 								{:else}
 									<img src={imageUrl(img, data.run.id)} alt="Output {i + 1}" onerror={() => markImageLoadFailed(i)} />
 								{/if}

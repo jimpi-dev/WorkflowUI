@@ -41,9 +41,11 @@
 		role="dialog"
 		aria-modal="true"
 		aria-labelledby="confirm-delete-dialog-title"
+		tabindex="-1"
 		onclick={handleBackdropClick}
+		onkeydown={(e) => { if (e.key === 'Escape') handleBackdropClick(); }}
 	>
-		<div class="confirm-delete-card" onclick={(e) => e.stopPropagation()}>
+		<div class="confirm-delete-card" role="presentation" tabindex="-1" onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.stopPropagation()}>
 			<p id="confirm-delete-dialog-title" class="confirm-delete-title">{title}</p>
 			<p class="confirm-delete-msg">{message}</p>
 			<label class="confirm-delete-checkbox">

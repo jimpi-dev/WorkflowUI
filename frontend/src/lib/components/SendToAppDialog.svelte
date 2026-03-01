@@ -146,7 +146,7 @@
 		onclick={handleBackdropClick}
 		onkeydown={handleKeydown}
 	>
-		<div class="send-to-app-panel" role="document" tabindex="-1" onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.stopPropagation()}>
+		<div class="send-to-app-panel" role="presentation" tabindex="-1" onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.stopPropagation()}>
 			<div class="send-to-app-header">
 				<div class="send-to-app-header-inner">
 					<span class="send-to-app-header-dot" aria-hidden="true"></span>
