@@ -16,7 +16,9 @@ import { FloatSpec } from './Float';
 import { EasyIntSpec } from './EasyInt';
 import { EasySeedSpec } from './EasySeed';
 import { KSamplerAdvancedSpec } from './KSamplerAdvanced';
+import { LoraLoaderSpec } from './LoraLoader';
 import { LoraLoaderModelOnlySpec } from './LoraLoaderModelOnly';
+import { LycorisLoaderSpec } from './LycorisLoader';
 import { TextEncodeAceStepAudio1_5Spec } from './TextEncodeAceStepAudio1_5';
 import { EmptyAceStep1_5LatentAudioSpec } from './EmptyAceStep1_5LatentAudio';
 import { SaveAudioMP3Spec } from './SaveAudioMP3';
@@ -75,7 +77,9 @@ export const NODE_SPECS = {
     'easy int': EasyIntSpec,
     'easy seed': EasySeedSpec,
     KSamplerAdvanced: KSamplerAdvancedSpec,
+    LoraLoader: LoraLoaderSpec,
     LoraLoaderModelOnly: LoraLoaderModelOnlySpec,
+    LycorisLoaderNode: LycorisLoaderSpec,
     KSamplerSelect: KSamplerSelectSpec,
     RandomNoise: RandomNoiseSpec,
     UNETLoader: UNETLoaderSpec,

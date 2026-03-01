@@ -102,6 +102,7 @@ export default defineConfig({
 			'/outputs': proxyTarget,
 			'/image': proxyTarget,
 			'/loras': proxyTarget,
+			'/lycoris_types': proxyTarget,
 			'/checkpoints': proxyTarget,
 			'/clip_models': proxyTarget,
 			'/clip_types': proxyTarget,
