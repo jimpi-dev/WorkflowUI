@@ -339,6 +339,62 @@ describe('analyzeWorkflow', () => {
 		expect(inp?.optionSource).toBe('checkpoints');
 	});
 
+	it('includes DualCLIPLoader clip_name1, clip_name2, type, device with correct optionSources', () => {
+		const workflow = {
+			'9': {
+				class_type: 'DualCLIPLoader',
+				inputs: { clip_name1: 'clip_l.safetensors', clip_name2: 'clip_g.safetensors', type: 'sdxl', device: 'default' }
+			}
+		};
+		const result = analyzeWorkflow(workflow);
+		expect(result.inputs.find((i) => i.key === '9.clip_name1')?.optionSource).toBe('clip_models');
+		expect(result.inputs.find((i) => i.key === '9.clip_name2')?.optionSource).toBe('clip_models');
+		expect(result.inputs.find((i) => i.key === '9.type')?.optionSource).toBe('clip_types');
+		expect(result.inputs.find((i) => i.key === '9.device')?.optionSource).toBe('devices');
+	});
+
+	it('includes TripleCLIPLoader clip_name1, clip_name2, clip_name3 with optionSource clip_models', () => {
+		const workflow = {
+			'10': {
+				class_type: 'TripleCLIPLoader',
+				inputs: { clip_name1: 'a.safetensors', clip_name2: 'b.safetensors', clip_name3: 'c.safetensors', type: 'flux', device: 'default' }
+			}
+		};
+		const result = analyzeWorkflow(workflow);
+		expect(result.inputs.find((i) => i.key === '10.clip_name1')?.optionSource).toBe('clip_models');
+		expect(result.inputs.find((i) => i.key === '10.clip_name3')?.optionSource).toBe('clip_models');
+	});
+
+	it('includes CLIPVisionLoader clip_name with optionSource clip_vision_models', () => {
+		const workflow = {
+			'11': { class_type: 'CLIPVisionLoader', inputs: { clip_name: 'CLIP-ViT-H-14.safetensors' } }
+		};
+		const result = analyzeWorkflow(workflow);
+		const inp = result.inputs.find((i) => i.key === '11.clip_name');
+		expect(inp).toBeDefined();
+		expect(inp?.optionSource).toBe('clip_vision_models');
+	});
+
+	it('includes T5Loader t5_name with optionSource clip_models', () => {
+		const workflow = {
+			'12': { class_type: 'T5Loader', inputs: { t5_name: 't5xxl_fp16.safetensors' } }
+		};
+		const result = analyzeWorkflow(workflow);
+		const inp = result.inputs.find((i) => i.key === '12.t5_name');
+		expect(inp).toBeDefined();
+		expect(inp?.optionSource).toBe('clip_models');
+	});
+
+	it('includes TextEncoderLoader name with optionSource clip_models', () => {
+		const workflow = {
+			'13': { class_type: 'TextEncoderLoader', inputs: { name: 'encoder.safetensors' } }
+		};
+		const result = analyzeWorkflow(workflow);
+		const inp = result.inputs.find((i) => i.key === '13.name');
+		expect(inp).toBeDefined();
+		expect(inp?.optionSource).toBe('clip_models');
+	});
+
 	it('detects SaveAudioMP3 as audio output', () => {
 		const workflow = {
 			'50': {

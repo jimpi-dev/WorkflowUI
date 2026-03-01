@@ -79,7 +79,7 @@ export type NodeSpec = {
     outputs?: {
         type: 'image' | 'video' | 'audio';
     };
-    optionSourceForSelect?: 'clip_models';
+    optionSourceForSelect?: 'clip_models' | 'clip_vision_models';
 };
 
 export type UINode = {

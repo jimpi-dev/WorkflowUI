@@ -308,6 +308,38 @@ NODE_SPECS: dict[str, dict[str, Any]] = {
             "device": {"type": "select", "label": "Device", "optionSource": "devices"},
         },
     },
+    "DualCLIPLoader": {
+        "fixedInputs": {
+            "clip_name1": {"type": "select", "label": "CLIP model 1", "optionSource": "clip_models"},
+            "clip_name2": {"type": "select", "label": "CLIP model 2", "optionSource": "clip_models"},
+            "type": {"type": "select", "label": "Type", "optionSource": "clip_types"},
+            "device": {"type": "select", "label": "Device", "optionSource": "devices"},
+        },
+    },
+    "TripleCLIPLoader": {
+        "fixedInputs": {
+            "clip_name1": {"type": "select", "label": "CLIP model 1", "optionSource": "clip_models"},
+            "clip_name2": {"type": "select", "label": "CLIP model 2", "optionSource": "clip_models"},
+            "clip_name3": {"type": "select", "label": "CLIP model 3", "optionSource": "clip_models"},
+            "type": {"type": "select", "label": "Type", "optionSource": "clip_types"},
+            "device": {"type": "select", "label": "Device", "optionSource": "devices"},
+        },
+    },
+    "CLIPVisionLoader": {
+        "fixedInputs": {
+            "clip_name": {"type": "select", "label": "CLIP Vision model", "optionSource": "clip_vision_models"},
+        },
+    },
+    "T5Loader": {
+        "fixedInputs": {
+            "t5_name": {"type": "select", "label": "T5 model", "optionSource": "clip_models"},
+        },
+    },
+    "TextEncoderLoader": {
+        "fixedInputs": {
+            "name": {"type": "select", "label": "Text encoder model", "optionSource": "clip_models"},
+        },
+    },
     "VAELoader": {
         "fixedInputs": {
             "vae_name": {"type": "select", "label": "VAE", "optionSource": "vae_models"},
