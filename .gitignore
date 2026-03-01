@@ -1,6 +1,7 @@
 input_data/
 media_storage/
 DocsInternal/
+*.db
 
 # ---------------------------------------------------------------------------
 # Editor / tooling

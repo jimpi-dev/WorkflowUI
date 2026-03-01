@@ -305,6 +305,16 @@ import VaeCombo from './VaeCombo.svelte';
             .catch(() => { availableClipTypes = []; });
     }
 
+    let availableDevices: string[] = [];
+    let devicesFetchRequested = false;
+    $: hasDevicesInput = inputs.some((i) => i.optionSource === 'devices');
+    $: if (hasDevicesInput && !devicesFetchRequested) {
+        devicesFetchRequested = true;
+        fetchOptionList('/devices')
+            .then((list) => { availableDevices = list; })
+            .catch(() => { availableDevices = []; });
+    }
+
     $: loraValuesSnapshot = inputs
         .filter((i) => i.field?.endsWith('.lora'))
         .map((i) => (i.key in values ? String(values[i.key] ?? '') : ''))
@@ -531,6 +541,11 @@ import VaeCombo from './VaeCombo.svelte';
                                             {:else if input.optionSource === 'clip_types'}
                                                 <SelectInput
                                                     input={{ ...input, options: [...new Set([...(input.options || []), ...availableClipTypes])].sort() }}
+                                                    bind:value={values[input.key]}
+                                                />
+                                            {:else if input.optionSource === 'devices'}
+                                                <SelectInput
+                                                    input={{ ...input, options: [...new Set([...(input.options || []), ...availableDevices])].sort() }}
                                                     bind:value={values[input.key]}
                                                 />
                                             {:else}

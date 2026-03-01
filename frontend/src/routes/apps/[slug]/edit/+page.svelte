@@ -56,6 +56,7 @@
 	let availableClipModels = $state<string[]>([]);
 	let availableClipTypes = $state<string[]>([]);
 	let availableVaeModels = $state<string[]>([]);
+	let availableDevices = $state<string[]>([]);
 	let downloadingWorkflow = $state(false);
 
 	async function downloadAppWorkflowWithDefaults() {
@@ -193,7 +194,8 @@
 			fetch(`${base}/checkpoints`).then((r) => (r.ok ? r.json() : { checkpoints: [] })).then((d: { checkpoints?: string[] }) => { availableCheckpoints = d.checkpoints ?? []; }).catch(() => { availableCheckpoints = []; }),
 			fetch(`${base}/clip_models`).then((r) => (r.ok ? r.json() : { clip_models: [] })).then((d: { clip_models?: string[] }) => { availableClipModels = d.clip_models ?? []; }).catch(() => { availableClipModels = []; }),
 			fetch(`${base}/clip_types`).then((r) => (r.ok ? r.json() : { clip_types: [] })).then((d: { clip_types?: string[] }) => { availableClipTypes = d.clip_types ?? []; }).catch(() => { availableClipTypes = []; }),
-			fetch(`${base}/vae_models`).then((r) => (r.ok ? r.json() : { vae_models: [] })).then((d: { vae_models?: string[] }) => { availableVaeModels = d.vae_models ?? []; }).catch(() => { availableVaeModels = []; })
+			fetch(`${base}/vae_models`).then((r) => (r.ok ? r.json() : { vae_models: [] })).then((d: { vae_models?: string[] }) => { availableVaeModels = d.vae_models ?? []; }).catch(() => { availableVaeModels = []; }),
+			fetch(`${base}/devices`).then((r) => (r.ok ? r.json() : { devices: [] })).then((d: { devices?: string[] }) => { availableDevices = d.devices ?? []; }).catch(() => { availableDevices = []; })
 		]);
 	});
 
@@ -566,6 +568,7 @@
 											availableClipModels={availableClipModels}
 											availableClipTypes={availableClipTypes}
 											availableVaeModels={availableVaeModels}
+											availableDevices={availableDevices}
 											optionSource={input.optionSource ?? ''}
 											onVisibleChange={(v) => setInputVisible(appDraft!, input.key, v)}
 											onDefaultOverrideChange={(v) => {

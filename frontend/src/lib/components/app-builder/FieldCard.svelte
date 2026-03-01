@@ -19,6 +19,7 @@
 		availableClipModels?: string[];
 		availableClipTypes?: string[];
 		availableVaeModels?: string[];
+		availableDevices?: string[];
 		optionSource?: string;
 		onVisibleChange: (visible: boolean) => void;
 		onDefaultOverrideChange: (value: unknown) => void;
@@ -39,6 +40,7 @@
 		availableClipModels = [],
 		availableClipTypes = [],
 		availableVaeModels = [],
+		availableDevices = [],
 		optionSource = '',
 		onVisibleChange,
 		onDefaultOverrideChange,
@@ -50,6 +52,7 @@
 	const isClipField = $derived(field === 'clip_name' || optionSource === 'clip_models');
 	const isClipTypeField = $derived(optionSource === 'clip_types');
 	const isVaeField = $derived(field === 'vae_name' || optionSource === 'vae_models');
+	const isDeviceField = $derived(field === 'device' || optionSource === 'devices');
 
 	let expanded = $state(false);
 	let localDefaultDisplay = $state('');
@@ -553,6 +556,28 @@
 						>
 							<option value="">Default (optional)</option>
 							{#each clipTypeOpts as opt}
+								<option value={opt}>{opt}</option>
+							{/each}
+						</select>
+					{:else}
+						<input
+							type="text"
+							class="default-input"
+							placeholder="Default (optional)"
+							value={displayDefault}
+							oninput={(e) => onDefaultOverrideChange((e.target as HTMLInputElement).value || undefined)}
+						/>
+					{/if}
+				{:else if isDeviceField}
+					{#if availableDevices.length > 0}
+						{@const deviceOpts = displayDefault && !availableDevices.includes(displayDefault) ? [displayDefault, ...availableDevices] : availableDevices}
+						<select
+							class="default-input"
+							value={displayDefault}
+							onchange={(e) => onDefaultOverrideChange((e.target as HTMLSelectElement).value || undefined)}
+						>
+							<option value="">Default (optional)</option>
+							{#each deviceOpts as opt}
 								<option value={opt}>{opt}</option>
 							{/each}
 						</select>
