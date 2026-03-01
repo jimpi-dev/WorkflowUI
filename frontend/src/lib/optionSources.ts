@@ -6,7 +6,9 @@ const ENDPOINT_RESPONSE_KEY: Record<string, string> = {
     '/clip_models': 'clip_models',
     '/vae_models': 'vae_models',
     '/clip_types': 'clip_types',
-    '/devices': 'devices'
+    '/devices': 'devices',
+    '/rife_models': 'rife_models',
+    '/unet_gguf_models': 'unet_gguf_models'
 };
 
 export function getOptionListResponseKey(endpoint: string): string | undefined {

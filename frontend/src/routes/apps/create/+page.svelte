@@ -50,6 +50,8 @@
 	let availableClipTypes = $state<string[]>([]);
 	let availableVaeModels = $state<string[]>([]);
 	let availableDevices = $state<string[]>([]);
+	let availableRifeModels = $state<string[]>([]);
+	let availableUnetGgufModels = $state<string[]>([]);
 
 	function matchesFilter(item: { key?: string; label?: string; metaTitle?: string | null; nodeId?: string }, q: string): boolean {
 		if (!q.trim()) return true;
@@ -163,7 +165,9 @@
 			fetch(`${base}/clip_models`).then((r) => (r.ok ? r.json() : { clip_models: [] })).then((d: { clip_models?: string[] }) => { availableClipModels = d.clip_models ?? []; }).catch(() => { availableClipModels = []; }),
 			fetch(`${base}/clip_types`).then((r) => (r.ok ? r.json() : { clip_types: [] })).then((d: { clip_types?: string[] }) => { availableClipTypes = d.clip_types ?? []; }).catch(() => { availableClipTypes = []; }),
 			fetch(`${base}/vae_models`).then((r) => (r.ok ? r.json() : { vae_models: [] })).then((d: { vae_models?: string[] }) => { availableVaeModels = d.vae_models ?? []; }).catch(() => { availableVaeModels = []; }),
-			fetch(`${base}/devices`).then((r) => (r.ok ? r.json() : { devices: [] })).then((d: { devices?: string[] }) => { availableDevices = d.devices ?? []; }).catch(() => { availableDevices = []; })
+			fetch(`${base}/devices`).then((r) => (r.ok ? r.json() : { devices: [] })).then((d: { devices?: string[] }) => { availableDevices = d.devices ?? []; }).catch(() => { availableDevices = []; }),
+			fetch(`${base}/rife_models`).then((r) => (r.ok ? r.json() : { rife_models: [] })).then((d: { rife_models?: string[] }) => { availableRifeModels = d.rife_models ?? []; }).catch(() => { availableRifeModels = []; }),
+			fetch(`${base}/unet_gguf_models`).then((r) => (r.ok ? r.json() : { unet_gguf_models: [] })).then((d: { unet_gguf_models?: string[] }) => { availableUnetGgufModels = d.unet_gguf_models ?? []; }).catch(() => { availableUnetGgufModels = []; })
 		]);
 	});
 
@@ -472,6 +476,8 @@
 											override={appDraft.inputOverrides.get(input.key) ?? null}
 											availableLoras={availableLoras}
 											availableCheckpoints={availableCheckpoints}
+											availableRifeModels={availableRifeModels}
+											availableUnetGgufModels={availableUnetGgufModels}
 											availableClipModels={availableClipModels}
 											availableClipTypes={availableClipTypes}
 											availableVaeModels={availableVaeModels}

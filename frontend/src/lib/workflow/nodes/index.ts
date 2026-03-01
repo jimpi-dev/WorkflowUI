@@ -49,6 +49,12 @@ import { LatentUpscaleBySpec } from './LatentUpscaleBy';
 import { SeedRgthreeSpec } from './SeedRgthree';
 import { CRLatentInputSwitchSpec } from './CRLatentInputSwitch';
 import { BasicSchedulerSpec } from './BasicScheduler';
+import { ModelSamplingSD3Spec } from './ModelSamplingSD3';
+import { INTConstantSpec } from './INTConstant';
+import { UnetLoaderGGUFSpec } from './UnetLoaderGGUF';
+import { RifeVfiSpec } from './RifeVfi';
+import { ImageResizeKJv2Spec } from './ImageResizeKJv2';
+import { TextMultilineSpec } from './TextMultiline';
 
 export const NODE_SPECS = {
     KSampler: KSamplerSpec,
@@ -99,5 +105,11 @@ export const NODE_SPECS = {
     'TextEncodeAceStepAudio1.5': TextEncodeAceStepAudio1_5Spec,
     'EmptyAceStep1.5LatentAudio': EmptyAceStep1_5LatentAudioSpec,
     SaveAudioMP3: SaveAudioMP3Spec,
-    AudioQualityEnhancer: AudioQualityEnhancerSpec
+    AudioQualityEnhancer: AudioQualityEnhancerSpec,
+    ModelSamplingSD3: ModelSamplingSD3Spec,
+    INTConstant: INTConstantSpec,
+    UnetLoaderGGUF: UnetLoaderGGUFSpec,
+    'RIFE VFI': RifeVfiSpec,
+    ImageResizeKJv2: ImageResizeKJv2Spec,
+    'Text Multiline': TextMultilineSpec
 };
