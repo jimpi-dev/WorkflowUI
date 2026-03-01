@@ -117,9 +117,11 @@
 		role="dialog"
 		aria-modal="true"
 		aria-labelledby="delete-project-dialog-title"
+		tabindex="-1"
 		onclick={handleBackdropClick}
+		onkeydown={(e) => { if (e.key === 'Escape') handleBackdropClick(); }}
 	>
-		<div class="dialog-box delete-dialog" onclick={(e) => e.stopPropagation()}>
+		<div class="dialog-box delete-dialog" role="presentation" tabindex="-1" onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.stopPropagation()}>
 			<div class="dialog-header">
 				<div class="dialog-icon-wrap" aria-hidden="true">
 					<svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">

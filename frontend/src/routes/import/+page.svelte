@@ -27,6 +27,7 @@
 
 	let imageImporting = $state(false);
 	let imageImportMessage = $state('');
+	let imageDropZoneDragOver = $state(false);
 
 	const apiBase = getApiBase() || '';
 
@@ -203,17 +204,18 @@
 
 		<section
 			class="section import-from-image-section"
+			class:drag-over={imageDropZoneDragOver}
 			role="button"
 			tabindex="0"
-			ondragover={(e) => { e.preventDefault(); (e.currentTarget as HTMLElement).classList.add('drag-over'); }}
-			ondragleave={(e) => { (e.currentTarget as HTMLElement).classList.remove('drag-over'); }}
+			ondragover={(e) => { e.preventDefault(); imageDropZoneDragOver = true; }}
+			ondragleave={() => { imageDropZoneDragOver = false; }}
 			ondrop={(e) => {
 				e.preventDefault();
-				(e.currentTarget as HTMLElement).classList.remove('drag-over');
+				imageDropZoneDragOver = false;
 				handleImageFile(e.dataTransfer?.files ?? null);
 			}}
 		>
-			<label>Import from workflow file</label>
+			<label for="import-workflow-file">Import from workflow file</label>
 			<p class="hint">Drop or select a PNG or MP3 saved from WorkflowUI (with metadata) to open or restore that workflow and app.</p>
 			<p class="metadata-status" role="status">
 				Metadata appended on download: <strong>{data?.embedWorkflowuiMetadataOnDownload ? 'Yes' : 'No'}</strong>
@@ -226,6 +228,7 @@
 			</p>
 			<div class="import-json-options">
 				<input
+					id="import-workflow-file"
 					type="file"
 					accept="image/*,.png,audio/mpeg,.mp3"
 					class="file-input file-input-hidden"
@@ -253,9 +256,10 @@
 		</section>
 
 		<section class="section">
-			<label>Graph JSON</label>
+			<label for="import-graph-json">Graph JSON</label>
 			<div class="import-json-options">
 				<input
+					id="import-graph-json"
 					type="file"
 					accept=".json,application/json"
 					onchange={handleFileChange}

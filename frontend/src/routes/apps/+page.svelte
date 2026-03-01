@@ -633,7 +633,7 @@
 														</div>
 														<div class="open-with-list" role="group">
 															{#each filteredProjectsForDropdown as proj (proj.id)}
-																<button type="button" role="option" class="open-with-item" onclick={(e) => { e.stopPropagation(); openWithProject(app.slug, proj.id); }}>
+																<button type="button" role="option" class="open-with-item" aria-selected="false" onclick={(e) => { e.stopPropagation(); openWithProject(app.slug, proj.id); }}>
 																	<span class="open-with-name">{proj.name}</span>
 																	<span class="open-with-meta">{proj.run_count} runs</span>
 																</button>
@@ -756,6 +756,7 @@
 														type="button"
 														role="option"
 														class="open-with-item"
+														aria-selected="false"
 														onclick={(e) => {
 															e.stopPropagation();
 															openWithProject(app.slug, proj.id);
@@ -844,9 +845,11 @@
 			role="dialog"
 			aria-modal="true"
 			aria-labelledby="delete-app-dialog-title"
+			tabindex="-1"
 			onclick={closeDeleteDialog}
+			onkeydown={(e) => { if (e.key === 'Escape') closeDeleteDialog(); }}
 		>
-			<div class="delete-app-dialog" onclick={(e) => e.stopPropagation()}>
+			<div class="delete-app-dialog" role="presentation" tabindex="-1" onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.stopPropagation()}>
 				<h2 id="delete-app-dialog-title" class="delete-app-title">Delete app?</h2>
 				<p class="delete-app-desc">
 					<strong>{appToDelete.title}</strong> will be removed. No generated data (runs, outputs, or media) is deleted. You can still view run history in projects.
@@ -1461,12 +1464,6 @@
 		flex-shrink: 0;
 	}
 
-	.list-meta {
-		flex-shrink: 0;
-		font-size: 0.75rem;
-		color: var(--muted);
-	}
-
 	.list-actions {
 		flex-shrink: 0;
 		margin-top: 0;
@@ -1562,14 +1559,6 @@
 		box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
 	}
 
-	.date-infobox-row {
-		display: flex;
-		justify-content: space-between;
-		align-items: baseline;
-		gap: 0.75rem;
-		font-size: 0.8rem;
-	}
-
 	.date-infobox-label {
 		color: var(--muted);
 		font-weight: 500;
@@ -1620,21 +1609,6 @@
 		color: var(--border);
 		font-weight: 300;
 		user-select: none;
-	}
-
-	.app-meta {
-		display: flex;
-		flex-wrap: wrap;
-		gap: 0.75rem;
-		margin-top: 0.25rem;
-		font-size: 0.75rem;
-		color: var(--muted);
-	}
-
-	.meta-item {
-		display: inline-flex;
-		align-items: center;
-		gap: 0.3rem;
 	}
 
 	.card-actions {
