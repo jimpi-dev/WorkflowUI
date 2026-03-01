@@ -210,9 +210,11 @@
 				role="dialog"
 				aria-modal="true"
 				aria-labelledby="delete-app-modal-title"
+				tabindex="-1"
 				onclick={closeDeleteAppDialog}
+				onkeydown={(e) => { if (e.key === 'Escape') closeDeleteAppDialog(); }}
 			>
-				<div class="modal-card" onclick={(e) => e.stopPropagation()}>
+				<div class="modal-card" role="presentation" tabindex="-1" onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.stopPropagation()}>
 					<h2 id="delete-app-modal-title">Delete app?</h2>
 					<p>
 						<strong>{appToDelete.title}</strong> will be removed. No generated data (runs, outputs, or media) is deleted. You can still view run history in projects.

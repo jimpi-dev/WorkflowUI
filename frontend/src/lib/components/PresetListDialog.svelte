@@ -47,7 +47,7 @@
 		onclick={handleBackdropClick}
 		onkeydown={handleKeydown}
 	>
-		<div class="preset-list-panel" role="document" tabindex="-1" onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.stopPropagation()}>
+		<div class="preset-list-panel" role="presentation" tabindex="-1" onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.stopPropagation()}>
 			<div class="preset-list-header">
 				<h2 class="preset-list-title">Load preset</h2>
 				<button type="button" class="preset-list-close" onclick={onClose} aria-label="Close">
