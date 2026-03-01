@@ -215,6 +215,21 @@ NODE_SPECS: dict[str, dict[str, Any]] = {
             "strength_model": {"type": "number", "label": "Strength", "min": 0, "max": 2, "step": 0.05, "slider": True},
         },
     },
+    "LoraLoader": {
+        "fixedInputs": {
+            "lora_name": {"type": "select", "label": "LoRA", "optionSource": "loras"},
+            "strength_model": {"type": "number", "label": "Strength (model)", "min": -100, "max": 100, "step": 0.01, "slider": True},
+            "strength_clip": {"type": "number", "label": "Strength (CLIP)", "min": -100, "max": 100, "step": 0.01, "slider": True},
+        },
+    },
+    "LycorisLoaderNode": {
+        "fixedInputs": {
+            "lora_name": {"type": "select", "label": "LoRA", "optionSource": "loras"},
+            "strength_model": {"type": "number", "label": "Strength (model)", "min": -100, "max": 100, "step": 0.01, "slider": True},
+            "strength_clip": {"type": "number", "label": "Strength (CLIP)", "min": -100, "max": 100, "step": 0.01, "slider": True},
+            "lycoris_type": {"type": "select", "label": "LyCORIS type", "optionSource": "lycoris_types"},
+        },
+    },
     "KSamplerSelect": {
         "fixedInputs": {
             "sampler_name": {"type": "select", "label": "Sampler", "optionSource": "samplers"},

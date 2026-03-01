@@ -340,6 +340,30 @@ def get_loras():
     return {"loras": result}
 
 
+@router.get("/lycoris_types")
+def get_lycoris_types():
+    try:
+        res = requests.get(f"{COMFY_URL}/object_info", timeout=10)
+        res.raise_for_status()
+        obj = res.json()
+    except Exception as e:
+        print("[lycoris_types] object_info fetch failed:", e)
+        return {"lycoris_types": []}
+    node_info = obj.get("LycorisLoaderNode")
+    if not isinstance(node_info, dict):
+        return {"lycoris_types": []}
+    inputs = node_info.get("input") or node_info.get("Input") or {}
+    optional = inputs.get("optional") or {}
+    spec = optional.get("lycoris_type")
+    if not isinstance(spec, (list, tuple)) or len(spec) < 1:
+        return {"lycoris_types": []}
+    options = spec[0]
+    if not isinstance(options, list):
+        return {"lycoris_types": []}
+    lycoris_types = [str(o) for o in options if isinstance(o, str)]
+    return {"lycoris_types": lycoris_types}
+
+
 @router.get("/rife_models")
 def get_rife_models():
     try:

@@ -163,10 +163,11 @@ export const load = async ({ params, fetch, url }) => {
 				bindings,
 				...(masterSeedInputKey ? { masterSeedInputKey } : {})
 			};
-			const [listRes, objectInfoRes, lorasRes, checkpointsRes, devicesRes, rifeModelsRes, unetGgufModelsRes] = await Promise.all([
+			const [listRes, objectInfoRes, lorasRes, lycorisTypesRes, checkpointsRes, devicesRes, rifeModelsRes, unetGgufModelsRes] = await Promise.all([
 				fetch(`${apiBase}/workflows`),
 				fetch(`${apiBase}/object_info`).catch(() => null),
 				fetch(`${apiBase}/loras`).catch(() => null),
+				fetch(`${apiBase}/lycoris_types`).catch(() => null),
 				fetch(`${apiBase}/checkpoints`).catch(() => null),
 				fetch(`${apiBase}/devices`).catch(() => null),
 				fetch(`${apiBase}/rife_models`).catch(() => null),
@@ -175,6 +176,7 @@ export const load = async ({ params, fetch, url }) => {
 			const objectInfo = objectInfoRes?.ok ? await objectInfoRes.json() : { samplers: [], schedulers: [] };
 			const { samplers = [], schedulers = [] } = objectInfo;
 			const loras = lorasRes?.ok ? (await lorasRes.json())?.loras ?? [] : [];
+			const lycorisTypes = lycorisTypesRes?.ok ? (await lycorisTypesRes.json())?.lycoris_types ?? [] : [];
 			const checkpoints = checkpointsRes?.ok ? (await checkpointsRes.json())?.checkpoints ?? [] : [];
 			const devices = devicesRes?.ok ? (await devicesRes.json())?.devices ?? [] : [];
 			const rifeModels = rifeModelsRes?.ok ? (await rifeModelsRes.json())?.rife_models ?? [] : [];
@@ -183,6 +185,7 @@ export const load = async ({ params, fetch, url }) => {
 				if (input.optionSource === 'samplers' && samplers.length) input.options = samplers;
 				if (input.optionSource === 'schedulers' && schedulers.length) input.options = schedulers;
 				if (input.optionSource === 'loras' && Array.isArray(loras) && loras.length) input.options = loras;
+				if (input.optionSource === 'lycoris_types' && Array.isArray(lycorisTypes) && lycorisTypes.length) input.options = lycorisTypes;
 				if (input.optionSource === 'checkpoints' && Array.isArray(checkpoints) && checkpoints.length) input.options = checkpoints;
 				if (input.optionSource === 'devices' && Array.isArray(devices) && devices.length) input.options = devices;
 				if (input.optionSource === 'rife_models' && Array.isArray(rifeModels) && rifeModels.length) input.options = rifeModels;
@@ -235,11 +238,12 @@ export const load = async ({ params, fetch, url }) => {
 			};
 		}
 		
-		const [wfRes, listRes, objectInfoRes, lorasRes, checkpointsRes, devicesRes, rifeModelsRes, unetGgufModelsRes] = await Promise.all([
+		const [wfRes, listRes, objectInfoRes, lorasRes, lycorisTypesRes, checkpointsRes, devicesRes, rifeModelsRes, unetGgufModelsRes] = await Promise.all([
 			fetch(`${apiBase}/workflow/${params.id}`),
 			fetch(`${apiBase}/workflows`),
 			fetch(`${apiBase}/object_info`).catch(() => null),
 			fetch(`${apiBase}/loras`).catch(() => null),
+			fetch(`${apiBase}/lycoris_types`).catch(() => null),
 			fetch(`${apiBase}/checkpoints`).catch(() => null),
 			fetch(`${apiBase}/devices`).catch(() => null),
 			fetch(`${apiBase}/rife_models`).catch(() => null),
@@ -262,6 +266,7 @@ export const load = async ({ params, fetch, url }) => {
 		const objectInfo = objectInfoRes?.ok ? await objectInfoRes.json() : { samplers: [], schedulers: [] };
 		const { samplers = [], schedulers = [] } = objectInfo;
 		const loras = lorasRes?.ok ? (await lorasRes.json())?.loras ?? [] : [];
+		const lycorisTypes = lycorisTypesRes?.ok ? (await lycorisTypesRes.json())?.lycoris_types ?? [] : [];
 		const checkpoints = checkpointsRes?.ok ? (await checkpointsRes.json())?.checkpoints ?? [] : [];
 		const devices = devicesRes?.ok ? (await devicesRes.json())?.devices ?? [] : [];
 		const rifeModels = rifeModelsRes?.ok ? (await rifeModelsRes.json())?.rife_models ?? [] : [];
@@ -276,6 +281,9 @@ export const load = async ({ params, fetch, url }) => {
 			}
 			if (input.optionSource === 'loras' && Array.isArray(loras) && loras.length) {
 				input.options = loras;
+			}
+			if (input.optionSource === 'lycoris_types' && Array.isArray(lycorisTypes) && lycorisTypes.length) {
+				input.options = lycorisTypes;
 			}
 			if (input.optionSource === 'checkpoints' && Array.isArray(checkpoints) && checkpoints.length) {
 				input.options = checkpoints;
@@ -319,6 +327,8 @@ function extractLoraPathsFromWorkflow(workflow: Record<string, unknown>): string
 		if (!node || typeof node !== 'object' || !('inputs' in node)) continue;
 		const inputs = (node as { inputs: Record<string, unknown> }).inputs;
 		if (!inputs || typeof inputs !== 'object') continue;
+		const loraName = inputs.lora_name;
+		if (typeof loraName === 'string' && loraName.trim()) paths.add(loraName.trim());
 		for (const key of Object.keys(inputs)) {
 			if (!/^lora_\d+$/.test(key)) continue;
 			const slot = inputs[key];
