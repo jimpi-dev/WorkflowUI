@@ -130,3 +130,37 @@ def test_analyze_sdxl_latent_picker_produces_override_bindings():
     assert "18.height_override" in keys
     assert "18.width_override" in binding_keys
     assert "18.height_override" in binding_keys
+
+
+def test_analyze_lora_loader_produces_lora_name_and_strengths():
+    workflow = {
+        "10": {
+            "class_type": "LoraLoader",
+            "inputs": {"lora_name": "foo.safetensors", "strength_model": 0.8, "strength_clip": 1.0},
+            "_meta": {"title": "LoRA"},
+        }
+    }
+    result = analyze_workflow(workflow)
+    keys = {inp["key"] for inp in result["inputs"]}
+    assert "10.lora_name" in keys
+    assert "10.strength_model" in keys
+    assert "10.strength_clip" in keys
+
+
+def test_analyze_lycoris_loader_node_produces_lycoris_type():
+    workflow = {
+        "20": {
+            "class_type": "LycorisLoaderNode",
+            "inputs": {
+                "lora_name": "bar.safetensors",
+                "strength_model": 1.0,
+                "strength_clip": 0.5,
+                "lycoris_type": "LoHA",
+            },
+            "_meta": {"title": "LyCORIS"},
+        }
+    }
+    result = analyze_workflow(workflow)
+    keys = {inp["key"] for inp in result["inputs"]}
+    assert "20.lora_name" in keys
+    assert "20.lycoris_type" in keys
