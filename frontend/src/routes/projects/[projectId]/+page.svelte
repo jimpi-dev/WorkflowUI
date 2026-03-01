@@ -42,6 +42,7 @@
 	} = $props();
 
 	const apiBase = getApiBase() || '';
+	const project = $derived(data.project);
 
 	type ApiRun = {
 		id: string;
@@ -74,7 +75,7 @@
 	let filterFavoritesOnly = $state(false);
 	let loading = $state(true);
 	let loadingMore = $state(false);
-	let storageMode = $state<string>(data.project?.storage_mode ?? 'inherit');
+	let storageMode = $state<string>('inherit');
 	let storageSaving = $state(false);
 	let storageError = $state<string | null>(null);
 	let savingGroupIds = $state<Set<string>>(new Set());
@@ -218,7 +219,7 @@
 	});
 
 	$effect(() => {
-		if (data.project?.storage_mode) storageMode = data.project.storage_mode;
+		if (project?.storage_mode) storageMode = project.storage_mode;
 	});
 
 	function updateRunStorage(runId: string, patch: Partial<ApiRun>) {
@@ -532,23 +533,23 @@
 		}
 	}
 
-	let projectName = $state(data.project?.name ?? '');
+	let projectName = $state('');
 	let editingProjectName = $state(false);
 	let nameSaving = $state(false);
 	let projectNameInputEl = $state<HTMLInputElement | null>(null);
 	$effect(() => {
-		if (data.project?.name !== undefined) projectName = data.project.name ?? '';
+		if (project?.name !== undefined) projectName = project.name ?? '';
 	});
 	async function saveProjectName() {
-		if (!data.project) return;
+		if (!project) return;
 		const trimmed = projectName.trim() || 'Untitled project';
-		if (trimmed === data.project.name) {
+		if (trimmed === project.name) {
 			editingProjectName = false;
 			return;
 		}
 		nameSaving = true;
 		try {
-			const res = await fetch(`${apiBase}/projects/${data.project.id}`, {
+			const res = await fetch(`${apiBase}/projects/${project.id}`, {
 				method: 'PATCH',
 				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify({ name: trimmed })
@@ -567,16 +568,16 @@
 		tick().then(() => projectNameInputEl?.focus());
 	}
 
-	let projectDescription = $state(data.project?.description ?? '');
+	let projectDescription = $state('');
 	let descriptionSaving = $state(false);
 	$effect(() => {
-		if (data.project?.description !== undefined) projectDescription = data.project.description ?? '';
+		if (project?.description !== undefined) projectDescription = project.description ?? '';
 	});
 	async function saveDescription() {
-		if (!data.project) return;
+		if (!project) return;
 		descriptionSaving = true;
 		try {
-			const res = await fetch(`${apiBase}/projects/${data.project.id}`, {
+			const res = await fetch(`${apiBase}/projects/${project.id}`, {
 				method: 'PATCH',
 				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify({ description: projectDescription })
@@ -587,16 +588,16 @@
 		}
 	}
 
-	let projectHeaderColor = $state<string | null>(data.project?.header_color ?? null);
+	let projectHeaderColor = $state<string | null>(null);
 	let headerColorSaving = $state(false);
 	$effect(() => {
-		if (data.project?.header_color !== undefined) projectHeaderColor = data.project.header_color ?? null;
+		if (project?.header_color !== undefined) projectHeaderColor = project.header_color ?? null;
 	});
 	async function saveHeaderColor() {
-		if (!data.project) return;
+		if (!project) return;
 		headerColorSaving = true;
 		try {
-			const res = await fetch(`${apiBase}/projects/${data.project.id}`, {
+			const res = await fetch(`${apiBase}/projects/${project.id}`, {
 				method: 'PATCH',
 				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify({ header_color: projectHeaderColor })
@@ -2033,6 +2034,7 @@
 			</div>
 		</aside>
 		{#if !leftPanelCollapsed}
+		<!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
 		<div
 			class="panel-resizer"
 			class:resizing={leftPanelResizing}
@@ -2042,6 +2044,7 @@
 			aria-valuemin={LEFT_PANEL_MIN}
 			aria-valuemax={LEFT_PANEL_MAX}
 			title="Drag to resize"
+			tabindex="-1"
 			onmousedown={(e) => startResize(e)}
 		></div>
 		{/if}
@@ -2355,7 +2358,7 @@
 											</div>
 										{/if}
 										{#if group.runs.some((r) => r.status === 'queued' || r.status === 'running')}
-											<div class="run-queue-strip" onclick={(e) => e.stopPropagation()}>
+											<div class="run-queue-strip" role="presentation" tabindex="-1" onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.stopPropagation()}>
 												{#each group.runs.filter((r) => r.status === 'queued' || r.status === 'running') as run (run.id)}
 													<span class="run-queue-item">
 														<span class="run-queue-status">{run.status === 'running' ? 'Generating…' : 'Queued'}{#if run.queue_position} (position {run.queue_position}){/if}</span>
@@ -2621,9 +2624,11 @@
 			role="dialog"
 			aria-modal="true"
 			aria-labelledby="delete-run-dialog-title"
+			tabindex="-1"
 			onclick={() => { deleteRunGroupPending = null; }}
+			onkeydown={(e) => { if (e.key === 'Escape') deleteRunGroupPending = null; }}
 		>
-			<div class="delete-run-dialog-card" onclick={(e) => e.stopPropagation()}>
+			<div class="delete-run-dialog-card" role="presentation" tabindex="-1" onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.stopPropagation()}>
 				<h2 id="delete-run-dialog-title">Delete Run with all of its generations</h2>
 				{#if hasFav}
 					<p class="delete-run-dialog-warning">This run includes favorited generations. They will be removed from favorites.</p>
@@ -2710,7 +2715,7 @@
 							playsinline
 							style={lightboxFitToScreen ? 'max-width: 100%; max-height: 100%; width: auto; height: auto;' : `width: ${lightboxBaseWidth * lightboxZoom}px;`}
 							onerror={() => { lightboxCurrentLoadFailed = true; }}
-						></video>
+						><track kind="captions" /></video>
 					{:else if lightboxImages[lightboxIndex]?.mediaType === 'audio'}
 						<div class="lightbox-audio-wrap">
 							<audio
@@ -3158,11 +3163,6 @@
 		color: var(--text);
 		border-color: var(--accent);
 	}
-	.description {
-		margin: 0 0 0.5rem 0;
-		color: var(--text-muted);
-		font-size: 0.9rem;
-	}
 	.meta {
 		margin: 0 0 0.75rem 0;
 		font-size: 0.85rem;
@@ -3334,13 +3334,6 @@
 		display: flex;
 		flex-direction: column;
 		gap: 0.5rem;
-	}
-	.apps-used-label {
-		display: block;
-		font-size: 0.8rem;
-		font-weight: 500;
-		color: var(--text-muted);
-		letter-spacing: 0.02em;
 	}
 	.apps-used-list {
 		list-style: none;
@@ -3878,10 +3871,6 @@
 		font-weight: 400;
 		opacity: 0.9;
 	}
-	.runs-count {
-		font-size: 0.9rem;
-		color: var(--text-muted);
-	}
 	.collapse-all-actions {
 		display: flex;
 		align-items: center;
@@ -3922,19 +3911,6 @@
 		cursor: pointer;
 	}
 	.collapse-all-btn:hover {
-		background: color-mix(in srgb, var(--accent) 15%, var(--surface));
-		border-color: var(--accent);
-	}
-	.run-open-detail-btn {
-		font-size: 0.8rem;
-		padding: 0.25rem 0.5rem;
-		background: var(--surface, #1c2333);
-		color: var(--accent);
-		border: 1px solid var(--border);
-		border-radius: 6px;
-		cursor: pointer;
-	}
-	.run-open-detail-btn:hover {
 		background: color-mix(in srgb, var(--accent) 15%, var(--surface));
 		border-color: var(--accent);
 	}
@@ -4131,28 +4107,6 @@
 		margin: 0 0.25rem;
 		color: var(--muted);
 	}
-	.run-replicate-btn {
-		font-size: 0.8rem;
-		padding: 0.25rem 0.5rem;
-		background: var(--surface, #1c2333);
-		color: var(--accent);
-		border: 1px solid var(--border);
-		border-radius: 6px;
-		cursor: pointer;
-	}
-	.run-replicate-btn:hover {
-		background: color-mix(in srgb, var(--accent) 15%, var(--surface));
-		border-color: var(--accent);
-	}
-	.run-replicate-btn-removed {
-		opacity: 0.6;
-		color: var(--muted);
-		cursor: not-allowed;
-	}
-	.run-replicate-btn-removed:hover {
-		background: var(--surface);
-		border-color: var(--border);
-	}
 	.progress {
 		height: 6px;
 		border-radius: 999px;
@@ -4174,21 +4128,6 @@
 		font-size: 0.7rem;
 		color: var(--muted);
 		margin-left: 0.25rem;
-	}
-	.run-meta {
-		display: flex;
-		align-items: center;
-		flex-wrap: wrap;
-		gap: 0.5rem 0.75rem;
-		font-size: 0.7rem;
-		color: var(--muted);
-		flex-shrink: 0;
-		min-width: 180px;
-	}
-	.run-actions {
-		display: inline-flex;
-		align-items: center;
-		gap: 0.35rem;
 	}
 	.run-action-btn {
 		min-width: 26px;
@@ -4215,29 +4154,9 @@
 		background: color-mix(in srgb, var(--accent) 18%, transparent);
 		color: var(--accent);
 	}
-	.run-action-btn.context-aware {
-		border-color: #e6a23c;
-		color: #e6a23c;
-		background: color-mix(in srgb, #e6a23c 14%, transparent);
-	}
-	.run-action-btn.context-aware:hover:not(:disabled) {
-		border-color: #f0c674;
-		color: #f0c674;
-		background: color-mix(in srgb, #e6a23c 22%, transparent);
-	}
 	.run-action-btn:disabled {
 		opacity: 0.4;
 		cursor: not-allowed;
-	}
-	.run-action-btn.delete-run-btn {
-		border-color: var(--error, #c55);
-		color: var(--error, #c55);
-		background: color-mix(in srgb, var(--error, #c55) 12%, transparent);
-	}
-	.run-action-btn.delete-run-btn:hover:not(:disabled) {
-		border-color: var(--error, #e55);
-		color: var(--error, #e55);
-		background: color-mix(in srgb, var(--error, #e55) 20%, transparent);
 	}
 	.run-action-btn.cancel-queued-btn {
 		border-color: var(--error, #e57373);
@@ -4249,31 +4168,6 @@
 		color: #ff8a80;
 		background: color-mix(in srgb, var(--error, #e57373) 28%, transparent);
 	}
-	.run-storage-badge {
-		font-size: 0.65rem;
-		padding: 0.15rem 0.35rem;
-		border-radius: 6px;
-		border: 1px solid var(--border);
-		background: rgba(0, 0, 0, 0.2);
-		color: var(--muted);
-		text-transform: uppercase;
-		letter-spacing: 0.04em;
-	}
-	.run-storage-badge.saved {
-		color: var(--accent);
-		border-color: var(--accent);
-	}
-	.run-storage-badge.partial {
-		color: var(--partial-badge);
-		border-color: var(--partial-badge);
-	}
-	.run-storage-badge.failed {
-		color: #e57373;
-		border-color: #e57373;
-	}
-	.run-storage-badge.remote {
-		color: var(--muted);
-	}
 	.icon {
 		width: 16px;
 		height: 16px;
@@ -4284,10 +4178,6 @@
 	@keyframes spin {
 		from { transform: rotate(0deg); }
 		to { transform: rotate(360deg); }
-	}
-	.collapse-icon {
-		font-size: 0.9rem;
-		opacity: 0.7;
 	}
 	.run-body {
 		margin-top: 0;
@@ -4390,22 +4280,6 @@
 		height: 100%;
 		object-fit: cover;
 		display: block;
-	}
-	.thumb-placeholder {
-		position: absolute;
-		inset: 0;
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		background: #1a1a1a;
-	}
-	.thumb-placeholder-spinner {
-		width: 24px;
-		height: 24px;
-		border: 2px solid var(--border);
-		border-top-color: var(--accent);
-		border-radius: 50%;
-		animation: thumb-spin 0.7s linear infinite;
 	}
 	.thumb-loading {
 		position: absolute;

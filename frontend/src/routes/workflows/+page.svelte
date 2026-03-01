@@ -167,9 +167,11 @@
 			role="dialog"
 			aria-modal="true"
 			aria-labelledby="delete-workflow-dialog-title"
+			tabindex="-1"
 			onclick={closeDeleteDialog}
+			onkeydown={(e) => { if (e.key === 'Escape') closeDeleteDialog(); }}
 		>
-			<div class="dialog-box delete-workflow-dialog" onclick={(e) => e.stopPropagation()}>
+			<div class="dialog-box delete-workflow-dialog" role="presentation" tabindex="-1" onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.stopPropagation()}>
 				<h2 id="delete-workflow-dialog-title" class="dialog-title">
 					{canDeleteWorkflow ? 'Delete workflow?' : 'Cannot delete workflow'}
 				</h2>
@@ -288,9 +290,6 @@
 	}
 	.admin-table tbody tr:hover {
 		background: rgba(255, 255, 255, 0.02);
-	}
-	[data-theme="light"] .admin-table tbody tr:hover {
-		background: rgba(0, 0, 0, 0.03);
 	}
 	.admin-table .num {
 		text-align: right;
