@@ -1,9 +1,12 @@
 """TODO: postgres and maybe other adapters."""
 import json
 import sqlite3
+import time
+import uuid
 from pathlib import Path
 from typing import Any
 
+from db.comfyui_version import compute_comfyui_metadata_hash
 from domain.workflow import WorkflowDefinition, WorkflowVersion
 from domain.app import WorkflowApp
 from domain.run import Run
@@ -60,7 +63,7 @@ def _row_to_workflow_app(row: tuple) -> WorkflowApp:
 
 def _run_select_cols() -> str:
     return """id, project_id, workflow_version_id, app_id, status, created_at, prompt_id, seed,
-        images_json, media_json, execution_time, error, queue_position, input_snapshot_json, metadata_snapshot_json, run_group_id, comfyui_url,
+        images_json, media_json, execution_time, error, queue_position, input_snapshot_json, metadata_snapshot_json, run_group_id, comfyui_url, comfyui_version_id,
         local_storage_status, remote_status, local_path, deleted_outputs_json,
         parent_run_id, parent_media_id, root_run_id, deleted_at"""
 
@@ -85,14 +88,15 @@ def _row_to_run(row: tuple) -> Run:
         metadata_snapshot_json=row[14] if n > 14 else None,
         run_group_id=row[15] if n > 15 else None,
         comfyui_url=row[16] if n > 16 else None,
-        local_storage_status=row[17] if n > 17 else None,
-        remote_status=row[18] if n > 18 else None,
-        local_path=row[19] if n > 19 else None,
-        deleted_outputs_json=row[20] if n > 20 else None,
-        parent_run_id=row[21] if n > 21 else None,
-        parent_media_id=row[22] if n > 22 else None,
-        root_run_id=row[23] if n > 23 else None,
-        deleted_at=row[24] if n > 24 else None,
+        comfyui_version_id=row[17] if n > 17 else None,
+        local_storage_status=row[18] if n > 18 else None,
+        remote_status=row[19] if n > 19 else None,
+        local_path=row[20] if n > 20 else None,
+        deleted_outputs_json=row[21] if n > 21 else None,
+        parent_run_id=row[22] if n > 22 else None,
+        parent_media_id=row[23] if n > 23 else None,
+        root_run_id=row[24] if n > 24 else None,
+        deleted_at=row[25] if n > 25 else None,
     )
 
 
@@ -112,15 +116,14 @@ def _row_to_project(row: tuple) -> Project:
     return Project(
         id=row[0],
         name=row[1],
-        slug=row[2],
-        description=row[3],
-        created_at=row[4],
-        updated_at=row[5],
-        metadata_json=row[6],
-        tags_json=row[7],
-        storage_mode=row[8] if len(row) > 8 else None,
-        header_color=row[9] if len(row) > 9 else None,
-        archived_at=row[10] if len(row) > 10 else None,
+        description=row[2],
+        created_at=row[3],
+        updated_at=row[4],
+        metadata_json=row[5],
+        tags_json=row[6],
+        storage_mode=row[7] if len(row) > 7 else None,
+        header_color=row[8] if len(row) > 8 else None,
+        archived_at=row[9] if len(row) > 9 else None,
     )
 
 
@@ -352,7 +355,6 @@ class SqliteProjectRepository:
         self,
         id: str,
         name: str,
-        slug: str | None,
         description: str | None,
         created_at: int,
         updated_at: int,
@@ -364,15 +366,14 @@ class SqliteProjectRepository:
         conn = self._conn()
         try:
             conn.execute(
-                """INSERT INTO project (id, name, slug, description, created_at, updated_at, metadata_json, tags_json, storage_mode, header_color)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (id, name, slug, description, created_at, updated_at, metadata_json, tags_json, storage_mode, header_color),
+                """INSERT INTO project (id, name, description, created_at, updated_at, metadata_json, tags_json, storage_mode, header_color)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (id, name, description, created_at, updated_at, metadata_json, tags_json, storage_mode, header_color),
             )
             conn.commit()
             return Project(
                 id=id,
                 name=name,
-                slug=slug,
                 description=description,
                 created_at=created_at,
                 updated_at=updated_at,
@@ -388,19 +389,8 @@ class SqliteProjectRepository:
         conn = self._conn()
         try:
             row = conn.execute(
-                "SELECT id, name, slug, description, created_at, updated_at, metadata_json, tags_json, storage_mode, header_color, archived_at FROM project WHERE id = ?",
+                "SELECT id, name, description, created_at, updated_at, metadata_json, tags_json, storage_mode, header_color, archived_at FROM project WHERE id = ?",
                 (project_id,),
-            ).fetchone()
-            return _row_to_project(row) if row else None
-        finally:
-            conn.close()
-
-    def get_project_by_slug(self, slug: str) -> Project | None:
-        conn = self._conn()
-        try:
-            row = conn.execute(
-                "SELECT id, name, slug, description, created_at, updated_at, metadata_json, tags_json, storage_mode, header_color, archived_at FROM project WHERE slug = ?",
-                (slug,),
             ).fetchone()
             return _row_to_project(row) if row else None
         finally:
@@ -414,7 +404,7 @@ class SqliteProjectRepository:
     ) -> list[Project]:
         conn = self._conn()
         try:
-            base_cols = "id, name, slug, description, created_at, updated_at, metadata_json, tags_json, storage_mode, header_color, archived_at"
+            base_cols = "id, name, description, created_at, updated_at, metadata_json, tags_json, storage_mode, header_color, archived_at"
             if archived is False:
                 where = "WHERE archived_at IS NULL"
             elif archived is True:
@@ -441,7 +431,6 @@ class SqliteProjectRepository:
         project_id: str,
         *,
         name: str | None = None,
-        slug: str | None = None,
         description: str | None = None,
         updated_at: int | None = None,
         metadata_json: str | None = None,
@@ -460,9 +449,6 @@ class SqliteProjectRepository:
             if name is not None:
                 updates.append("name = ?")
                 params.append(name)
-            if slug is not None:
-                updates.append("slug = ?")
-                params.append(slug)
             if description is not None:
                 updates.append("description = ?")
                 params.append(description)
@@ -760,6 +746,63 @@ class SqliteRunRepository:
     def _conn(self) -> sqlite3.Connection:
         return sqlite3.connect(self._db_path)
 
+    def get_comfyui_version_metadata(self, comfyui_version_id: str) -> dict | None:
+        """Return parsed metadata_json for a comfyui_version row, or None."""
+        conn = self._conn()
+        try:
+            row = conn.execute(
+                "SELECT metadata_json FROM comfyui_version WHERE id = ?",
+                (comfyui_version_id,),
+            ).fetchone()
+            if not row or not row[0]:
+                return None
+            return json.loads(row[0])
+        except (json.JSONDecodeError, TypeError):
+            return None
+        finally:
+            conn.close()
+
+    def get_resolved_metadata_snapshot(self, run: Run) -> dict:
+        """Return full metadata_snapshot dict, merging in ComfyUI-VersionInfo from comfyui_version if run.comfyui_version_id is set."""
+        current: dict = {}
+        if run.metadata_snapshot_json:
+            try:
+                current = json.loads(run.metadata_snapshot_json)
+            except (json.JSONDecodeError, TypeError):
+                pass
+        if not isinstance(current, dict):
+            current = {}
+        if run.comfyui_version_id:
+            resolved = self.get_comfyui_version_metadata(run.comfyui_version_id)
+            if isinstance(resolved, dict):
+                current["ComfyUI-VersionInfo"] = resolved
+        return current
+
+    def get_or_create_comfyui_version(self, version_info: dict[str, Any]) -> str:
+        """Get existing comfyui_version id by hash or insert new row. Returns id."""
+        meta_hash = compute_comfyui_metadata_hash(version_info)
+        conn = self._conn()
+        try:
+            row = conn.execute(
+                "SELECT id FROM comfyui_version WHERE metadata_hash = ?",
+                (meta_hash,),
+            ).fetchone()
+            if row:
+                return row[0]
+            version_id = str(uuid.uuid4())
+            base_url = version_info.get("comfyui_base_url") or ""
+            metadata_json = json.dumps(version_info, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+            created_at = int(time.time() * 1000)
+            conn.execute(
+                """INSERT INTO comfyui_version (id, metadata_hash, comfyui_base_url, metadata_json, created_at)
+                   VALUES (?, ?, ?, ?, ?)""",
+                (version_id, meta_hash, base_url, metadata_json, created_at),
+            )
+            conn.commit()
+            return version_id
+        finally:
+            conn.close()
+
     def create_run(
         self,
         id: str,
@@ -779,6 +822,7 @@ class SqliteRunRepository:
         metadata_snapshot_json: str | None = None,
         run_group_id: str | None = None,
         comfyui_url: str | None = None,
+        comfyui_version_id: str | None = None,
         local_storage_status: str | None = "none",
         remote_status: str | None = "unknown",
         local_path: str | None = None,
@@ -792,10 +836,10 @@ class SqliteRunRepository:
             conn.execute(
                 """INSERT INTO run
                    (id, project_id, workflow_version_id, app_id, status, created_at, prompt_id, seed,
-                    images_json, media_json, execution_time, error, queue_position, input_snapshot_json, metadata_snapshot_json, run_group_id, comfyui_url,
+                    images_json, media_json, execution_time, error, queue_position, input_snapshot_json, metadata_snapshot_json, run_group_id, comfyui_url, comfyui_version_id,
                     local_storage_status, remote_status, local_path, deleted_outputs_json,
                     parent_run_id, parent_media_id, root_run_id, deleted_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     id,
                     project_id,
@@ -814,6 +858,7 @@ class SqliteRunRepository:
                     metadata_snapshot_json,
                     run_group_id,
                     comfyui_url,
+                    comfyui_version_id,
                     local_storage_status,
                     remote_status,
                     local_path,
@@ -843,6 +888,7 @@ class SqliteRunRepository:
                 input_snapshot_json=input_snapshot_json,
                 metadata_snapshot_json=metadata_snapshot_json,
                 comfyui_url=comfyui_url,
+                comfyui_version_id=comfyui_version_id,
                 local_storage_status=local_storage_status,
                 remote_status=remote_status,
                 local_path=local_path,
@@ -1163,6 +1209,7 @@ class SqliteRunRepository:
         metadata_snapshot_json: str | None = None,
         deleted_outputs_json: str | None = None,
         deleted_at: int | None = None,
+        comfyui_version_id: str | None = None,
     ) -> None:
         updates = []
         params = []
@@ -1208,6 +1255,9 @@ class SqliteRunRepository:
         if deleted_at is not None:
             updates.append("deleted_at = ?")
             params.append(deleted_at)
+        if comfyui_version_id is not None:
+            updates.append("comfyui_version_id = ?")
+            params.append(comfyui_version_id)
         if not updates:
             return
         params.append(run_id)
