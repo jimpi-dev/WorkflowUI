@@ -117,12 +117,11 @@ def test_get_workflow_definition_not_found(client):
 def test_post_projects_success(client):
     r = client.post(
         "/projects",
-        json={"name": "My Project", "slug": "my-project", "description": "Desc"},
+        json={"name": "My Project", "description": "Desc"},
     )
     assert r.status_code == 200
     data = r.json()
     assert data["name"] == "My Project"
-    assert data["slug"] == "my-project"
     assert "id" in data
 
 
@@ -141,7 +140,7 @@ def test_get_projects_list(client):
 
 
 def test_get_project_detail(client):
-    create = client.post("/projects", json={"name": "DetailProj", "slug": "detail-proj"})
+    create = client.post("/projects", json={"name": "DetailProj"})
     project_id = create.json()["id"]
     r = client.get(f"/projects/{project_id}")
     assert r.status_code == 200
@@ -308,6 +307,12 @@ def _fake_comfy_responses(prompt_id: str = "test-prompt-id"):
                 }
             }
             return res
+        if "/system_stats" in url or "/features" in url or "/object_info" in url or "/workflowui/version_info" in url:
+            res = MagicMock()
+            res.raise_for_status = MagicMock()
+            res.json.return_value = {} if "/object_info" not in url else {"SaveImage": {}, "KSampler": {}, "CLIPTextEncode": {}}
+            res.headers = {}
+            return res
         raise NotImplementedError(url)
 
     return post_mock, get_mock
@@ -336,6 +341,8 @@ def test_post_run_requires_app_or_version(client):
 
 
 def test_post_run_versioned_queued_and_status(client):
+    import dependencies
+
     imp = client.post(
         "/import",
         json={"name": "RunWorkflow", "graph": SAMPLE_WORKFLOW_GRAPH},
@@ -344,10 +351,18 @@ def test_post_run_versioned_queued_and_status(client):
     proj = client.post("/projects", json={"name": "RunProj"})
     project_id = proj.json()["id"]
 
-    post_mock, get_mock = _fake_comfy_responses()
-    with patch("requests.post", side_effect=post_mock), patch(
-        "requests.get", side_effect=get_mock
-    ):
+    mock_executor = MagicMock()
+    mock_executor.execute.return_value = (
+        "test-prompt-id",
+        [{"filename": "out.png", "subfolder": "", "type": "output"}],
+        12345,
+        1.0,
+    )
+
+    with patch(
+        "services.run_queue.fetch_comfyui_version_info",
+        return_value={"comfyui_base_url": "http://localhost:8188/", "object_info_node_classes": []},
+    ), patch.object(dependencies, "_executor", mock_executor):
         r = client.post(
             "/run",
             json={
@@ -362,6 +377,7 @@ def test_post_run_versioned_queued_and_status(client):
     run_id = data["run_id"]
     assert "queue_position" in data
 
+    time.sleep(0.2)
     for _ in range(20):
         status_r = client.get(f"/run/{run_id}/status")
         assert status_r.status_code == 200
@@ -541,6 +557,8 @@ def test_is_comfyui_unreachable_error_false_for_other():
 
 
 def test_comfyui_unreachable_keeps_run_queued_with_warning(client):
+    import dependencies
+
     imp = client.post(
         "/import",
         json={"name": "UnreachableWF", "graph": SAMPLE_WORKFLOW_GRAPH},
@@ -549,19 +567,15 @@ def test_comfyui_unreachable_keeps_run_queued_with_warning(client):
     proj = client.post("/projects", json={"name": "UnreachableProj"})
     project_id = proj.json()["id"]
 
-    def post_raise_connection(_url, **kwargs):
-        raise requests.ConnectionError("Connection refused")
+    mock_executor = MagicMock()
+    mock_executor.execute.side_effect = requests.ConnectionError("Connection refused")
 
-    def get_mock(url, **kwargs):
-        res = MagicMock()
-        res.raise_for_status = MagicMock()
-        res.json.return_value = {}
-        res.headers = {}
-        return res
-
-    with patch("requests.post", side_effect=post_raise_connection), patch(
-        "requests.get", side_effect=get_mock
-    ), patch("time.sleep", return_value=None):
+    with patch(
+        "services.run_queue.fetch_comfyui_version_info",
+        return_value={"comfyui_base_url": "http://localhost:8188/", "object_info_node_classes": []},
+    ), patch.object(dependencies, "_executor", mock_executor), patch(
+        "time.sleep", return_value=None
+    ):
         r = client.post(
             "/run",
             json={

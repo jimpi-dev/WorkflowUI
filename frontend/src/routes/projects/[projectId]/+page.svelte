@@ -21,7 +21,6 @@
 			project: {
 				id: string;
 				name: string;
-				slug?: string | null;
 				description?: string | null;
 				created_at: number;
 				updated_at: number;

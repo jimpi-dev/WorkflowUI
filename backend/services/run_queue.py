@@ -8,7 +8,11 @@ import uuid
 from typing import Any, Callable
 
 from services.comfyui_info import fetch_comfyui_version_info, is_comfyui_unreachable_error
-from services.run_executor import RunExecutor, merge_comfyui_version_into_metadata, used_node_class_types_from_prompt
+from services.run_executor import (
+    RunExecutor,
+    build_slim_metadata_snapshot,
+    used_node_class_types_from_prompt,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -103,6 +107,8 @@ def _worker_loop(
         if not comfy_url:
             comfy_url = "http://localhost:8188/"
         comfyui_version_info = fetch_comfyui_version_info(comfy_url)
+        run_repo = get_db()[3]
+        comfyui_version_id = run_repo.get_or_create_comfyui_version(comfyui_version_info) if run_repo else None
 
         try:
             prompt_id, images, resolved_seed, execution_time_sec = executor.execute(job, get_db, is_cancelled)
@@ -112,13 +118,10 @@ def _worker_loop(
                 runs[run_id]["images"] = images
                 runs[run_id]["seed"] = resolved_seed
                 runs[run_id]["execution_time"] = execution_time_sec
-            run_repo = get_db()[3]
             if run_repo:
                 run_entity = run_repo.get_run(run_id)
-                if run_entity:
-                    if isinstance(job.get("prompt"), dict):
-                        comfyui_version_info["object_info_node_classes"] = used_node_class_types_from_prompt(job["prompt"])
-                    merged_metadata = merge_comfyui_version_into_metadata(run_entity, comfyui_version_info)
+                if run_entity and comfyui_version_id:
+                    slim_metadata = build_slim_metadata_snapshot(run_entity, comfyui_version_id)
                     media = []
                     if images:
                         for ent in images:
@@ -137,7 +140,8 @@ def _worker_loop(
                         media_json=json.dumps(media) if media else None,
                         execution_time=execution_time_sec,
                         remote_status="exists",
-                        metadata_snapshot_json=merged_metadata,
+                        metadata_snapshot_json=slim_metadata,
+                        comfyui_version_id=comfyui_version_id,
                     )
                 try:
                     get_media_service().auto_save_run(run_id)
@@ -165,18 +169,15 @@ def _worker_loop(
                 if runs.get(run_id, {}).get("status") != "cancelled":
                     runs[run_id]["status"] = "error"
                     runs[run_id]["error"] = err_msg
-            run_repo = get_db()[3]
             run_entity = run_repo.get_run(run_id) if run_repo else None
-            if run_entity:
-                if isinstance(job.get("prompt"), dict):
-                    comfyui_version_info["object_info_node_classes"] = used_node_class_types_from_prompt(job["prompt"])
-                merged_metadata = merge_comfyui_version_into_metadata(run_entity, comfyui_version_info)
+            if run_entity and run_repo and comfyui_version_id:
+                slim_metadata = build_slim_metadata_snapshot(run_entity, comfyui_version_id)
                 with queue_lock:
                     final = runs.get(run_id, {}).get("status", "error")
                 if final != "cancelled":
-                    run_repo.update_run(run_id, status="error", error=err_msg, metadata_snapshot_json=merged_metadata)
+                    run_repo.update_run(run_id, status="error", error=err_msg, metadata_snapshot_json=slim_metadata, comfyui_version_id=comfyui_version_id)
                 else:
-                    run_repo.update_run(run_id, status="cancelled", error="Cancelled", metadata_snapshot_json=merged_metadata)
+                    run_repo.update_run(run_id, status="cancelled", error="Cancelled", metadata_snapshot_json=slim_metadata, comfyui_version_id=comfyui_version_id)
 
         with queue_lock:
             if not run_queue:

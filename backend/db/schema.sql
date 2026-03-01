@@ -1,5 +1,6 @@
 PRAGMA journal_mode=WAL;
 PRAGMA foreign_keys=ON;
+PRAGMA auto_vacuum=INCREMENTAL;
 
 CREATE TABLE IF NOT EXISTS workflow_definition (
     id TEXT PRIMARY KEY,
@@ -39,7 +40,6 @@ CREATE TABLE IF NOT EXISTS workflow_app (
 CREATE TABLE IF NOT EXISTS project (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
-    slug TEXT,
     description TEXT,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL,
@@ -48,6 +48,14 @@ CREATE TABLE IF NOT EXISTS project (
     storage_mode TEXT DEFAULT 'inherit',
     header_color TEXT,
     archived_at INTEGER NULL
+);
+
+CREATE TABLE IF NOT EXISTS comfyui_version (
+    id TEXT PRIMARY KEY,
+    metadata_hash TEXT NOT NULL UNIQUE,
+    comfyui_base_url TEXT NOT NULL,
+    metadata_json TEXT NOT NULL,
+    created_at INTEGER NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS run (
@@ -67,10 +75,13 @@ CREATE TABLE IF NOT EXISTS run (
     metadata_snapshot_json TEXT,
     run_group_id TEXT,
     comfyui_url TEXT,
+    comfyui_version_id TEXT REFERENCES comfyui_version(id),
     local_storage_status TEXT DEFAULT 'none',
     remote_status TEXT DEFAULT 'unknown',
     local_path TEXT
 );
+
+CREATE INDEX IF NOT EXISTS idx_comfyui_version_metadata_hash ON comfyui_version(metadata_hash);
 
 CREATE INDEX IF NOT EXISTS idx_workflow_definition_name ON workflow_definition(name);
 CREATE INDEX IF NOT EXISTS idx_workflow_version_workflow_id ON workflow_version(workflow_id);
@@ -87,6 +98,5 @@ CREATE TABLE IF NOT EXISTS app_preset (
 
 CREATE INDEX IF NOT EXISTS idx_run_app_id ON run(app_id);
 CREATE INDEX IF NOT EXISTS idx_run_prompt_id ON run(prompt_id);
-CREATE INDEX IF NOT EXISTS idx_project_slug ON project(slug);
 CREATE INDEX IF NOT EXISTS idx_app_preset_app_id ON app_preset(app_id);
 /* idx_run_project_id is created in migrate.py when run table is recreated */

@@ -358,7 +358,7 @@ def get_run_detail(run_id: str, db=Depends(get_db)):
         "execution_time": run_entity.execution_time,
         "error": run_entity.error,
         "input_snapshot": json.loads(run_entity.input_snapshot_json) if run_entity.input_snapshot_json else None,
-        "metadata_snapshot": json.loads(run_entity.metadata_snapshot_json) if run_entity.metadata_snapshot_json else None,
+        "metadata_snapshot": run_repo.get_resolved_metadata_snapshot(run_entity) if run_repo else (json.loads(run_entity.metadata_snapshot_json) if run_entity.metadata_snapshot_json else None),
         "local_storage_status": run_entity.local_storage_status,
         "remote_status": run_entity.remote_status,
         "local_path": run_entity.local_path,

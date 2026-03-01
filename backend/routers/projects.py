@@ -25,9 +25,6 @@ def post_projects(body: dict, db=Depends(get_db)):
     if not name or not isinstance(name, str) or not name.strip():
         raise HTTPException(status_code=400, detail="name is required")
     _, _, _, _, project_repo, _, _ = db
-    slug = body.get("slug")
-    if isinstance(slug, str):
-        slug = slug.strip() or None
     description = body.get("description")
     tags = body.get("tags")
     tags_json = json.dumps(tags) if isinstance(tags, (list, tuple)) else None
@@ -44,12 +41,9 @@ def post_projects(body: dict, db=Depends(get_db)):
     created_at = int(time.time() * 1000)
     updated_at = created_at
     project_id = str(uuid.uuid4())
-    if slug and project_repo.get_project_by_slug(slug):
-        raise HTTPException(status_code=409, detail="slug already in use")
     created = project_repo.create_project(
         project_id,
         name.strip(),
-        slug,
         description,
         created_at,
         updated_at,
@@ -61,7 +55,6 @@ def post_projects(body: dict, db=Depends(get_db)):
     return {
         "id": created.id,
         "name": created.name,
-        "slug": created.slug,
         "description": created.description,
         "created_at": created.created_at,
         "updated_at": created.updated_at,
@@ -87,7 +80,6 @@ def list_projects(
         result.append({
             "id": p.id,
             "name": p.name,
-            "slug": p.slug,
             "description": p.description,
             "created_at": p.created_at,
             "updated_at": p.updated_at,
@@ -137,7 +129,6 @@ def get_project_detail(project_id: str, db=Depends(get_db)):
     return {
         "id": proj.id,
         "name": proj.name,
-        "slug": proj.slug,
         "description": proj.description,
         "created_at": proj.created_at,
         "updated_at": proj.updated_at,
@@ -189,7 +180,6 @@ def patch_project(project_id: str, body: dict, db=Depends(get_db)):
     return {
         "id": updated.id,
         "name": updated.name,
-        "slug": updated.slug,
         "description": updated.description,
         "updated_at": updated.updated_at,
         "tags": json.loads(updated.tags_json) if updated.tags_json else [],
