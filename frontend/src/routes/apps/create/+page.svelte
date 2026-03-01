@@ -47,6 +47,7 @@
 	let availableLoras = $state<string[]>([]);
 	let availableCheckpoints = $state<string[]>([]);
 	let availableClipModels = $state<string[]>([]);
+	let availableClipVisionModels = $state<string[]>([]);
 	let availableClipTypes = $state<string[]>([]);
 	let availableVaeModels = $state<string[]>([]);
 	let availableDevices = $state<string[]>([]);
@@ -163,6 +164,7 @@
 			fetch(`${base}/loras`).then((r) => (r.ok ? r.json() : { loras: [] })).then((d: { loras?: string[] }) => { availableLoras = d.loras ?? []; }).catch(() => { availableLoras = []; }),
 			fetch(`${base}/checkpoints`).then((r) => (r.ok ? r.json() : { checkpoints: [] })).then((d: { checkpoints?: string[] }) => { availableCheckpoints = d.checkpoints ?? []; }).catch(() => { availableCheckpoints = []; }),
 			fetch(`${base}/clip_models`).then((r) => (r.ok ? r.json() : { clip_models: [] })).then((d: { clip_models?: string[] }) => { availableClipModels = d.clip_models ?? []; }).catch(() => { availableClipModels = []; }),
+			fetch(`${base}/clip_vision_models`).then((r) => (r.ok ? r.json() : { clip_vision_models: [] })).then((d: { clip_vision_models?: string[] }) => { availableClipVisionModels = d.clip_vision_models ?? []; }).catch(() => { availableClipVisionModels = []; }),
 			fetch(`${base}/clip_types`).then((r) => (r.ok ? r.json() : { clip_types: [] })).then((d: { clip_types?: string[] }) => { availableClipTypes = d.clip_types ?? []; }).catch(() => { availableClipTypes = []; }),
 			fetch(`${base}/vae_models`).then((r) => (r.ok ? r.json() : { vae_models: [] })).then((d: { vae_models?: string[] }) => { availableVaeModels = d.vae_models ?? []; }).catch(() => { availableVaeModels = []; }),
 			fetch(`${base}/devices`).then((r) => (r.ok ? r.json() : { devices: [] })).then((d: { devices?: string[] }) => { availableDevices = d.devices ?? []; }).catch(() => { availableDevices = []; }),
@@ -479,6 +481,7 @@
 											availableRifeModels={availableRifeModels}
 											availableUnetGgufModels={availableUnetGgufModels}
 											availableClipModels={availableClipModels}
+											availableClipVisionModels={availableClipVisionModels}
 											availableClipTypes={availableClipTypes}
 											availableVaeModels={availableVaeModels}
 											availableDevices={availableDevices}

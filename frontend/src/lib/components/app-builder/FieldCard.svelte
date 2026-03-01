@@ -17,6 +17,7 @@
 		availableLoras?: string[];
 		availableCheckpoints?: string[];
 		availableClipModels?: string[];
+		availableClipVisionModels?: string[];
 		availableClipTypes?: string[];
 		availableVaeModels?: string[];
 		availableDevices?: string[];
@@ -40,6 +41,7 @@
 		availableLoras = [],
 		availableCheckpoints = [],
 		availableClipModels = [],
+		availableClipVisionModels = [],
 		availableClipTypes = [],
 		availableVaeModels = [],
 		availableDevices = [],
@@ -54,6 +56,7 @@
 	const isLoraField = $derived(field?.endsWith('.lora') || field === 'lora_name');
 	const isCheckpointField = $derived(field === 'ckpt_name' || field === 'unet_name' || optionSource === 'checkpoints');
 	const isClipField = $derived(field === 'clip_name' || optionSource === 'clip_models');
+	const isClipVisionField = $derived(optionSource === 'clip_vision_models');
 	const isClipTypeField = $derived(optionSource === 'clip_types');
 	const isVaeField = $derived(field === 'vae_name' || optionSource === 'vae_models');
 	const isDeviceField = $derived(field === 'device' || optionSource === 'devices');
@@ -552,6 +555,28 @@
 							</button>
 						{/if}
 					</div>
+				{:else if isClipVisionField}
+					{#if availableClipVisionModels && availableClipVisionModels.length > 0}
+						{@const clipVisionOpts = displayDefault && !availableClipVisionModels.includes(displayDefault) ? [displayDefault, ...availableClipVisionModels] : availableClipVisionModels}
+						<select
+							class="default-input"
+							value={displayDefault}
+							onchange={(e) => onDefaultOverrideChange((e.target as HTMLSelectElement).value || undefined)}
+						>
+							<option value="">Default (optional)</option>
+							{#each clipVisionOpts as opt}
+								<option value={opt}>{opt}</option>
+							{/each}
+						</select>
+					{:else}
+						<input
+							type="text"
+							class="default-input"
+							placeholder="Default (optional)"
+							value={displayDefault}
+							oninput={(e) => onDefaultOverrideChange((e.target as HTMLInputElement).value || undefined)}
+						/>
+					{/if}
 				{:else if isClipTypeField}
 					{#if availableClipTypes.length > 0}
 						{@const clipTypeOpts = displayDefault && !availableClipTypes.includes(displayDefault) ? [displayDefault, ...availableClipTypes] : availableClipTypes}
