@@ -315,6 +315,26 @@ import VaeCombo from './VaeCombo.svelte';
             .catch(() => { availableDevices = []; });
     }
 
+    let availableRifeModels: string[] = [];
+    let rifeModelsFetchRequested = false;
+    $: hasRifeModelsInput = inputs.some((i) => i.optionSource === 'rife_models');
+    $: if (hasRifeModelsInput && !rifeModelsFetchRequested) {
+        rifeModelsFetchRequested = true;
+        fetchOptionList('/rife_models')
+            .then((list) => { availableRifeModels = list; })
+            .catch(() => { availableRifeModels = []; });
+    }
+
+    let availableUnetGgufModels: string[] = [];
+    let unetGgufModelsFetchRequested = false;
+    $: hasUnetGgufModelsInput = inputs.some((i) => i.optionSource === 'unet_gguf_models');
+    $: if (hasUnetGgufModelsInput && !unetGgufModelsFetchRequested) {
+        unetGgufModelsFetchRequested = true;
+        fetchOptionList('/unet_gguf_models')
+            .then((list) => { availableUnetGgufModels = list; })
+            .catch(() => { availableUnetGgufModels = []; });
+    }
+
     $: loraValuesSnapshot = inputs
         .filter((i) => i.field?.endsWith('.lora'))
         .map((i) => (i.key in values ? String(values[i.key] ?? '') : ''))
@@ -546,6 +566,16 @@ import VaeCombo from './VaeCombo.svelte';
                                             {:else if input.optionSource === 'devices'}
                                                 <SelectInput
                                                     input={{ ...input, options: [...new Set([...(input.options || []), ...availableDevices])].sort() }}
+                                                    bind:value={values[input.key]}
+                                                />
+                                            {:else if input.optionSource === 'rife_models'}
+                                                <SelectInput
+                                                    input={{ ...input, options: [...new Set([...(input.options || []), ...availableRifeModels])].sort() }}
+                                                    bind:value={values[input.key]}
+                                                />
+                                            {:else if input.optionSource === 'unet_gguf_models'}
+                                                <SelectInput
+                                                    input={{ ...input, options: [...new Set([...(input.options || []), ...availableUnetGgufModels])].sort() }}
                                                     bind:value={values[input.key]}
                                                 />
                                             {:else}
