@@ -220,6 +220,58 @@ import VaeCombo from './VaeCombo.svelte';
         }
     }
 
+    let searchQuery = '';
+
+    function inputMatchesQuery(input: WorkflowInput, q: string): boolean {
+        if (!q || !q.trim()) return true;
+        const lower = q.trim().toLowerCase();
+        const label = (input.label ?? '').toLowerCase();
+        const key = (input.key ?? '').toLowerCase();
+        return label.includes(lower) || key.includes(lower);
+    }
+
+    function groupMatchesQuery(
+        group: { parentName: string; nodeInputs: WorkflowInput[]; template: string },
+        q: string
+    ): boolean {
+        if (!q || !q.trim()) return true;
+        const lower = q.trim().toLowerCase();
+        if ((group.parentName ?? '').toLowerCase().includes(lower)) return true;
+        return group.nodeInputs.some((i) => inputMatchesQuery(i, q));
+    }
+
+    $: filteredParentGroups = (() => {
+        const q = searchQuery.trim();
+        if (!q) return parentGroups;
+        return parentGroups
+            .map((group) => {
+                if (group.template === 'lora-stack') {
+                    return groupMatchesQuery(group, q) ? group : null;
+                }
+                const filteredInputs = group.nodeInputs.filter((i) => inputMatchesQuery(i, q));
+                if (filteredInputs.length === 0) return null;
+                return { ...group, nodeInputs: filteredInputs };
+            })
+            .filter((g): g is NonNullable<typeof g> => g != null);
+    })();
+
+    $: effectiveCollapsed =
+        searchQuery.trim() === ''
+            ? collapsedGroups
+            : new Set(
+                  [...collapsedGroups].filter(
+                      (name) => !filteredParentGroups.some((g) => g.parentName === name)
+                  )
+              );
+
+    function expandAll() {
+        collapsedGroups = new Set();
+    }
+
+    function collapseAll() {
+        collapsedGroups = new Set(parentGroups.map((g) => g.parentName));
+    }
+
     $: loraEnabledKey = inputs
         .filter((i) => i.field?.endsWith('.on'))
         .map((i) => `${i.key}:${values[i.key]}`)
@@ -227,7 +279,7 @@ import VaeCombo from './VaeCombo.svelte';
 
     $: loraStackData = (() => {
         void loraEnabledKey;
-        return parentGroups
+        return filteredParentGroups
             .filter((g) => g.template === 'lora-stack')
             .map((group) => {
                 const nodeId = group.nodeInputs[0]?.nodeId ?? '';
@@ -398,18 +450,44 @@ import VaeCombo from './VaeCombo.svelte';
 </script>
 
 <div class="form-root" class:checkpoint-combo-open={$checkpointComboOpen} class:clip-combo-open={$clipComboOpen} class:vae-combo-open={$vaeComboOpen}>
-    {#each parentGroups as group}
+    <div class="inputs-toolbar" role="toolbar" aria-label="Filter and expand inputs">
+        <div class="inputs-search-wrap">
+            <input
+                type="search"
+                class="inputs-search"
+                placeholder="Search inputs…"
+                bind:value={searchQuery}
+                aria-label="Search inputs"
+            />
+            {#if searchQuery.trim()}
+                <button
+                    type="button"
+                    class="inputs-search-clear"
+                    aria-label="Clear search"
+                    title="Clear search"
+                    onclick={() => (searchQuery = '')}
+                >
+                    ×
+                </button>
+            {/if}
+        </div>
+        <div class="collapse-all-actions">
+            <button type="button" class="collapse-all-btn" onclick={expandAll}>Expand all</button>
+            <button type="button" class="collapse-all-btn" onclick={collapseAll}>Collapse all</button>
+        </div>
+    </div>
+    {#each filteredParentGroups as group}
 
         {#if group.template === 'lora-stack'}
             {@const data = loraStackData.find((d) => d.group === group)}
             {#if data}
-            <div class="lora-stack-wrapper" class:collapsed={collapsedGroups.has(group.parentName)} class:lora-combo-open={$loraComboOpen}>
+            <div class="lora-stack-wrapper" class:collapsed={effectiveCollapsed.has(group.parentName)} class:lora-combo-open={$loraComboOpen}>
                 <div
                     class="lora-stack-header"
                     role="button"
                     tabindex="0"
-                    aria-expanded={!collapsedGroups.has(group.parentName)}
-                    aria-label={collapsedGroups.has(group.parentName) ? 'Expand group' : 'Collapse group'}
+                    aria-expanded={!effectiveCollapsed.has(group.parentName)}
+                    aria-label={effectiveCollapsed.has(group.parentName) ? 'Expand group' : 'Collapse group'}
                     onclick={() => toggleCollapsed(group.parentName)}
                     onkeydown={(e) => e.key === 'Enter' && toggleCollapsed(group.parentName)}
                 >
@@ -489,13 +567,13 @@ import VaeCombo from './VaeCombo.svelte';
             {/if}
 
         {:else if group.template === 'latent-resolution'}
-            <div class="node-group-wrapper" class:collapsed={collapsedGroups.has(group.parentName)}>
+            <div class="node-group-wrapper" class:collapsed={effectiveCollapsed.has(group.parentName)}>
                 <button
                     type="button"
                     class="node-group-header"
                     onclick={() => toggleCollapsed(group.parentName)}
-                    aria-expanded={!collapsedGroups.has(group.parentName)}
-                    aria-label={collapsedGroups.has(group.parentName) ? 'Expand group' : 'Collapse group'}
+                    aria-expanded={!effectiveCollapsed.has(group.parentName)}
+                    aria-label={effectiveCollapsed.has(group.parentName) ? 'Expand group' : 'Collapse group'}
                 >
                     <svg class="collapse-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                         <polyline points="6 9 12 15 18 9"/>
@@ -520,13 +598,13 @@ import VaeCombo from './VaeCombo.svelte';
 
         {:else}
 
-            <div class="node-group-wrapper" class:collapsed={collapsedGroups.has(group.parentName)}>
+            <div class="node-group-wrapper" class:collapsed={effectiveCollapsed.has(group.parentName)}>
                 <button
                     type="button"
                     class="node-group-header"
                     onclick={() => toggleCollapsed(group.parentName)}
-                    aria-expanded={!collapsedGroups.has(group.parentName)}
-                    aria-label={collapsedGroups.has(group.parentName) ? 'Expand group' : 'Collapse group'}
+                    aria-expanded={!effectiveCollapsed.has(group.parentName)}
+                    aria-label={effectiveCollapsed.has(group.parentName) ? 'Expand group' : 'Collapse group'}
                 >
                     <svg class="collapse-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                         <polyline points="6 9 12 15 18 9"/>
@@ -705,6 +783,77 @@ import VaeCombo from './VaeCombo.svelte';
     .form-root.clip-combo-open,
     .form-root.vae-combo-open {
         overflow: visible;
+    }
+
+    .inputs-toolbar {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 0.75rem;
+    }
+
+    .inputs-search-wrap {
+        display: flex;
+        align-items: center;
+        gap: 0.35rem;
+        flex: 1;
+        min-width: 0;
+    }
+
+    .inputs-search {
+        flex: 1;
+        min-width: 120px;
+        padding: 0.4rem 0.6rem;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        background: var(--bg);
+        color: var(--text);
+        font: inherit;
+        font-size: 0.9rem;
+    }
+
+    .inputs-search:focus {
+        outline: none;
+        border-color: var(--accent);
+    }
+
+    .inputs-search-clear {
+        padding: 0.2rem 0.4rem;
+        font-size: 1.1rem;
+        line-height: 1;
+        background: transparent;
+        border: none;
+        color: var(--muted);
+        cursor: pointer;
+        border-radius: 4px;
+        flex-shrink: 0;
+    }
+
+    .inputs-search-clear:hover {
+        color: var(--text);
+        background: rgba(255, 255, 255, 0.08);
+    }
+
+    .collapse-all-actions {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        flex-shrink: 0;
+    }
+
+    .collapse-all-btn {
+        font-size: 0.8rem;
+        padding: 0.35rem 0.6rem;
+        background: var(--surface, #1c2333);
+        color: var(--text);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        cursor: pointer;
+    }
+
+    .collapse-all-btn:hover {
+        background: color-mix(in srgb, var(--accent) 15%, var(--surface));
+        border-color: var(--accent);
     }
 
     .node-group-wrapper {
