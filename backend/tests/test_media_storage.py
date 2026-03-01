@@ -52,7 +52,7 @@ def create_run(run_repo, project_id):
 def test_delete_local_on_empty(service, repos):
     media_service, root = service
     project_repo, run_repo, _ = repos
-    project = project_repo.create_project(str(uuid.uuid4()), "p", "p", None, 0, 0)
+    project = project_repo.create_project(str(uuid.uuid4()), "p", None, 0, 0)
     run_id = create_run(run_repo, project.id)
     result = media_service.delete_local(run_id, None)
     assert result["ok"] is True
@@ -63,7 +63,7 @@ def test_delete_local_on_empty(service, repos):
 def test_delete_both_after_save(monkeypatch, service, repos):
     media_service, root = service
     project_repo, run_repo, _ = repos
-    project = project_repo.create_project(str(uuid.uuid4()), "p", "p", None, 0, 0)
+    project = project_repo.create_project(str(uuid.uuid4()), "p", None, 0, 0)
     run_id = create_run(run_repo, project.id)
 
     monkeypatch.setattr(MediaStorageService, "_fetch_remote_image_bytes", lambda *_: b"data")
@@ -84,7 +84,7 @@ def test_delete_both_after_save(monkeypatch, service, repos):
 def test_save_uses_comfy_filename_and_unique_counter(monkeypatch, service, repos):
     media_service, root = service
     project_repo, run_repo, _ = repos
-    project = project_repo.create_project(str(uuid.uuid4()), "p", "p", None, 0, 0)
+    project = project_repo.create_project(str(uuid.uuid4()), "p", None, 0, 0)
     run_id = str(uuid.uuid4())
     run_repo.create_run(
         run_id,

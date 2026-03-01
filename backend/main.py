@@ -1,5 +1,6 @@
 import logging
 import sys
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
@@ -25,17 +26,19 @@ if hasattr(sys.stdout, "reconfigure"):
 from dependencies import get_db
 from routers import config, runs, projects, comfyui, import_, apps, workflows, execution
 
-app = FastAPI()
 
-
-@app.on_event("startup")
-def _configure_image_endpoint_logging():
+@asynccontextmanager
+async def lifespan(app: FastAPI):
     if not logger.handlers:
         h = logging.StreamHandler(sys.stdout)
         h.setLevel(logging.INFO)
         h.setFormatter(logging.Formatter("%(message)s"))
         logger.addHandler(h)
         logger.setLevel(logging.INFO)
+    yield
+
+
+app = FastAPI(lifespan=lifespan)
 
 
 app.add_middleware(

@@ -127,8 +127,8 @@ def migrate(db_path: Path | str) -> None:
         if "archived_at" not in proj_cols:
             conn.execute("ALTER TABLE project ADD COLUMN archived_at INTEGER NULL")
         if "slug" in proj_cols:
-            conn.execute("ALTER TABLE project DROP COLUMN slug")
             conn.execute("DROP INDEX IF EXISTS idx_project_slug")
+            conn.execute("ALTER TABLE project DROP COLUMN slug")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_run_project_id ON run(project_id)")
         app_cols = _run_columns(conn, "workflow_app")
         if "comfyui_url" not in app_cols:
