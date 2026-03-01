@@ -17,7 +17,7 @@ export const CLIPLoaderSpec: NodeSpec = {
         device: {
             type: 'select',
             label: 'Device',
-            options: ['default', 'cpu', 'cuda']
+            optionSource: 'devices'
         }
     }
 };

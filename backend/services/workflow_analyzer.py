@@ -236,7 +236,7 @@ NODE_SPECS: dict[str, dict[str, Any]] = {
         "fixedInputs": {
             "clip_name": {"type": "select", "label": "CLIP model", "optionSource": "clip_models"},
             "type": {"type": "select", "label": "Type", "optionSource": "clip_types"},
-            "device": {"type": "select", "label": "Device", "options": ["default", "cpu", "cuda"]},
+            "device": {"type": "select", "label": "Device", "optionSource": "devices"},
         },
     },
     "VAELoader": {
@@ -364,7 +364,7 @@ NODE_SPECS: dict[str, dict[str, Any]] = {
             "enhancement_level": {"type": "number", "label": "Enhancement level", "min": 0, "max": 3},
             "use_source_separation": {"type": "select", "label": "Use source separation", "options": ["true", "false"]},
             "demucs_model": {"type": "text", "label": "Demucs model"},
-            "device": {"type": "select", "label": "Device", "options": ["cuda", "cpu", "default"]},
+            "device": {"type": "select", "label": "Device", "optionSource": "devices"},
             "vocals_enhance": {"type": "number", "label": "Vocals", "min": 0, "max": 1},
             "drums_enhance": {"type": "number", "label": "Drums", "min": 0, "max": 1},
             "bass_enhance": {"type": "number", "label": "Bass", "min": 0, "max": 1},
