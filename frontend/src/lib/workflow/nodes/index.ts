@@ -8,6 +8,12 @@ import { EmptyLatentImageSpec } from './EmptyLatentImage';
 import { SDXLEmptyLatentSizePickerSpec } from './SDXLEmptyLatentSizePicker';
 import { LoadImageSpec } from './LoadImage';
 import { CheckpointLoaderSimpleSpec } from './CheckpointLoaderSimple';
+import { CheckpointLoaderSpec } from './CheckpointLoader';
+import { DiffusionModelLoaderSpec } from './DiffusionModelLoader';
+import { LoadDiffusionModelSpec } from './LoadDiffusionModel';
+import { StableCascadeCheckpointLoaderSpec } from './StableCascadeCheckpointLoader';
+import { SD3CheckpointLoaderSpec } from './SD3CheckpointLoader';
+import { FluxCheckpointLoaderSpec } from './FluxCheckpointLoader';
 import { ImageScaleBySpec } from './ImageScaleBy';
 import { VHS_VideoCombineSpec } from './VHS_VideoCombine';
 import { VAEDecodeSpec } from './VAEDecode';
@@ -69,6 +75,14 @@ export const NODE_SPECS = {
     'SDXLEmptyLatentSizePicker+': SDXLEmptyLatentSizePickerSpec,
     LoadImage: LoadImageSpec,
     CheckpointLoaderSimple: CheckpointLoaderSimpleSpec,
+    CheckpointLoader: CheckpointLoaderSpec,
+    DiffusionModelLoader: DiffusionModelLoaderSpec,
+    LoadDiffusionModel: LoadDiffusionModelSpec,
+    StableCascadeCheckpointLoader: StableCascadeCheckpointLoaderSpec,
+    'StableCascade_CheckpointLoader': StableCascadeCheckpointLoaderSpec,
+    SD3CheckpointLoader: SD3CheckpointLoaderSpec,
+    SD3LoadCheckpoint: SD3CheckpointLoaderSpec,
+    FluxCheckpointLoader: FluxCheckpointLoaderSpec,
     ImageScaleBy: ImageScaleBySpec,
     VHS_VideoCombine: VHS_VideoCombineSpec,
     VAEDecode: VAEDecodeSpec,

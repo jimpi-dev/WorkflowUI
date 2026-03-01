@@ -164,3 +164,114 @@ def test_analyze_lycoris_loader_node_produces_lycoris_type():
     keys = {inp["key"] for inp in result["inputs"]}
     assert "20.lora_name" in keys
     assert "20.lycoris_type" in keys
+
+
+def test_analyze_checkpoint_loader_produces_ckpt_name():
+    workflow = {"1": {"class_type": "CheckpointLoader", "inputs": {"ckpt_name": "model.safetensors"}}}
+    result = analyze_workflow(workflow)
+    keys = {inp["key"] for inp in result["inputs"]}
+    assert "1.ckpt_name" in keys
+    inp = next(i for i in result["inputs"] if i["key"] == "1.ckpt_name")
+    assert inp.get("optionSource") == "checkpoints"
+
+
+def test_analyze_diffusion_model_loader_produces_unet_and_weight_dtype():
+    workflow = {
+        "2": {
+            "class_type": "DiffusionModelLoader",
+            "inputs": {"unet_name": "flux.safetensors", "weight_dtype": "fp16"},
+        }
+    }
+    result = analyze_workflow(workflow)
+    keys = {inp["key"] for inp in result["inputs"]}
+    assert "2.unet_name" in keys
+    assert "2.weight_dtype" in keys
+
+
+def test_analyze_load_diffusion_model_produces_same_inputs():
+    workflow = {
+        "3": {
+            "class_type": "LoadDiffusionModel",
+            "inputs": {"unet_name": "wan.safetensors", "weight_dtype": "default"},
+        }
+    }
+    result = analyze_workflow(workflow)
+    keys = {inp["key"] for inp in result["inputs"]}
+    assert "3.unet_name" in keys
+    assert "3.weight_dtype" in keys
+
+
+def test_analyze_stable_cascade_checkpoint_loader_produces_stage_inputs():
+    workflow = {
+        "4": {
+            "class_type": "StableCascadeCheckpointLoader",
+            "inputs": {"key_opt_b": "stage_b.safetensors", "key_opt_c": "stage_c.safetensors", "cache_mode": "all"},
+        }
+    }
+    result = analyze_workflow(workflow)
+    keys = {inp["key"] for inp in result["inputs"]}
+    assert "4.key_opt_b" in keys
+    assert "4.key_opt_c" in keys
+    assert "4.cache_mode" in keys
+    b_inp = next(i for i in result["inputs"] if i["key"] == "4.key_opt_b")
+    c_inp = next(i for i in result["inputs"] if i["key"] == "4.key_opt_c")
+    assert b_inp.get("optionSource") == "stable_cascade_stage_b"
+    assert c_inp.get("optionSource") == "stable_cascade_stage_c"
+
+
+def test_analyze_stable_cascade_underscore_class_type():
+    workflow = {
+        "5": {
+            "class_type": "StableCascade_CheckpointLoader",
+            "inputs": {"key_opt_b": "b.safetensors", "key_opt_c": "c.safetensors", "cache_mode": "none"},
+        }
+    }
+    result = analyze_workflow(workflow)
+    keys = {inp["key"] for inp in result["inputs"]}
+    assert "5.key_opt_b" in keys
+    assert "5.key_opt_c" in keys
+
+
+def test_analyze_sd3_checkpoint_loader_produces_ckpt_name_and_shift():
+    workflow = {
+        "6": {"class_type": "SD3CheckpointLoader", "inputs": {"ckpt_name": "sd3_medium.safetensors", "shift": 3.0}}
+    }
+    result = analyze_workflow(workflow)
+    keys = {inp["key"] for inp in result["inputs"]}
+    assert "6.ckpt_name" in keys
+    assert "6.shift" in keys
+    assert next(i for i in result["inputs"] if i["key"] == "6.shift")["default"] == 3.0
+
+
+def test_analyze_sd3_load_checkpoint_alias():
+    workflow = {"7": {"class_type": "SD3LoadCheckpoint", "inputs": {"ckpt_name": "sd3.safetensors", "shift": 6.0}}}
+    result = analyze_workflow(workflow)
+    keys = {inp["key"] for inp in result["inputs"]}
+    assert "7.ckpt_name" in keys
+    assert "7.shift" in keys
+
+
+def test_analyze_flux_checkpoint_loader_produces_ckpt_name():
+    workflow = {"8": {"class_type": "FluxCheckpointLoader", "inputs": {"ckpt_name": "flux1.safetensors"}}}
+    result = analyze_workflow(workflow)
+    keys = {inp["key"] for inp in result["inputs"]}
+    assert "8.ckpt_name" in keys
+    assert next(i for i in result["inputs"] if i["key"] == "8.ckpt_name").get("optionSource") == "checkpoints"
+
+
+def test_analyze_stable_cascade_editor_format_widgets_values():
+    workflow = {
+        "nodes": [
+            {
+                "id": 9,
+                "type": "StableCascadeCheckpointLoader",
+                "widgets_values": ["stage_b.safetensors", "stage_c.safetensors", "all"],
+            }
+        ],
+    }
+    result = analyze_workflow(workflow)
+    keys = {inp["key"] for inp in result["inputs"]}
+    assert "9.key_opt_b" in keys
+    assert "9.key_opt_c" in keys
+    assert "9.cache_mode" in keys
+    assert next(i for i in result["inputs"] if i["key"] == "9.key_opt_b")["default"] == "stage_b.safetensors"
