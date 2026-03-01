@@ -528,6 +528,44 @@ def test_get_workflow_file_not_found(client):
     assert r.status_code == 404
 
 
+def test_get_stable_cascade_models_returns_stage_b_and_stage_c(client):
+    mock_object_info = {
+        "StableCascade_CheckpointLoader": {
+            "input": {
+                "required": {
+                    "key_opt_b": [["stage_b_1.safetensors", "stage_b_2.safetensors"]],
+                    "key_opt_c": [["stage_c_1.safetensors", "stage_c_2.safetensors"]],
+                },
+                "optional": {},
+            }
+        }
+    }
+    mock_response = MagicMock()
+    mock_response.raise_for_status = MagicMock()
+    mock_response.json.return_value = mock_object_info
+
+    with patch("routers.comfyui.requests.get", return_value=mock_response) as mock_get:
+        r = client.get("/stable_cascade_models")
+    assert r.status_code == 200
+    data = r.json()
+    assert "stage_b" in data
+    assert "stage_c" in data
+    assert data["stage_b"] == ["stage_b_1.safetensors", "stage_b_2.safetensors"]
+    assert data["stage_c"] == ["stage_c_1.safetensors", "stage_c_2.safetensors"]
+    mock_get.assert_called_once()
+    call_url = mock_get.call_args[0][0]
+    assert "object_info" in call_url
+
+
+def test_get_stable_cascade_models_returns_empty_when_object_info_fails(client):
+    with patch("routers.comfyui.requests.get", side_effect=requests.RequestException("Connection refused")):
+        r = client.get("/stable_cascade_models")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["stage_b"] == []
+    assert data["stage_c"] == []
+
+
 def test_is_comfyui_unreachable_error_connection_error():
     from services.comfyui_info import is_comfyui_unreachable_error
     assert is_comfyui_unreachable_error(requests.ConnectionError()) is True
