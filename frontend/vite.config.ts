@@ -105,6 +105,7 @@ export default defineConfig({
 			'/lycoris_types': proxyTarget,
 			'/checkpoints': proxyTarget,
 			'/clip_models': proxyTarget,
+			'/clip_vision_models': proxyTarget,
 			'/clip_types': proxyTarget,
 			'/vae_models': proxyTarget,
 			'/devices': proxyTarget,

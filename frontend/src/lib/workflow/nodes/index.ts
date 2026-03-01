@@ -33,6 +33,11 @@ import { KSamplerSelectSpec } from './KSamplerSelect';
 import { RandomNoiseSpec } from './RandomNoise';
 import { UNETLoaderSpec } from './UNETLoader';
 import { CLIPLoaderSpec } from './CLIPLoader';
+import { DualCLIPLoaderSpec } from './DualCLIPLoader';
+import { TripleCLIPLoaderSpec } from './TripleCLIPLoader';
+import { CLIPVisionLoaderSpec } from './CLIPVisionLoader';
+import { T5LoaderSpec } from './T5Loader';
+import { TextEncoderLoaderSpec } from './TextEncoderLoader';
 import { VAELoaderSpec } from './VAELoader';
 import { EmptyFlux2LatentImageSpec } from './EmptyFlux2LatentImage';
 import { ImageScaleToTotalPixelsSpec } from './ImageScaleToTotalPixels';
@@ -98,6 +103,11 @@ export const NODE_SPECS = {
     RandomNoise: RandomNoiseSpec,
     UNETLoader: UNETLoaderSpec,
     CLIPLoader: CLIPLoaderSpec,
+    DualCLIPLoader: DualCLIPLoaderSpec,
+    TripleCLIPLoader: TripleCLIPLoaderSpec,
+    CLIPVisionLoader: CLIPVisionLoaderSpec,
+    T5Loader: T5LoaderSpec,
+    TextEncoderLoader: TextEncoderLoaderSpec,
     VAELoader: VAELoaderSpec,
     EmptyFlux2LatentImage: EmptyFlux2LatentImageSpec,
     ImageScaleToTotalPixels: ImageScaleToTotalPixelsSpec,

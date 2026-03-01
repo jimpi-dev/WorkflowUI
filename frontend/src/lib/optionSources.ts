@@ -5,6 +5,7 @@ const ENDPOINT_RESPONSE_KEY: Record<string, string> = {
     '/lycoris_types': 'lycoris_types',
     '/checkpoints': 'checkpoints',
     '/clip_models': 'clip_models',
+    '/clip_vision_models': 'clip_vision_models',
     '/vae_models': 'vae_models',
     '/clip_types': 'clip_types',
     '/devices': 'devices',
