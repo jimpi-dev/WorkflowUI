@@ -330,6 +330,54 @@ def get_vae_models():
     return {"vae_models": result}
 
 
+UPSCALE_LOADER_NODES = ("UpscaleModelLoader", "ESRGANLoader", "RealESRGANLoader", "SwinIRLoader")
+
+
+@router.get("/upscale_models")
+def get_upscale_models():
+    try:
+        res = requests.get(f"{COMFY_URL}/object_info", timeout=10)
+        res.raise_for_status()
+        obj = res.json()
+    except Exception as e:
+        print("[upscale_models] object_info fetch failed:", e)
+        return {"upscale_models": []}
+    upscale_models = []
+    seen = set()
+
+    def add_model(s: str) -> None:
+        if not isinstance(s, str) or not s.strip():
+            return
+        s = s.strip()
+        if s not in seen:
+            seen.add(s)
+            upscale_models.append(s)
+
+    def extract_from_options(options) -> None:
+        if not isinstance(options, list):
+            return
+        for o in options:
+            if isinstance(o, str):
+                add_model(o)
+            elif isinstance(o, (list, tuple)) and len(o) > 0 and isinstance(o[0], str):
+                add_model(o[0])
+
+    for node_name, node_info in obj.items():
+        if node_name not in UPSCALE_LOADER_NODES or not isinstance(node_info, dict):
+            continue
+        inputs = node_info.get("input") or node_info.get("Input") or {}
+        required = inputs.get("required") or {}
+        optional = inputs.get("optional") or {}
+        for name, spec in {**required, **optional}.items():
+            if name != "model_name" or not isinstance(spec, list) or len(spec) < 1:
+                continue
+            options = spec[0]
+            extract_from_options(options)
+            break
+    result = sorted(upscale_models)
+    return {"upscale_models": result}
+
+
 @router.get("/loras")
 def get_loras():
     print("[loras] GET /loras called")

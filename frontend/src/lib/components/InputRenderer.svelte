@@ -347,6 +347,16 @@ import VaeCombo from './VaeCombo.svelte';
             .catch(() => { availableUnetGgufModels = []; });
     }
 
+    let availableUpscaleModels: string[] = [];
+    let upscaleModelsFetchRequested = false;
+    $: hasUpscaleModelsInput = inputs.some((i) => i.optionSource === 'upscale_models');
+    $: if (hasUpscaleModelsInput && !upscaleModelsFetchRequested) {
+        upscaleModelsFetchRequested = true;
+        fetchOptionList('/upscale_models')
+            .then((list) => { availableUpscaleModels = list; })
+            .catch(() => { availableUpscaleModels = []; });
+    }
+
     let stableCascadeModels: { stage_b: string[]; stage_c: string[] } = { stage_b: [], stage_c: [] };
     let stableCascadeFetchRequested = false;
     $: hasStableCascadeInput = inputs.some(
@@ -611,6 +621,11 @@ import VaeCombo from './VaeCombo.svelte';
                                             {:else if input.optionSource === 'unet_gguf_models'}
                                                 <SelectInput
                                                     input={{ ...input, options: [...new Set([...(input.options || []), ...availableUnetGgufModels])].sort() }}
+                                                    bind:value={values[input.key]}
+                                                />
+                                            {:else if input.optionSource === 'upscale_models'}
+                                                <SelectInput
+                                                    input={{ ...input, options: [...new Set([...(input.options || []), ...availableUpscaleModels])].sort() }}
                                                     bind:value={values[input.key]}
                                                 />
                                             {:else if input.optionSource === 'stable_cascade_stage_b'}

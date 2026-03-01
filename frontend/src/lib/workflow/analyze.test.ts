@@ -339,6 +339,40 @@ describe('analyzeWorkflow', () => {
 		expect(inp?.optionSource).toBe('checkpoints');
 	});
 
+	it('includes UpscaleModelLoader model_name with optionSource upscale_models', () => {
+		const workflow = {
+			'30': { class_type: 'UpscaleModelLoader', inputs: { model_name: '4x-UltraSharp.pth' } }
+		};
+		const result = analyzeWorkflow(workflow);
+		const inp = result.inputs.find((i) => i.key === '30.model_name');
+		expect(inp).toBeDefined();
+		expect(inp?.optionSource).toBe('upscale_models');
+	});
+
+	it('includes ESRGANLoader model_name with optionSource upscale_models', () => {
+		const workflow = {
+			'31': { class_type: 'ESRGANLoader', inputs: { model_name: 'BSRGAN.pth' } }
+		};
+		const result = analyzeWorkflow(workflow);
+		const inp = result.inputs.find((i) => i.key === '31.model_name');
+		expect(inp).toBeDefined();
+		expect(inp?.optionSource).toBe('upscale_models');
+	});
+
+	it('includes RealESRGANLoader and SwinIRLoader model_name with optionSource upscale_models', () => {
+		const workflow = {
+			'32': { class_type: 'RealESRGANLoader', inputs: { model_name: 'RealESRGAN_x4plus.pth' } },
+			'33': { class_type: 'SwinIRLoader', inputs: { model_name: 'SwinIR-L.pth' } }
+		};
+		const result = analyzeWorkflow(workflow);
+		const realInp = result.inputs.find((i) => i.key === '32.model_name');
+		const swinInp = result.inputs.find((i) => i.key === '33.model_name');
+		expect(realInp).toBeDefined();
+		expect(realInp?.optionSource).toBe('upscale_models');
+		expect(swinInp).toBeDefined();
+		expect(swinInp?.optionSource).toBe('upscale_models');
+	});
+
 	it('includes DualCLIPLoader clip_name1, clip_name2, type, device with correct optionSources', () => {
 		const workflow = {
 			'9': {
