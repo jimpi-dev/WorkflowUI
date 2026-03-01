@@ -30,9 +30,15 @@ def test_compute_comfyui_metadata_hash_excludes_fetched_at_ms():
     assert compute_comfyui_metadata_hash(info1) == compute_comfyui_metadata_hash(info2)
 
 
+def test_compute_comfyui_metadata_hash_excludes_system_stats():
+    info1 = {"comfyui_base_url": "http://localhost:8188/", "system_stats": {"v": 1, "vram_used": 100}}
+    info2 = {"comfyui_base_url": "http://localhost:8188/", "system_stats": {"v": 2, "vram_used": 200}}
+    assert compute_comfyui_metadata_hash(info1) == compute_comfyui_metadata_hash(info2)
+
+
 def test_compute_comfyui_metadata_hash_different_content_different_hash():
-    info1 = {"comfyui_base_url": "http://localhost:8188/", "system_stats": {"v": 1}}
-    info2 = {"comfyui_base_url": "http://localhost:8188/", "system_stats": {"v": 2}}
+    info1 = {"comfyui_base_url": "http://localhost:8188/", "object_info_node_classes": ["A"]}
+    info2 = {"comfyui_base_url": "http://localhost:8188/", "object_info_node_classes": ["A", "B"]}
     assert compute_comfyui_metadata_hash(info1) != compute_comfyui_metadata_hash(info2)
 
 
@@ -40,6 +46,15 @@ def test_get_or_create_comfyui_version_same_hash_returns_same_id(run_repo):
     info = {"comfyui_base_url": "http://localhost:8188/", "object_info_node_classes": ["A", "B"]}
     id1 = run_repo.get_or_create_comfyui_version(info)
     id2 = run_repo.get_or_create_comfyui_version(info)
+    assert id1 == id2
+
+
+def test_get_or_create_comfyui_version_same_hash_different_system_stats_returns_same_id(run_repo):
+    base = {"comfyui_base_url": "http://localhost:8188/", "object_info_node_classes": ["SaveImage"]}
+    info1 = {**base, "system_stats": {"devices": [{"vram_used": 100}]}}
+    info2 = {**base, "system_stats": {"devices": [{"vram_used": 200}]}}
+    id1 = run_repo.get_or_create_comfyui_version(info1)
+    id2 = run_repo.get_or_create_comfyui_version(info2)
     assert id1 == id2
 
 
