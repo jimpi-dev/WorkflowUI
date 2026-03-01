@@ -566,6 +566,48 @@ def test_get_stable_cascade_models_returns_empty_when_object_info_fails(client):
     assert data["stage_c"] == []
 
 
+def test_get_upscale_models_returns_list_from_loader_nodes(client):
+    mock_object_info = {
+        "UpscaleModelLoader": {
+            "input": {
+                "required": {"model_name": [["4x-UltraSharp.pth", "RealESRGAN_x4plus.pth"]]},
+                "optional": {},
+            }
+        },
+        "ESRGANLoader": {
+            "input": {
+                "required": {"model_name": [["BSRGAN.pth", "4x-UltraSharp.pth"]]},
+                "optional": {},
+            }
+        },
+    }
+    mock_response = MagicMock()
+    mock_response.raise_for_status = MagicMock()
+    mock_response.json.return_value = mock_object_info
+
+    with patch("routers.comfyui.requests.get", return_value=mock_response) as mock_get:
+        r = client.get("/upscale_models")
+    assert r.status_code == 200
+    data = r.json()
+    assert "upscale_models" in data
+    models = data["upscale_models"]
+    assert "4x-UltraSharp.pth" in models
+    assert "RealESRGAN_x4plus.pth" in models
+    assert "BSRGAN.pth" in models
+    assert models == sorted(models)
+    mock_get.assert_called_once()
+    call_url = mock_get.call_args[0][0]
+    assert "object_info" in call_url
+
+
+def test_get_upscale_models_returns_empty_when_object_info_fails(client):
+    with patch("routers.comfyui.requests.get", side_effect=requests.RequestException("Connection refused")):
+        r = client.get("/upscale_models")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["upscale_models"] == []
+
+
 def test_is_comfyui_unreachable_error_connection_error():
     from services.comfyui_info import is_comfyui_unreachable_error
     assert is_comfyui_unreachable_error(requests.ConnectionError()) is True
