@@ -450,3 +450,59 @@ def get_unet_gguf_models():
             break
     result = sorted(unet_gguf_models)
     return {"unet_gguf_models": result}
+
+
+@router.get("/stable_cascade_models")
+def get_stable_cascade_models():
+    try:
+        res = requests.get(f"{COMFY_URL}/object_info", timeout=10)
+        res.raise_for_status()
+        obj = res.json()
+    except Exception as e:
+        print("[stable_cascade_models] object_info fetch failed:", e)
+        return {"stage_b": [], "stage_c": []}
+    stage_b = []
+    stage_c = []
+    seen_b = set()
+    seen_c = set()
+
+    def add_model(items: list, seen: set, s: str) -> None:
+        if not isinstance(s, str) or not s.strip():
+            return
+        s = s.strip()
+        if s not in seen:
+            seen.add(s)
+            items.append(s)
+
+    def extract_list(options) -> list:
+        out = []
+        if not isinstance(options, list):
+            return out
+        for o in options:
+            if isinstance(o, str):
+                out.append(o)
+            elif isinstance(o, (list, tuple)) and len(o) > 0 and isinstance(o[0], str):
+                out.append(o[0])
+        return out
+
+    for node_name, node_info in obj.items():
+        if not isinstance(node_info, dict):
+            continue
+        inputs = node_info.get("input") or node_info.get("Input") or {}
+        required = inputs.get("required") or {}
+        optional = inputs.get("optional") or {}
+        all_inputs = {**required, **optional}
+        if "key_opt_b" not in all_inputs or "key_opt_c" not in all_inputs:
+            continue
+        for key, dest, seen in (
+            ("key_opt_b", stage_b, seen_b),
+            ("key_opt_c", stage_c, seen_c),
+        ):
+            spec = all_inputs.get(key)
+            if not isinstance(spec, list) or len(spec) < 1:
+                continue
+            options = spec[0]
+            for o in extract_list(options):
+                add_model(dest, seen, o)
+        break
+    return {"stage_b": sorted(stage_b), "stage_c": sorted(stage_c)}

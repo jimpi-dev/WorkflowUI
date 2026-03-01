@@ -241,6 +241,104 @@ describe('analyzeWorkflow', () => {
 		expect(result.inputs.find((i) => i.key === '20.lycoris_type')?.default).toBe('LoHA');
 	});
 
+	it('includes CheckpointLoader ckpt_name with optionSource checkpoints', () => {
+		const workflow = {
+			'1': { class_type: 'CheckpointLoader', inputs: { ckpt_name: 'model.safetensors' } }
+		};
+		const result = analyzeWorkflow(workflow);
+		const inp = result.inputs.find((i) => i.key === '1.ckpt_name');
+		expect(inp).toBeDefined();
+		expect(inp?.optionSource).toBe('checkpoints');
+	});
+
+	it('includes DiffusionModelLoader unet_name and weight_dtype', () => {
+		const workflow = {
+			'2': {
+				class_type: 'DiffusionModelLoader',
+				inputs: { unet_name: 'flux.safetensors', weight_dtype: 'fp16' }
+			}
+		};
+		const result = analyzeWorkflow(workflow);
+		expect(result.inputs.find((i) => i.key === '2.unet_name')).toBeDefined();
+		expect(result.inputs.find((i) => i.key === '2.weight_dtype')?.default).toBe('fp16');
+	});
+
+	it('includes LoadDiffusionModel unet_name and weight_dtype', () => {
+		const workflow = {
+			'3': {
+				class_type: 'LoadDiffusionModel',
+				inputs: { unet_name: 'wan.safetensors', weight_dtype: 'default' }
+			}
+		};
+		const result = analyzeWorkflow(workflow);
+		expect(result.inputs.find((i) => i.key === '3.unet_name')).toBeDefined();
+		expect(result.inputs.find((i) => i.key === '3.weight_dtype')).toBeDefined();
+	});
+
+	it('includes StableCascadeCheckpointLoader key_opt_b, key_opt_c, cache_mode with correct optionSources', () => {
+		const workflow = {
+			'4': {
+				class_type: 'StableCascadeCheckpointLoader',
+				inputs: {
+					key_opt_b: 'stage_b.safetensors',
+					key_opt_c: 'stage_c.safetensors',
+					cache_mode: 'all'
+				}
+			}
+		};
+		const result = analyzeWorkflow(workflow);
+		const bInp = result.inputs.find((i) => i.key === '4.key_opt_b');
+		const cInp = result.inputs.find((i) => i.key === '4.key_opt_c');
+		expect(bInp).toBeDefined();
+		expect(cInp).toBeDefined();
+		expect(bInp?.optionSource).toBe('stable_cascade_stage_b');
+		expect(cInp?.optionSource).toBe('stable_cascade_stage_c');
+		expect(result.inputs.find((i) => i.key === '4.cache_mode')?.default).toBe('all');
+	});
+
+	it('includes StableCascade_CheckpointLoader (Inspire alias) inputs', () => {
+		const workflow = {
+			'5': {
+				class_type: 'StableCascade_CheckpointLoader',
+				inputs: { key_opt_b: 'b.safetensors', key_opt_c: 'c.safetensors', cache_mode: 'none' }
+			}
+		};
+		const result = analyzeWorkflow(workflow);
+		expect(result.inputs.find((i) => i.key === '5.key_opt_b')).toBeDefined();
+		expect(result.inputs.find((i) => i.key === '5.key_opt_c')).toBeDefined();
+	});
+
+	it('includes SD3CheckpointLoader ckpt_name and shift', () => {
+		const workflow = {
+			'6': {
+				class_type: 'SD3CheckpointLoader',
+				inputs: { ckpt_name: 'sd3_medium.safetensors', shift: 3 }
+			}
+		};
+		const result = analyzeWorkflow(workflow);
+		expect(result.inputs.find((i) => i.key === '6.ckpt_name')?.optionSource).toBe('checkpoints');
+		expect(result.inputs.find((i) => i.key === '6.shift')?.default).toBe(3);
+	});
+
+	it('includes SD3LoadCheckpoint (alias) ckpt_name and shift', () => {
+		const workflow = {
+			'7': { class_type: 'SD3LoadCheckpoint', inputs: { ckpt_name: 'sd3.safetensors', shift: 6 } }
+		};
+		const result = analyzeWorkflow(workflow);
+		expect(result.inputs.find((i) => i.key === '7.ckpt_name')).toBeDefined();
+		expect(result.inputs.find((i) => i.key === '7.shift')?.default).toBe(6);
+	});
+
+	it('includes FluxCheckpointLoader ckpt_name with optionSource checkpoints', () => {
+		const workflow = {
+			'8': { class_type: 'FluxCheckpointLoader', inputs: { ckpt_name: 'flux1.safetensors' } }
+		};
+		const result = analyzeWorkflow(workflow);
+		const inp = result.inputs.find((i) => i.key === '8.ckpt_name');
+		expect(inp).toBeDefined();
+		expect(inp?.optionSource).toBe('checkpoints');
+	});
+
 	it('detects SaveAudioMP3 as audio output', () => {
 		const workflow = {
 			'50': {

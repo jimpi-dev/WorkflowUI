@@ -8,6 +8,12 @@ _WIDGET_ORDER: dict[str, list[str]] = {
     "KSampler": ["seed", "steps", "cfg", "sampler_name", "scheduler", "denoise"],
     "BasicScheduler": ["scheduler", "steps", "denoise"],
     "UNETLoader": ["unet_name", "weight_dtype"],
+    "DiffusionModelLoader": ["unet_name", "weight_dtype"],
+    "LoadDiffusionModel": ["unet_name", "weight_dtype"],
+    "StableCascadeCheckpointLoader": ["key_opt_b", "key_opt_c", "cache_mode"],
+    "StableCascade_CheckpointLoader": ["key_opt_b", "key_opt_c", "cache_mode"],
+    "SD3CheckpointLoader": ["ckpt_name", "shift"],
+    "SD3LoadCheckpoint": ["ckpt_name", "shift"],
 }
 
 
@@ -112,6 +118,54 @@ NODE_SPECS: dict[str, dict[str, Any]] = {
         }
     },
     "CheckpointLoaderSimple": {
+        "fixedInputs": {
+            "ckpt_name": {"type": "select", "label": "Checkpoint", "optionSource": "checkpoints"},
+        }
+    },
+    "CheckpointLoader": {
+        "fixedInputs": {
+            "ckpt_name": {"type": "select", "label": "Checkpoint", "optionSource": "checkpoints"},
+        }
+    },
+    "DiffusionModelLoader": {
+        "fixedInputs": {
+            "unet_name": {"type": "select", "label": "Diffusion model", "optionSource": "checkpoints"},
+            "weight_dtype": {"type": "select", "label": "Weight dtype", "options": ["default", "fp8", "fp16", "bf16"]},
+        }
+    },
+    "LoadDiffusionModel": {
+        "fixedInputs": {
+            "unet_name": {"type": "select", "label": "Diffusion model", "optionSource": "checkpoints"},
+            "weight_dtype": {"type": "select", "label": "Weight dtype", "options": ["default", "fp8", "fp16", "bf16"]},
+        }
+    },
+    "StableCascadeCheckpointLoader": {
+        "fixedInputs": {
+            "key_opt_b": {"type": "select", "label": "Stage B model", "optionSource": "stable_cascade_stage_b"},
+            "key_opt_c": {"type": "select", "label": "Stage C model", "optionSource": "stable_cascade_stage_c"},
+            "cache_mode": {"type": "select", "label": "Cache mode", "options": ["none", "stage_b", "stage_c", "all"]},
+        }
+    },
+    "StableCascade_CheckpointLoader": {
+        "fixedInputs": {
+            "key_opt_b": {"type": "select", "label": "Stage B model", "optionSource": "stable_cascade_stage_b"},
+            "key_opt_c": {"type": "select", "label": "Stage C model", "optionSource": "stable_cascade_stage_c"},
+            "cache_mode": {"type": "select", "label": "Cache mode", "options": ["none", "stage_b", "stage_c", "all"]},
+        }
+    },
+    "SD3CheckpointLoader": {
+        "fixedInputs": {
+            "ckpt_name": {"type": "select", "label": "Checkpoint", "optionSource": "checkpoints"},
+            "shift": {"type": "number", "label": "Shift", "min": 0, "max": 10, "step": 0.1, "slider": True},
+        }
+    },
+    "SD3LoadCheckpoint": {
+        "fixedInputs": {
+            "ckpt_name": {"type": "select", "label": "Checkpoint", "optionSource": "checkpoints"},
+            "shift": {"type": "number", "label": "Shift", "min": 0, "max": 10, "step": 0.1, "slider": True},
+        }
+    },
+    "FluxCheckpointLoader": {
         "fixedInputs": {
             "ckpt_name": {"type": "select", "label": "Checkpoint", "optionSource": "checkpoints"},
         }
