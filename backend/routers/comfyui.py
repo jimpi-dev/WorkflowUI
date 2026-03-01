@@ -115,9 +115,54 @@ def get_clip_models():
             elif isinstance(o, (list, tuple)) and len(o) > 0 and isinstance(o[0], str):
                 add_clip(o[0])
 
+    CLIP_TEXT_ENCODER_NODES = {"CLIPLoader", "DualCLIPLoader", "TripleCLIPLoader"}
     for node_name, node_info in obj.items():
-        if not isinstance(node_info, dict):
+        if not isinstance(node_info, dict) or node_name not in CLIP_TEXT_ENCODER_NODES:
             continue
+        inputs = node_info.get("input") or node_info.get("Input") or {}
+        required = inputs.get("required") or {}
+        optional = inputs.get("optional") or {}
+        for name, spec in {**required, **optional}.items():
+            if name not in ("clip_name", "clip_name1", "clip_name2", "clip_name3") or not isinstance(spec, list) or len(spec) < 1:
+                continue
+            options = spec[0]
+            extract_from_options(options)
+            break
+    result = sorted(clip_models)
+    return {"clip_models": result}
+
+
+@router.get("/clip_vision_models")
+def get_clip_vision_models():
+    try:
+        res = requests.get(f"{COMFY_URL}/object_info", timeout=10)
+        res.raise_for_status()
+        obj = res.json()
+    except Exception as e:
+        print("[clip_vision_models] object_info fetch failed:", e)
+        return {"clip_vision_models": []}
+    clip_vision_models = []
+    seen = set()
+
+    def add_clip(s: str) -> None:
+        if not isinstance(s, str) or not s.strip():
+            return
+        s = s.strip()
+        if s not in seen:
+            seen.add(s)
+            clip_vision_models.append(s)
+
+    def extract_from_options(options) -> None:
+        if not isinstance(options, list):
+            return
+        for o in options:
+            if isinstance(o, str):
+                add_clip(o)
+            elif isinstance(o, (list, tuple)) and len(o) > 0 and isinstance(o[0], str):
+                add_clip(o[0])
+
+    node_info = obj.get("CLIPVisionLoader")
+    if isinstance(node_info, dict):
         inputs = node_info.get("input") or node_info.get("Input") or {}
         required = inputs.get("required") or {}
         optional = inputs.get("optional") or {}
@@ -127,8 +172,8 @@ def get_clip_models():
             options = spec[0]
             extract_from_options(options)
             break
-    result = sorted(clip_models)
-    return {"clip_models": result}
+    result = sorted(clip_vision_models)
+    return {"clip_vision_models": result}
 
 
 @router.get("/clip_types")

@@ -296,6 +296,17 @@ import VaeCombo from './VaeCombo.svelte';
             .catch(() => { availableVaeModels = []; });
     }
 
+    let availableClipVisionModels: string[] = [];
+    let clipVisionModelsFetchRequested = false;
+    $: hasClipVisionModelsInput = inputs.some((i) => i.optionSource === 'clip_vision_models') ||
+        parentGroups.some((g) => g.spec?.optionSourceForSelect === 'clip_vision_models');
+    $: if (hasClipVisionModelsInput && !clipVisionModelsFetchRequested) {
+        clipVisionModelsFetchRequested = true;
+        fetchOptionList('/clip_vision_models')
+            .then((list) => { availableClipVisionModels = list; })
+            .catch(() => { availableClipVisionModels = []; });
+    }
+
     let availableClipTypes: string[] = [];
     let clipTypesFetchRequested = false;
     $: hasClipTypesInput = inputs.some((i) => i.optionSource === 'clip_types');
@@ -576,6 +587,11 @@ import VaeCombo from './VaeCombo.svelte';
                                                     input={input}
                                                     values={values}
                                                     availableVaeModels={[...new Set([...(input.options || []), ...availableVaeModels])].sort()}
+                                                />
+                                            {:else if input.optionSource === 'clip_vision_models'}
+                                                <SelectInput
+                                                    input={{ ...input, options: [...new Set([...(input.options || []), ...availableClipVisionModels])].sort() }}
+                                                    bind:value={values[input.key]}
                                                 />
                                             {:else if input.optionSource === 'clip_types'}
                                                 <SelectInput

@@ -244,7 +244,7 @@ export const load = async ({ params, fetch, url }) => {
 			};
 		}
 		
-		const [wfRes, listRes, objectInfoRes, lorasRes, lycorisTypesRes, checkpointsRes, devicesRes, rifeModelsRes, unetGgufModelsRes, stableCascadeModelsRes] = await Promise.all([
+		const [wfRes, listRes, objectInfoRes, lorasRes, lycorisTypesRes, checkpointsRes, devicesRes, rifeModelsRes, unetGgufModelsRes, stableCascadeModelsRes, clipVisionModelsRes] = await Promise.all([
 			fetch(`${apiBase}/workflow/${params.id}`),
 			fetch(`${apiBase}/workflows`),
 			fetch(`${apiBase}/object_info`).catch(() => null),
@@ -254,7 +254,8 @@ export const load = async ({ params, fetch, url }) => {
 			fetch(`${apiBase}/devices`).catch(() => null),
 			fetch(`${apiBase}/rife_models`).catch(() => null),
 			fetch(`${apiBase}/unet_gguf_models`).catch(() => null),
-			fetch(`${apiBase}/stable_cascade_models`).catch(() => null)
+			fetch(`${apiBase}/stable_cascade_models`).catch(() => null),
+			fetch(`${apiBase}/clip_vision_models`).catch(() => null)
 		]);
 
 		if (!wfRes.ok) {
@@ -281,6 +282,7 @@ export const load = async ({ params, fetch, url }) => {
 		const stableCascadeModels = stableCascadeModelsRes?.ok ? (await stableCascadeModelsRes.json()) ?? {} : {};
 		const stableCascadeStageB = Array.isArray(stableCascadeModels.stage_b) ? stableCascadeModels.stage_b : [];
 		const stableCascadeStageC = Array.isArray(stableCascadeModels.stage_c) ? stableCascadeModels.stage_c : [];
+		const clipVisionModels = clipVisionModelsRes?.ok ? (await clipVisionModelsRes.json())?.clip_vision_models ?? [] : [];
 
 		for (const input of workflowModel.inputs) {
 			if (input.optionSource === 'samplers' && samplers.length) {
@@ -312,6 +314,9 @@ export const load = async ({ params, fetch, url }) => {
 			}
 			if (input.optionSource === 'stable_cascade_stage_c' && stableCascadeStageC.length) {
 				input.options = stableCascadeStageC;
+			}
+			if (input.optionSource === 'clip_vision_models' && Array.isArray(clipVisionModels) && clipVisionModels.length) {
+				input.options = clipVisionModels;
 			}
 		}
 
