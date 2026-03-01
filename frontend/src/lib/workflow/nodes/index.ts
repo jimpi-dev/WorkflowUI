@@ -57,6 +57,9 @@ import { ModelSamplingAuraFlowSpec } from './ModelSamplingAuraFlow';
 import { ImageScaleSpec } from './ImageScale';
 import { VAEEncodeTiledSpec } from './VAEEncodeTiled';
 import { UpscaleModelLoaderSpec } from './UpscaleModelLoader';
+import { ESRGANLoaderSpec } from './ESRGANLoader';
+import { RealESRGANLoaderSpec } from './RealESRGANLoader';
+import { SwinIRLoaderSpec } from './SwinIRLoader';
 import { VAEDecodeTiledSpec } from './VAEDecodeTiled';
 import { LatentUpscaleBySpec } from './LatentUpscaleBy';
 import { SeedRgthreeSpec } from './SeedRgthree';
@@ -126,6 +129,9 @@ export const NODE_SPECS = {
     ImageScale: ImageScaleSpec,
     VAEEncodeTiled: VAEEncodeTiledSpec,
     UpscaleModelLoader: UpscaleModelLoaderSpec,
+    ESRGANLoader: ESRGANLoaderSpec,
+    RealESRGANLoader: RealESRGANLoaderSpec,
+    SwinIRLoader: SwinIRLoaderSpec,
     VAEDecodeTiled: VAEDecodeTiledSpec,
     LatentUpscaleBy: LatentUpscaleBySpec,
     'Seed (rgthree)': SeedRgthreeSpec,

@@ -407,6 +407,21 @@ NODE_SPECS: dict[str, dict[str, Any]] = {
             "model_name": {"type": "select", "label": "Upscale model", "optionSource": "upscale_models"},
         },
     },
+    "ESRGANLoader": {
+        "fixedInputs": {
+            "model_name": {"type": "select", "label": "Upscale model", "optionSource": "upscale_models"},
+        },
+    },
+    "RealESRGANLoader": {
+        "fixedInputs": {
+            "model_name": {"type": "select", "label": "Upscale model", "optionSource": "upscale_models"},
+        },
+    },
+    "SwinIRLoader": {
+        "fixedInputs": {
+            "model_name": {"type": "select", "label": "Upscale model", "optionSource": "upscale_models"},
+        },
+    },
     "VAEDecodeTiled": {
         "fixedInputs": {
             "tile_size": {"type": "number", "label": "Tile size", "min": 64, "max": 2048, "step": 8},
