@@ -1,4 +1,5 @@
 <script lang="ts">
+    import { getApiBase } from '$lib/config';
     import { fetchOptionList } from '$lib/optionSources';
     import { NODE_SPECS } from '$lib/workflow/nodes';
     import type { WorkflowInput } from '$lib/workflow-analyzer/types';
@@ -335,6 +336,24 @@ import VaeCombo from './VaeCombo.svelte';
             .catch(() => { availableUnetGgufModels = []; });
     }
 
+    let stableCascadeModels: { stage_b: string[]; stage_c: string[] } = { stage_b: [], stage_c: [] };
+    let stableCascadeFetchRequested = false;
+    $: hasStableCascadeInput = inputs.some(
+        (i) => i.optionSource === 'stable_cascade_stage_b' || i.optionSource === 'stable_cascade_stage_c'
+    );
+    $: if (hasStableCascadeInput && !stableCascadeFetchRequested) {
+        stableCascadeFetchRequested = true;
+        fetch(getApiBase() + '/stable_cascade_models')
+            .then((r) => (r.ok ? r.json() : { stage_b: [], stage_c: [] }))
+            .then((d: { stage_b?: string[]; stage_c?: string[] }) => {
+                stableCascadeModels = {
+                    stage_b: Array.isArray(d.stage_b) ? d.stage_b : [],
+                    stage_c: Array.isArray(d.stage_c) ? d.stage_c : []
+                };
+            })
+            .catch(() => { stableCascadeModels = { stage_b: [], stage_c: [] }; });
+    }
+
     $: loraValuesSnapshot = inputs
         .filter((i) => i.field?.endsWith('.lora'))
         .map((i) => (i.key in values ? String(values[i.key] ?? '') : ''))
@@ -576,6 +595,32 @@ import VaeCombo from './VaeCombo.svelte';
                                             {:else if input.optionSource === 'unet_gguf_models'}
                                                 <SelectInput
                                                     input={{ ...input, options: [...new Set([...(input.options || []), ...availableUnetGgufModels])].sort() }}
+                                                    bind:value={values[input.key]}
+                                                />
+                                            {:else if input.optionSource === 'stable_cascade_stage_b'}
+                                                <SelectInput
+                                                    input={{
+                                                        ...input,
+                                                        options: [
+                                                            ...new Set([
+                                                                ...(input.options || []),
+                                                                ...stableCascadeModels.stage_b
+                                                            ])
+                                                        ].sort()
+                                                    }}
+                                                    bind:value={values[input.key]}
+                                                />
+                                            {:else if input.optionSource === 'stable_cascade_stage_c'}
+                                                <SelectInput
+                                                    input={{
+                                                        ...input,
+                                                        options: [
+                                                            ...new Set([
+                                                                ...(input.options || []),
+                                                                ...stableCascadeModels.stage_c
+                                                            ])
+                                                        ].sort()
+                                                    }}
                                                     bind:value={values[input.key]}
                                                 />
                                             {:else}

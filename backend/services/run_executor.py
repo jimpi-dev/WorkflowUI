@@ -22,6 +22,12 @@ WIDGET_ORDER: dict[str, list[str]] = {
     "EmptySD3LatentImage": ["width", "height", "batch_size"],
     "SDXLEmptyLatentSizePicker+": ["resolution", "batch_size", "width_override", "height_override"],
     "KSampler": ["seed", "steps", "cfg", "sampler_name", "scheduler", "denoise"],
+    "DiffusionModelLoader": ["unet_name", "weight_dtype"],
+    "LoadDiffusionModel": ["unet_name", "weight_dtype"],
+    "StableCascadeCheckpointLoader": ["key_opt_b", "key_opt_c", "cache_mode"],
+    "StableCascade_CheckpointLoader": ["key_opt_b", "key_opt_c", "cache_mode"],
+    "SD3CheckpointLoader": ["ckpt_name", "shift"],
+    "SD3LoadCheckpoint": ["ckpt_name", "shift"],
 }
 
 DIMENSION_FIELDS = frozenset({"width", "height", "width_override", "height_override", "batch_size"})
