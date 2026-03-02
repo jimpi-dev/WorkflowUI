@@ -127,6 +127,49 @@ def get_version():
     return {"engine_version": ENGINE_VERSION}
 
 
+@router.get("/config/diagnostics/run-table")
+def get_run_table_diagnostics(db=Depends(get_db)):
+    db_path = db[0]
+    columns = [
+        ("images_json", False),
+        ("media_json", False),
+        ("input_snapshot_json", True),
+        ("metadata_snapshot_json", True),
+        ("deleted_outputs_json", False),
+        ("error", False),
+    ]
+    result: dict[str, Any] = {
+        "row_count": 0,
+        "columns": {},
+        "total_bytes": 0,
+    }
+    try:
+        conn = sqlite3.connect(str(db_path), timeout=5)
+        try:
+            row = conn.execute("SELECT COUNT(*) FROM run").fetchone()
+            result["row_count"] = row[0] if row else 0
+            total = 0
+            for col_name, searchable in columns:
+                try:
+                    row = conn.execute(
+                        f"SELECT COALESCE(SUM(LENGTH(COALESCE({col_name}, ''))), 0) FROM run"
+                    ).fetchone()
+                    bytes_val = row[0] if row else 0
+                    result["columns"][col_name] = {
+                        "bytes": bytes_val,
+                        "searchable": searchable,
+                    }
+                    total += bytes_val
+                except sqlite3.OperationalError:
+                    result["columns"][col_name] = {"bytes": 0, "searchable": searchable}
+            result["total_bytes"] = total
+        finally:
+            conn.close()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    return result
+
+
 @router.post("/config/vacuum")
 def post_vacuum(db=Depends(get_db)):
     db_path = db[0]
