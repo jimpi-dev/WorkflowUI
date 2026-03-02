@@ -28,6 +28,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY backend/ ./
 COPY --from=frontend-build /app/frontend/build ./static
 COPY docker/entrypoint.sh /app/backend/entrypoint.sh
+# Strip Windows CRLF line endings if present (fixes "no such file or directory" when exec'ing the script)
+RUN sed -i 's/\r$//' /app/backend/entrypoint.sh
 RUN chmod +x /app/backend/entrypoint.sh
 
 ENV PORT=3000
