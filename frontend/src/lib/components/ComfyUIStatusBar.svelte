@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { getApiBase, appConfig } from '$lib/config';
 	import { onMount, onDestroy } from 'svelte';
+	import DbSizeBar from '$lib/components/DbSizeBar.svelte';
 
 	interface Status {
 		queue: { running: number; pending: number };
@@ -17,6 +18,8 @@
 	let error = $state<string | null>(null);
 	let workflowuiPluginAvailable = $state<boolean | null>(null);
 	let workflowuiPluginIncompatible = $state(false);
+	let dbSizeBytes = $state<number | null>(null);
+	let dbBreakdown = $state<Record<string, number> | null>(null);
 
 	const POLL_INTERVAL_MS = 4000;
 	const POLL_INTERVAL_HIDDEN_MS = 12000;
@@ -32,9 +35,13 @@
 			const data = await res.json();
 			workflowuiPluginAvailable = data.workflowuiPluginAvailable === true;
 			workflowuiPluginIncompatible = data.workflowuiPluginIncompatible === true;
+			dbSizeBytes = typeof data.dbSizeBytes === 'number' ? data.dbSizeBytes : null;
+			dbBreakdown = data.dbBreakdown && typeof data.dbBreakdown === 'object' ? data.dbBreakdown : null;
 		} catch {
 			workflowuiPluginAvailable = null;
 			workflowuiPluginIncompatible = false;
+			dbSizeBytes = null;
+			dbBreakdown = null;
 		}
 	}
 
@@ -160,6 +167,14 @@
 	{:else}
 		<span class="status-item status-loading">Queue: —</span>
 	{/if}
+	<span class="status-sep" aria-hidden="true">|</span>
+	<span class="status-item db-size">
+		<DbSizeBar
+			sizeBytes={dbSizeBytes}
+			breakdown={dbBreakdown}
+			onVacuumComplete={(bytes) => { dbSizeBytes = bytes; fetchConfig(); }}
+		/>
+	</span>
 </div>
 
 <style>
