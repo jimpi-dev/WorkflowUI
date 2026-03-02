@@ -848,3 +848,20 @@ def test_import_from_workflowui_payload_restored_when_hash_is_new(client):
     apps = client.get("/apps").json()
     assert len(apps) >= 1
     assert any(a["slug"] == out["app_slug"] for a in apps)
+
+
+def test_run_table_diagnostics(client):
+    r = client.get("/config/diagnostics/run-table")
+    assert r.status_code == 200
+    data = r.json()
+    assert "row_count" in data
+    assert "columns" in data
+    assert "total_bytes" in data
+    assert isinstance(data["row_count"], int)
+    assert isinstance(data["columns"], dict)
+    assert isinstance(data["total_bytes"], (int, float))
+    for col_name, entry in data["columns"].items():
+        assert "bytes" in entry
+        assert "searchable" in entry
+        assert isinstance(entry["bytes"], (int, float))
+        assert isinstance(entry["searchable"], bool)
