@@ -68,28 +68,30 @@ export function buildRunValues(
             input.type === 'number' ||
             input.type === 'seed' ||
             (input.field && DIMENSION_FIELDS.has(input.field));
+        const isMedia = input.type === 'image' || input.type === 'video' || input.type === 'audio';
+        const isBoolean = input.type === 'boolean';
         const hasValue =
             v !== undefined &&
             v !== null &&
-            (input.type === 'image'
-                ? v !== ''
-                : isNumber
-                  ? true
-                  : v !== '');
+            (isMedia ? v !== '' : isNumber ? true : isBoolean ? v === true || v === false : v !== '');
         let val = hasValue
             ? v
             : (input.default ??
                   (input.type === 'number' || input.type === 'seed'
                       ? 0
-                      : input.type === 'image'
+                      : isMedia
                         ? ''
-                        : ''));
+                        : isBoolean
+                          ? false
+                          : ''));
         if (isNumber && (typeof val === 'string' || typeof val === 'number'))
             val = Number(val);
         if (typeof val === 'number' && Number.isNaN(val))
-            val = input.type === 'image' ? '' : 0;
+            val = isMedia ? '' : 0;
+        if (isBoolean && typeof val !== 'boolean')
+            val = val === true || val === 'true' || val === 1;
         if (
-            input.type === 'image' &&
+            isMedia &&
             val != null &&
             typeof val === 'object' &&
             'filename' in val

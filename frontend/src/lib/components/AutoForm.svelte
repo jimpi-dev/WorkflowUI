@@ -1,7 +1,7 @@
 <script lang="ts">
     import { tick } from 'svelte';
     import { onMount } from 'svelte';
-    import { getApiBase, COMFYUI_MAX_SEED } from '$lib/config';
+    import { getApiBase, COMFYUI_INT_MAX } from '$lib/config';
     import InputRenderer from '$lib/components/InputRenderer.svelte';
     import type { WorkflowModel } from '$lib/workflow/types';
     import type { GalleryImage } from '$lib/components/Gallery.svelte';
@@ -48,13 +48,14 @@
 
     $: if (workflowModel?.inputs) {
         for (const input of workflowModel.inputs) {
-            const isSendFromImage = input.type === 'image' && sendFromContext?.inputKey === input.key;
-            if (isSendFromImage) {
+            const isMedia = input.type === 'image' || input.type === 'video' || input.type === 'audio';
+            const isSendFromMedia = isMedia && sendFromContext?.inputKey === input.key;
+            if (isSendFromMedia) {
                 if (!(input.key in values)) values[input.key] = '';
                 continue;
             }
             if (!(input.key in values)) {
-                values[input.key] = input.type === 'image'
+                values[input.key] = isMedia
                     ? (input.default ?? '')
                     : (input.default ?? (input.type === 'number' ? 0 : ''));
             }
@@ -129,6 +130,12 @@
         const backendIds = new Set<string>();
         runIdToBackendIds.set(runId, backendIds);
 
+        // One base random seed per batch; each run gets base + i so N runs get N distinct seeds
+        const randomBase =
+            parentSeedInput && useRandomSeedPerRun && runs > 0
+                ? Math.floor(Math.random() * (COMFYUI_INT_MAX + 1))
+                : null;
+
         const promises: Promise<void>[] = [];
         for (let i = 0; i < runs; i++) {
             const runValues = buildRunValues(
@@ -139,7 +146,10 @@
             );
 
             if (parentSeedInput && useRandomSeedPerRun) {
-                runValues[parentSeedInput.key] = Math.floor(Math.random() * (COMFYUI_MAX_SEED + 1));
+                runValues[parentSeedInput.key] =
+                    randomBase !== null
+                        ? (randomBase + i) % (COMFYUI_INT_MAX + 1)
+                        : Math.floor(Math.random() * (COMFYUI_INT_MAX + 1));
             } else if (parentSeedInput && baseSeed !== undefined) {
                 runValues[parentSeedInput.key] = baseSeed + i;
             }
@@ -284,6 +294,7 @@
         <InputRenderer
                 inputs={workflowModel.inputs}
                 masterSeedInputKey={workflowModel.masterSeedInputKey}
+                form_label={workflowModel.form_label}
                 bind:values
                 appId={appId}
                 extraLoraSlots={extraLoraSlots}

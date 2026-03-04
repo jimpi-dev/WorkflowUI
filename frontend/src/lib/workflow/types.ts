@@ -4,6 +4,8 @@ export type InputType =
     | 'seed'
     | 'select'
     | 'image'
+    | 'video'
+    | 'audio'
     | 'boolean';
 
 export type WorkflowInputRole =
@@ -18,6 +20,8 @@ export type WorkflowInput = {
     default?: any;
     nodeId: string;
     field: string;
+    /** Original name from input_definitions (e.g. "seed" for reserved master seed) */
+    name?: string;
     min?: number;
     max?: number;
     options?: string[];
@@ -41,6 +45,8 @@ export type WorkflowOutput = {
     type: 'image' | 'video' | 'audio';
     label?: string;
     metaTitle?: string | null;
+    outputIndex?: number;
+    outputName?: string;
 };
 
 export type WorkflowModel = {
@@ -50,6 +56,7 @@ export type WorkflowModel = {
     internalNodes?: { classType: string; label: string }[];
     template?: 'default' | 'lora-stack' | 'latent-resolution';
     masterSeedInputKey?: string;
+    form_label?: string;
 };
 
 export type NodeInputSpec = {

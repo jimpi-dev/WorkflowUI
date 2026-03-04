@@ -19,10 +19,13 @@
 		is_new_version: boolean;
 		existing_workflow_id: string | null;
 		existing_version: number | null;
+		has_workflow_ui_link?: boolean;
+		workflow_ui_link_node_id?: string;
 	} | null>(null);
 	let creating = $state(false);
 
 	let forceNewVersion = $state(false);
+	let useWorkflowUILink = $state(true);
 
 
 	let imageImporting = $state(false);
@@ -65,7 +68,7 @@
 			const res = await fetch(`${apiBase}/import/preview`, {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ name: trimmedName, graph: parsed.graph })
+				body: JSON.stringify({ name: trimmedName, graph: parsed.graph, use_workflow_ui_link: useWorkflowUILink })
 			});
 			if (!res.ok) {
 				const d = await res.json().catch(() => ({}));
@@ -76,6 +79,22 @@
 			setState('preview-ready');
 		} catch (e) {
 			setState('error', e instanceof Error ? e.message : String(e));
+		}
+	}
+
+	async function refetchPreviewWithSchema() {
+		const trimmedName = name.trim();
+		const parsed = parseGraph();
+		if (!trimmedName || !parsed) return;
+		try {
+			const res = await fetch(`${apiBase}/import/preview`, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ name: trimmedName, graph: parsed.graph, use_workflow_ui_link: useWorkflowUILink })
+			});
+			if (res.ok) preview = await res.json();
+		} catch {
+			// ignore
 		}
 	}
 
@@ -92,7 +111,8 @@
 				body: JSON.stringify({
 					name: trimmedName,
 					graph: parsed.graph,
-					force_new_version: forceNewVersion
+					force_new_version: forceNewVersion,
+					use_workflow_ui_link: useWorkflowUILink && preview?.has_workflow_ui_link === true
 				})
 			});
 			if (!res.ok) {
@@ -308,6 +328,58 @@
 
 		{#if importState === 'preview-ready' && preview}
 			<section class="section sticky-save">
+				{#if preview.has_workflow_ui_link}
+					<div class="schema-choice-section">
+						<div class="schema-choice-banner">
+							<p class="schema-choice-banner-headline">WorkflowUI Link node detected</p>
+							<p class="schema-choice-banner-subtext">This workflow contains a WorkflowUI Link node. You can use it as a shorthand for app creation—it exposes only the fields you defined in ComfyUI.</p>
+						</div>
+						<div
+							class="schema-segmented-control"
+							role="tablist"
+							aria-label="Schema source"
+							onkeydown={(e) => {
+								if (e.key === 'ArrowLeft' && !useWorkflowUILink) {
+									e.preventDefault();
+									useWorkflowUILink = true;
+									refetchPreviewWithSchema();
+								} else if (e.key === 'ArrowRight' && useWorkflowUILink) {
+									e.preventDefault();
+									useWorkflowUILink = false;
+									refetchPreviewWithSchema();
+								}
+							}}
+						>
+							<button
+								type="button"
+								role="tab"
+								class="schema-option"
+								class:active={useWorkflowUILink}
+								aria-pressed={useWorkflowUILink}
+								aria-selected={useWorkflowUILink}
+								tabindex={useWorkflowUILink ? 0 : -1}
+								onclick={() => { useWorkflowUILink = true; void refetchPreviewWithSchema(); }}
+							>
+								<span class="schema-option-label">WorkflowUI Link schema</span>
+								<span class="schema-option-desc">Exposes only the fields you defined in the WorkflowUI Link node. Best for workflows designed for app creation.</span>
+							</button>
+							<button
+								type="button"
+								role="tab"
+								class="schema-option"
+								class:active={!useWorkflowUILink}
+								aria-pressed={!useWorkflowUILink}
+								aria-selected={!useWorkflowUILink}
+								tabindex={!useWorkflowUILink ? 0 : -1}
+								onclick={() => { useWorkflowUILink = false; void refetchPreviewWithSchema(); }}
+							>
+								<span class="schema-option-label">Full workflow (all nodes)</span>
+								<span class="schema-option-desc">Uses every detected input from the entire workflow—KSampler, CLIPTextEncode, LoadImage, and more.</span>
+							</button>
+						</div>
+						<p class="schema-cross-hint">You can import the same workflow again later with the other option to switch schema source.</p>
+					</div>
+				{/if}
 				{#if !preview.is_new_workflow && !preview.is_new_version}
 					<label class="force-version-wrap">
 						<input type="checkbox" bind:checked={forceNewVersion} />
@@ -498,6 +570,74 @@
 		color: var(--warning);
 		margin-top: 0.5rem;
 		font-size: 0.9rem;
+	}
+	.schema-choice-section {
+		margin-bottom: 1rem;
+	}
+	.schema-choice-banner {
+		padding: 0.75rem 1rem;
+		background: var(--accent-soft);
+		border-left: 4px solid var(--accent);
+		border-radius: 0 8px 8px 0;
+		margin-bottom: 1rem;
+	}
+	.schema-choice-banner-headline {
+		font-weight: 600;
+		margin: 0 0 0.25rem 0;
+		font-size: 0.95rem;
+	}
+	.schema-choice-banner-subtext {
+		margin: 0;
+		font-size: 0.85rem;
+		color: var(--muted);
+		line-height: 1.4;
+	}
+	.schema-segmented-control {
+		display: flex;
+		gap: 0;
+		border: 1px solid var(--border);
+		border-radius: 8px;
+		overflow: hidden;
+	}
+	.schema-option {
+		flex: 1;
+		display: flex;
+		flex-direction: column;
+		align-items: flex-start;
+		gap: 0.25rem;
+		padding: 0.75rem 1rem;
+		background: var(--surface);
+		border: none;
+		border-right: 1px solid var(--border);
+		cursor: pointer;
+		text-align: left;
+		color: var(--text);
+		font-size: 0.9rem;
+		transition: background 0.2s ease;
+	}
+	.schema-option:last-child {
+		border-right: none;
+	}
+	.schema-option:hover {
+		background: color-mix(in srgb, var(--surface) 90%, var(--accent-soft));
+	}
+	.schema-option.active {
+		background: var(--accent-soft);
+		box-shadow: inset 0 -2px 0 0 var(--accent);
+	}
+	.schema-option-label {
+		font-weight: 600;
+	}
+	.schema-option-desc {
+		font-size: 0.8rem;
+		color: var(--muted);
+		line-height: 1.35;
+	}
+	.schema-cross-hint {
+		margin: 0.5rem 0 0;
+		font-size: 0.8rem;
+		color: var(--muted);
+		font-style: italic;
 	}
 	.force-version-wrap {
 		display: flex;

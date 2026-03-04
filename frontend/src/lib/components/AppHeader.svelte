@@ -280,6 +280,7 @@
 							class="header-subtitle-project"
 							class:header-subtitle-project-has-color={$headerAppContext.projectHeaderColor}
 							style={$headerAppContext.projectHeaderColor ? `--project-name-color: ${$headerAppContext.projectHeaderColor}` : ''}
+							title="Go to current project (you will leave this app page)"
 						>
 							{$headerAppContext.projectDetail ? $headerAppContext.projectDetail.name : $headerAppContext.projectName}
 							{#if $headerAppContext.projectDetail}
