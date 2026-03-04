@@ -13,15 +13,19 @@ export const load = async ({ url, fetch }) => {
 	let workflows: { id: string; label: string; output_count?: number }[] = [];
 	try {
 		const workflowsUrl = base ? `${base}/workflows` : '/workflows';
-		workflows = await fetch(workflowsUrl).then((r) => r.json());
+		const r = await fetch(workflowsUrl);
+		workflows = r.ok ? await r.json() : [];
 	} catch {
+		workflows = [];
 	}
 
 	let publicApps: { id: string; slug: string; title: string; description?: string | null }[] = [];
 	try {
 		const appsUrl = base ? `${base}/apps/public` : '/apps/public';
-		publicApps = await fetch(appsUrl).then((r) => r.json());
+		const r = await fetch(appsUrl);
+		publicApps = r.ok ? await r.json() : [];
 	} catch {
+		publicApps = [];
 	}
 
 	let appTitle: string | null = null;
