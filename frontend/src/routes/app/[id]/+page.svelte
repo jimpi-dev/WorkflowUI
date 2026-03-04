@@ -153,6 +153,12 @@
         else presetKeysToSaveList = presetKeysToSaveList.filter((k) => k !== key);
     }
 
+    const hasSeedInputs = $derived.by(() => {
+        const wm = data.workflowModel;
+        if (!wm?.inputs) return false;
+        return wm.inputs.some((i: { role?: string; type?: string }) => i.role === 'seed' || i.type === 'seed');
+    });
+
     const masterSeedHint = $derived.by(() => {
         const wm = data.workflowModel;
         if (!wm?.inputs) return null;
@@ -1170,7 +1176,8 @@
                         onSubmit={submitRunForm}
                         onQueueClick={() => (randomizeSeedOnSubmit = false)}
                         onRandomClick={() => (randomizeSeedOnSubmit = true)}
-                        masterSeedHint={masterSeedHint}
+                        masterSeedHint={hasSeedInputs ? masterSeedHint : null}
+                        hasSeedInputs={hasSeedInputs}
                         showActions={!isMobile}
                 />
             {/key}
@@ -1258,16 +1265,18 @@
             >
                 Queue for generation ({formValues.runs ?? 1}x)
             </button>
-            <button
-                type="button"
-                class="secondary"
-                onclick={() => triggerMobileRun('random')}
-                onpointerup={(e) => { if ((e as PointerEvent).pointerType === 'touch') { e.preventDefault(); triggerMobileRun('random'); } }}
-                ontouchend={(e) => { e.preventDefault(); triggerMobileRun('random'); }}
-                title="Generate with a random seed"
-            >
-                🎲 Random seed ({formValues.runs ?? 1}x)
-            </button>
+            {#if hasSeedInputs}
+                <button
+                    type="button"
+                    class="secondary"
+                    onclick={() => triggerMobileRun('random')}
+                    onpointerup={(e) => { if ((e as PointerEvent).pointerType === 'touch') { e.preventDefault(); triggerMobileRun('random'); } }}
+                    ontouchend={(e) => { e.preventDefault(); triggerMobileRun('random'); }}
+                    title="Generate with a random seed"
+                >
+                    🎲 Random seed ({formValues.runs ?? 1}x)
+                </button>
+            {/if}
         </div>
     {/if}
 

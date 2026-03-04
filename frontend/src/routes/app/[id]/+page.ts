@@ -1,5 +1,6 @@
 import { analyzeWorkflow } from '$lib/workflow';
 import { appConfig, getApiBase } from '$lib/config';
+import { getDefaultMasterSeedInputKey } from '$lib/types/appBuilder';
 
 export const ssr = appConfig.ssr;
 
@@ -156,12 +157,14 @@ export const load = async ({ params, fetch, url }) => {
 			const masterSeedInputKey =
 				typeof rawMasterSeed === 'string' && rawMasterSeed.trim()
 					? rawMasterSeed.trim()
-					: undefined;
+					: getDefaultMasterSeedInputKey(detectedInputs) ?? undefined;
+			const formLabel = typeof wv.form_label === 'string' && wv.form_label.trim() ? wv.form_label.trim() : undefined;
 			const workflowModel = {
 				inputs: detectedInputs,
 				outputs: detectedOutputs,
 				bindings,
-				...(masterSeedInputKey ? { masterSeedInputKey } : {})
+				...(masterSeedInputKey ? { masterSeedInputKey } : {}),
+				...(formLabel ? { form_label: formLabel } : {})
 			};
 			const [listRes, objectInfoRes, lorasRes, lycorisTypesRes, checkpointsRes, devicesRes, rifeModelsRes, unetGgufModelsRes, stableCascadeModelsRes, upscaleModelsRes] = await Promise.all([
 				fetch(`${apiBase}/workflows`),
@@ -271,7 +274,8 @@ export const load = async ({ params, fetch, url }) => {
 		if (!workflowJson || typeof workflowJson !== 'object') {
 			throw new Error('Invalid workflow response');
 		}
-		const workflowModel = analyzeWorkflow(workflowJson);
+		const useWorkflowUILink = Array.isArray(detectedInputs) && detectedInputs.some((i: { classType?: string }) => i?.classType === 'WorkflowUILink');
+		const workflowModel = analyzeWorkflow(workflowJson, { useWorkflowUILink });
 
 		const workflowLoraPaths = extractLoraPathsFromWorkflow(workflowJson as Record<string, unknown>);
 

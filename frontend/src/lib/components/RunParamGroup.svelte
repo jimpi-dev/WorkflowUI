@@ -8,6 +8,7 @@
 		onQueueClick,
 		onRandomClick,
 		masterSeedHint = null,
+		hasSeedInputs = true,
 		showActions = true
 	}: {
 		values?: Record<string, any>;
@@ -16,6 +17,7 @@
 		onQueueClick: () => void;
 		onRandomClick: () => void;
 		masterSeedHint?: string | null;
+		hasSeedInputs?: boolean;
 		showActions?: boolean;
 	} = $props();
 
@@ -82,7 +84,7 @@
 				oninput={onSliderInput}
 			/>
 		</div>
-		{#if masterSeedHint}
+		{#if hasSeedInputs && masterSeedHint}
 			<p class="run-param-master-seed-hint" role="note">
 				Only the seed <strong>{masterSeedHint}</strong> is changed by the buttons below; other seed fields keep their values.
 			</p>
@@ -110,15 +112,17 @@
 					>
 						Queue for generation ({sliderVal}x)
 					</button>
-					<button
-						type="button"
-						class="run-param-trigger-btn secondary"
-						data-run-action="random"
-						onclick={() => handleRandomTap()}
-						title="Generate with a random seed"
-					>
-						🎲 Random seed ({sliderVal}x)
-					</button>
+					{#if hasSeedInputs}
+						<button
+							type="button"
+							class="run-param-trigger-btn secondary"
+							data-run-action="random"
+							onclick={() => handleRandomTap()}
+							title="Generate with a random seed"
+						>
+							🎲 Random seed ({sliderVal}x)
+						</button>
+					{/if}
 				</div>
 			{/if}
 		</div>

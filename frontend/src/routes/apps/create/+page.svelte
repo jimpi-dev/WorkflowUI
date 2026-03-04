@@ -15,6 +15,7 @@
 		moveInputNodeOrder,
 		moveOutputNodeOrder,
 		setMasterSeedInputKey,
+		getDefaultMasterSeedInputKey,
 		setIgnoreLoadImageDefault,
 		nodeIdFromInputKey,
 		type AppDraft
@@ -177,8 +178,11 @@
 		if (version && inputKeys.length >= 0 && outputKeys.length >= 0 && !draftInitialized) {
 			appDraft = createEmptyDraft(inputKeys, outputKeys);
 			if (appDraft) {
+				const defaultSeedKey = getDefaultMasterSeedInputKey(version.detected_inputs ?? []);
+				if (defaultSeedKey) setMasterSeedInputKey(appDraft!, defaultSeedKey);
 				for (const input of version.detected_inputs ?? []) {
-					if (input.key && input.metaTitle) {
+					// Do not set label override for WorkflowUILink inputs; their label is already from the node (name field)
+					if (input.key && input.metaTitle && (input as { classType?: string }).classType !== 'WorkflowUILink') {
 						setInputOverride(appDraft!, input.key, { label: input.metaTitle });
 					}
 				}
