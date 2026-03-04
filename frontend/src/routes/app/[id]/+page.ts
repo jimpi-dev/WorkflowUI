@@ -51,7 +51,16 @@ export const load = async ({ params, fetch, url }) => {
 			return { appRemoved: true, workflowId: params.id, comfyuiDeleteSupported, sendFromPreload: null };
 		}
 		if (appRes.ok) {
-			const appData = await appRes.json();
+			let appData: { workflow_version?: unknown; app?: unknown };
+			try {
+				appData = await appRes.json();
+			} catch {
+				// Non-JSON response (e.g. HTML error page) — treat as app not found and fall through to workflow branch
+				appData = {} as { workflow_version?: unknown; app?: unknown };
+			}
+			if (!appData?.workflow_version || !appData?.app) {
+				// Invalid or empty response — fall through to workflow-by-id branch
+			} else {
 			const wv = appData.workflow_version ?? {};
 			const app = appData.app ?? {};
 		
@@ -203,7 +212,14 @@ export const load = async ({ params, fetch, url }) => {
 				if (input.optionSource === 'stable_cascade_stage_c' && stableCascadeStageC.length) input.options = stableCascadeStageC;
 				if (input.optionSource === 'upscale_models' && Array.isArray(upscaleModels) && upscaleModels.length) input.options = upscaleModels;
 			}
-			const workflows = listRes.ok ? await listRes.json() : [];
+			let workflows: unknown[] = [];
+			if (listRes.ok) {
+				try {
+					workflows = await listRes.json();
+				} catch {
+					workflows = [];
+				}
+			}
 			const workflowLoraPaths = extractLoraPathsFromDetectedInputs(detectedInputs);
 			
 			let sendFromPreload: { runId: string; outputIndex: number; inputKey: string; filename: string; subfolder: string; type: string } | null = null;
@@ -248,6 +264,7 @@ export const load = async ({ params, fetch, url }) => {
 				embedWorkflowuiMetadataOnSave,
 				sendFromPreload
 			};
+			}
 		}
 		
 		const [wfRes, listRes, objectInfoRes, lorasRes, lycorisTypesRes, checkpointsRes, devicesRes, rifeModelsRes, unetGgufModelsRes, stableCascadeModelsRes, clipVisionModelsRes, upscaleModelsRes] = await Promise.all([
@@ -332,7 +349,14 @@ export const load = async ({ params, fetch, url }) => {
 			}
 		}
 
-		const workflows = listRes.ok ? await listRes.json() : [];
+		let workflows: unknown[] = [];
+		if (listRes.ok) {
+			try {
+				workflows = await listRes.json();
+			} catch {
+				workflows = [];
+			}
+		}
 
 		return {
 			workflowJson,
