@@ -26,3 +26,16 @@ export const api = {
         return fetch(url(path), { ...init, method: 'DELETE' });
     }
 };
+
+const APP_READY_POLL_MS = 350;
+const APP_READY_MAX_WAIT_MS = 4000;
+
+/** Poll GET /app/:slug until the app is available (200) or timeout. Use before redirecting after import. */
+export async function waitForAppToBeAvailable(slug: string): Promise<void> {
+    const start = Date.now();
+    while (Date.now() - start < APP_READY_MAX_WAIT_MS) {
+        const res = await api.get(`app/${slug}`);
+        if (res.ok) return;
+        await new Promise((r) => setTimeout(r, APP_READY_POLL_MS));
+    }
+}
