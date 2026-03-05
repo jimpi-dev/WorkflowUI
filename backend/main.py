@@ -1,4 +1,5 @@
 import logging
+import os
 import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -26,6 +27,12 @@ if hasattr(sys.stdout, "reconfigure"):
 from dependencies import get_db
 from routers import config, runs, projects, comfyui, import_, apps, workflows, execution
 
+# Optional API path prefix (e.g. "/api"). When set, all API routes are under this path so a reverse
+# proxy can forward only this path to the backend and serve the SPA for everything else.
+API_PREFIX = (os.environ.get("WORKFLOWUI_API_PREFIX") or "").strip()
+if API_PREFIX and not API_PREFIX.startswith("/"):
+    API_PREFIX = "/" + API_PREFIX
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -52,14 +59,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(config.router, tags=["config"])
-app.include_router(runs.router, tags=["runs"])
-app.include_router(projects.router, tags=["projects"])
-app.include_router(comfyui.router, tags=["comfyui"])
-app.include_router(import_.router, tags=["import"])
-app.include_router(apps.router, tags=["apps"])
-app.include_router(workflows.router, tags=["workflows"])
-app.include_router(execution.router, tags=["execution"])
+app.include_router(config.router, prefix=API_PREFIX, tags=["config"])
+app.include_router(runs.router, prefix=API_PREFIX, tags=["runs"])
+app.include_router(projects.router, prefix=API_PREFIX, tags=["projects"])
+app.include_router(comfyui.router, prefix=API_PREFIX, tags=["comfyui"])
+app.include_router(import_.router, prefix=API_PREFIX, tags=["import"])
+app.include_router(apps.router, prefix=API_PREFIX, tags=["apps"])
+app.include_router(workflows.router, prefix=API_PREFIX, tags=["workflows"])
+app.include_router(execution.router, prefix=API_PREFIX, tags=["execution"])
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 _SPA_PATH_PREFIXES = ("app", "apps", "projects", "workflows", "import")
@@ -77,6 +84,9 @@ def _is_spa_document_request(path: str, sec_fetch_dest: str, accept: str) -> boo
 class SPAFallbackMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request, call_next):
         if request.method != "GET":
+            return await call_next(request)
+        # Never serve SPA for API-prefixed paths; let the API routes handle them.
+        if API_PREFIX and (request.url.path or "").startswith(API_PREFIX):
             return await call_next(request)
         sec_fetch_dest = request.headers.get("sec-fetch-dest", "")
         accept = request.headers.get("accept", "")

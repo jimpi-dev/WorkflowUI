@@ -12,12 +12,17 @@ from typing import Any, Callable
 import requests
 
 from services.comfyui_info import normalize_comfy_url
+from services.workflow_analyzer import _workflow_ui_link_widget_order
 
 logger = logging.getLogger(__name__)
 
 MAX_SEED = 1125899906842624
+# ComfyUI INT widget max (WorkflowUILink input_number_* and similar use this)
+COMFYUI_INT_MAX = 2147483647
 
 WIDGET_ORDER: dict[str, list[str]] = {
+    "WorkflowUILink": _workflow_ui_link_widget_order(),
+    "WorkflowUI Link": _workflow_ui_link_widget_order(),
     "EmptyLatentImage": ["width", "height", "batch_size"],
     "EmptySD3LatentImage": ["width", "height", "batch_size"],
     "SDXLEmptyLatentSizePicker+": ["resolution", "batch_size", "width_override", "height_override"],
@@ -71,7 +76,38 @@ def prompt_to_api_format(prompt: dict) -> dict:
         elif isinstance(node.get("inputs"), dict):
             inputs = dict(node["inputs"])
         out[node_id] = {"class_type": class_type, "inputs": inputs}
+    _normalize_workflow_ui_link_inputs(out)
     return out if out else prompt
+
+
+def _normalize_workflow_ui_link_inputs(prompt: dict) -> None:
+    """Coerce WorkflowUILink node inputs so unused slots pass ComfyUI validation (INT/BOOLEAN)."""
+    for node in (prompt or {}).values():
+        if not isinstance(node, dict):
+            continue
+        if node.get("class_type") not in ("WorkflowUILink", "WorkflowUI Link"):
+            continue
+        inputs = node.get("inputs")
+        if not isinstance(inputs, dict):
+            continue
+        for key, value in list(inputs.items()):
+            if key.startswith("input_number_"):
+                if value in (None, ""):
+                    inputs[key] = 0
+                else:
+                    try:
+                        n = int(float(value))
+                        inputs[key] = max(0, min(n, COMFYUI_INT_MAX))
+                    except (TypeError, ValueError):
+                        inputs[key] = 0
+            elif key.startswith("input_boolean_"):
+                if value in (False, 0, "false", "0", "", None):
+                    inputs[key] = False
+                else:
+                    inputs[key] = True
+            elif key.startswith("input_image_") or key.startswith("input_video_") or key.startswith("input_audio_"):
+                if not isinstance(value, str) or value in (None, "false", "0"):
+                    inputs[key] = ""
 
 
 def resolve_node(prompt: dict, node_id: str) -> dict | None:
@@ -96,11 +132,32 @@ def resolve_node(prompt: dict, node_id: str) -> dict | None:
 
 def _coerce_binding_value(field_path: str, value: Any) -> Any:
     last_part = field_path.split(".")[-1]
-    if last_part in INTEGER_BINDING_FIELDS:
+    if (
+        last_part in INTEGER_BINDING_FIELDS
+        or last_part.endswith("_int")
+        or last_part.endswith("_number")
+        or last_part.startswith("input_number_")
+    ):
+        if value in (None, ""):
+            return 0
         try:
-            return int(float(value))
+            n = int(float(value))
+            # WorkflowUILink input_number_* and ComfyUI INT widgets use 32-bit signed max
+            if last_part.startswith("input_number_"):
+                n = max(0, min(n, COMFYUI_INT_MAX))
+            elif last_part in ("seed", "noise_seed"):
+                n = max(0, min(n, MAX_SEED))
+            return n
         except (TypeError, ValueError):
+            return 0
+    if last_part.startswith("input_boolean_"):
+        if isinstance(value, bool):
             return value
+        if value in (True, 1, "true", "1"):
+            return True
+        if value in (False, 0, "false", "0", "", None):
+            return False
+        return bool(value)
     if last_part in ("strength", "strength_model"):
         try:
             return float(value)
@@ -184,7 +241,7 @@ class RunExecutor:
         self._input_data_dir = input_data_dir
 
     def _job_comfy_url(self, job: dict) -> str:
-        return normalize_comfy_url(job.get("comfyui_url") or self._default_comfy_url)
+        return (normalize_comfy_url(job.get("comfyui_url") or self._default_comfy_url)).rstrip("/")
 
     def execute(
         self,
@@ -200,6 +257,8 @@ class RunExecutor:
             with open(f"workflows/{workflow_id}.json", "r", encoding="utf-8") as f:
                 prompt = json.load(f)
         prompt = prompt_to_api_format(prompt)
+        if isinstance(prompt, dict):
+            _normalize_workflow_ui_link_inputs(prompt)
         job["prompt"] = prompt
         payload = job.get("payload") or {}
         values = dict(payload.get("values") or {})
@@ -253,9 +312,19 @@ class RunExecutor:
                         if isinstance(ent, dict) and not ent.get("file_deleted"):
                             parent_media_entry = ent
 
-        mime_by_ext = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp", ".gif": "image/gif"}
+        mime_by_ext = {
+            **{".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp", ".gif": "image/gif"},
+            **{".mp4": "video/mp4", ".webm": "video/webm", ".mkv": "video/x-matroska", ".mov": "video/quicktime"},
+            **{".mp3": "audio/mpeg", ".wav": "audio/wav", ".ogg": "audio/ogg", ".flac": "audio/flac", ".m4a": "audio/mp4"},
+        }
+        def _is_media_upload_field(f: str) -> bool:
+            if f == "image":
+                return True
+            return f.startswith("input_image_") or f.startswith("input_video_") or f.startswith("input_audio_")
+
         for b in bindings:
-            if b.get("field") != "image":
+            field = b.get("field")
+            if not field or not _is_media_upload_field(field):
                 continue
             key = b.get("key")
             if not key:
@@ -292,7 +361,7 @@ class RunExecutor:
             local_path = self._input_data_dir / value.strip()
             if local_path.is_file():
                 ext = local_path.suffix.lower()
-                mime = mime_by_ext.get(ext, "image/png")
+                mime = mime_by_ext.get(ext, "application/octet-stream")
                 try:
                     upload_file_to_comfy(comfy_url, local_path, mime)
                 except requests.RequestException as e:
@@ -323,11 +392,30 @@ class RunExecutor:
             apply_binding(node, field_path, value)
 
         exec_start = time.time()
+        base_url = comfy_url.rstrip("/")
         res = requests.post(
-            f"{comfy_url}/prompt",
+            f"{base_url}/prompt",
             json={"prompt": prompt, "client_id": str(uuid.uuid4())},
         )
-        res.raise_for_status()
+        if not res.ok:
+            try:
+                err_body = res.text
+                if res.headers.get("content-type", "").startswith("application/json"):
+                    err_body = res.json()
+                logger.error(
+                    "ComfyUI /prompt failed: status=%s url=%s body=%s",
+                    res.status_code,
+                    res.url,
+                    err_body,
+                )
+            except Exception:
+                logger.error(
+                    "ComfyUI /prompt failed: status=%s url=%s body=%s",
+                    res.status_code,
+                    res.url,
+                    res.text[:500] if res.text else "",
+                )
+            res.raise_for_status()
         prompt_id = res.json()["prompt_id"]
 
         run_id = job.get("run_id")
@@ -346,13 +434,14 @@ class RunExecutor:
         while True:
             if run_id and is_cancelled(run_id):
                 raise RuntimeError("Cancelled")
-            hist_res = requests.get(f"{comfy_url}/history/{prompt_id}")
+            hist_res = requests.get(f"{base_url}/history/{prompt_id}")
             history = hist_res.json()
             if prompt_id not in history:
                 time.sleep(1.5)
                 continue
             outputs = []
-            for node in history[prompt_id]["outputs"].values():
+            for nid, node in history[prompt_id]["outputs"].items():
+                idx = 0
                 if "images" in node:
                     for img in node["images"]:
                         raw = img.get("type", "image")
@@ -360,20 +449,29 @@ class RunExecutor:
                             "filename": img["filename"],
                             "subfolder": img.get("subfolder", ""),
                             "type": output_type(raw, img.get("filename", "")),
+                            "nodeId": nid,
+                            "outputIndex": idx,
                         })
+                        idx += 1
                 if "gifs" in node:
                     for gif in node["gifs"]:
                         outputs.append({
                             "filename": gif["filename"],
                             "subfolder": gif.get("subfolder", ""),
                             "type": "video",
+                            "nodeId": nid,
+                            "outputIndex": idx,
                         })
+                        idx += 1
                 if "audio" in node:
                     for aud in node["audio"]:
                         outputs.append({
                             "filename": aud["filename"],
                             "subfolder": aud.get("subfolder", ""),
                             "type": "audio",
+                            "nodeId": nid,
+                            "outputIndex": idx,
                         })
+                        idx += 1
             execution_time_sec = round(time.time() - exec_start, 1)
             return (prompt_id, outputs, seed, execution_time_sec)
