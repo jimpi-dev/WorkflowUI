@@ -1,6 +1,6 @@
 import pytest
 
-from services.workflow_analyzer import analyze_workflow
+from services.workflow_analyzer import analyze_workflow, workflow_contains_workflow_ui_link
 
 
 def test_analyze_returns_inputs_outputs_bindings(sample_workflow_graph):
@@ -275,3 +275,326 @@ def test_analyze_stable_cascade_editor_format_widgets_values():
     assert "9.key_opt_c" in keys
     assert "9.cache_mode" in keys
     assert next(i for i in result["inputs"] if i["key"] == "9.key_opt_b")["default"] == "stage_b.safetensors"
+
+
+def test_workflow_contains_workflow_ui_link():
+    wf = {"5": {"class_type": "KSampler", "inputs": {}}, "10": {"class_type": "WorkflowUILink", "inputs": {}}}
+    has_link, node_id = workflow_contains_workflow_ui_link(wf)
+    assert has_link is True
+    assert node_id == "10"
+
+
+def test_workflow_contains_workflow_ui_link_none():
+    wf = {"5": {"class_type": "KSampler", "inputs": {}}}
+    has_link, node_id = workflow_contains_workflow_ui_link(wf)
+    assert has_link is False
+    assert node_id is None
+
+
+def test_analyze_workflow_ui_link_schema():
+    wf = {
+        "10": {
+            "class_type": "WorkflowUILink",
+            "inputs": {
+                "input_definitions": '[{"name": "prompt", "type": "text", "label": "Prompt"}, {"name": "steps", "type": "number", "label": "Steps"}]',
+            },
+        },
+        "7": {"class_type": "SaveImage", "inputs": {}},
+    }
+    result = analyze_workflow(wf, use_workflow_ui_link=True)
+    assert len(result["inputs"]) == 2
+    keys = {i["key"] for i in result["inputs"]}
+    assert "10.input_text_0" in keys
+    assert "10.input_number_1" in keys
+    assert any(i["label"] == "Prompt" for i in result["inputs"])
+    assert any(i["label"] == "Steps" for i in result["inputs"])
+    assert len(result["outputs"]) >= 1
+    assert any(o.get("nodeId") == "7" and o.get("type") == "image" for o in result["outputs"])
+    assert len(result["bindings"]) == 2
+
+
+def test_analyze_workflow_ui_link_false_uses_regular_schema():
+    wf = {
+        "10": {"class_type": "WorkflowUILink", "inputs": {"input_definitions": "[]"}},
+        "7": {"class_type": "SaveImage", "inputs": {}},
+    }
+    result = analyze_workflow(wf, use_workflow_ui_link=False)
+    assert any(o.get("nodeId") == "7" and o.get("type") == "image" for o in result["outputs"])
+
+
+def test_analyze_full_schema_includes_workflow_ui_link_inputs():
+    """When use_workflow_ui_link=False, WorkflowUILink inputs still appear as entry points."""
+    wf = {
+        "10": {
+            "class_type": "WorkflowUILink",
+            "inputs": {
+                "input_definitions": '[{"name": "prompt", "type": "text"}, {"name": "seed", "type": "seed"}]',
+            },
+        },
+        "5": {"class_type": "KSampler", "inputs": {"seed": 42, "steps": 20}},
+        "7": {"class_type": "SaveImage", "inputs": {}},
+    }
+    result = analyze_workflow(wf, use_workflow_ui_link=False)
+    keys = {i["key"] for i in result["inputs"]}
+    assert "10.input_text_0" in keys
+    assert "10.input_number_1" in keys
+    assert any(i["key"] == "10.input_text_0" and "prompt" in (i.get("label") or "").lower() for i in result["inputs"])
+
+
+def test_analyze_workflow_ui_link_boolean():
+    """WorkflowUILink supports boolean type in input_definitions."""
+    wf = {
+        "10": {
+            "class_type": "WorkflowUILink",
+            "inputs": {
+                "input_definitions": '[{"name": "enable_upscale", "type": "boolean", "label": "Enable upscale"}]',
+            },
+        },
+        "7": {"class_type": "SaveImage", "inputs": {}},
+    }
+    result = analyze_workflow(wf, use_workflow_ui_link=True)
+    assert len(result["inputs"]) == 1
+    inp = result["inputs"][0]
+    assert inp["key"] == "10.input_boolean_0"
+    assert inp["type"] == "boolean"
+    assert inp["label"] == "Enable upscale"
+
+
+def test_analyze_workflow_ui_link_input_definitions_label():
+    """input_definitions JSON label is used when present; otherwise name is used."""
+    wf = {
+        "10": {
+            "class_type": "WorkflowUILink",
+            "inputs": {
+                "input_definitions": '[{"name": "p", "type": "text", "label": "Prompt"}, {"name": "s", "type": "number", "label": "Steps"}]',
+            },
+        },
+        "7": {"class_type": "SaveImage", "inputs": {}},
+    }
+    result = analyze_workflow(wf, use_workflow_ui_link=True)
+    assert len(result["inputs"]) == 2
+    inp0 = next(i for i in result["inputs"] if i["key"] == "10.input_text_0")
+    inp1 = next(i for i in result["inputs"] if i["key"] == "10.input_number_1")
+    assert inp0["label"] == "Prompt"
+    assert inp1["label"] == "Steps"
+
+
+def test_analyze_workflow_ui_link_editor_format_widgets_values():
+    """WorkflowUILink with nodes array and widgets_values is correctly parsed (widget order: form_label, type_i, name_i)."""
+    wf = {
+        "nodes": [
+            {
+                "id": 10,
+                "type": "WorkflowUILink",
+                "widgets_values": [
+                    "",  # form_label
+                    "text", "Positive prompt",  # type_0, name_0 (name is also the label)
+                    "number", "Steps",  # type_1, name_1
+                ],
+                "pos": [0, 0],
+                "size": {"0": 300, "1": 200},
+                "flags": {},
+                "order": 0,
+                "mode": 0,
+                "properties": {},
+            },
+            {"id": 7, "type": "SaveImage", "inputs": [], "pos": [0, 0], "size": {"0": 200, "1": 100}, "flags": {}, "order": 0, "mode": 0, "properties": {}},
+        ],
+        "links": [],
+    }
+    result = analyze_workflow(wf, use_workflow_ui_link=True)
+    assert len(result["inputs"]) == 2
+    assert any(i["key"] == "10.input_text_0" and i["label"] == "Positive prompt" for i in result["inputs"])
+    assert any(i["key"] == "10.input_number_1" and i["label"] == "Steps" for i in result["inputs"])
+
+
+def test_analyze_nested_graph_unwrap():
+    """Nested graph (e.g. workflow.graph) is unwrapped for analysis."""
+    inner = {
+        "nodes": [
+            {"id": 10, "type": "WorkflowUILink", "widgets_values": ["", "text", "My field"], "pos": [0, 0], "size": {"0": 1, "1": 1}, "flags": {}, "order": 0, "mode": 0, "properties": {}},
+            {"id": 7, "type": "SaveImage", "inputs": [], "pos": [0, 0], "size": {"0": 1, "1": 1}, "flags": {}, "order": 0, "mode": 0, "properties": {}},
+        ],
+        "links": [],
+    }
+    wf = {"workflow": {"graph": inner}}
+    result = analyze_workflow(wf, use_workflow_ui_link=True)
+    assert len(result["inputs"]) == 1
+    assert result["inputs"][0]["key"] == "10.input_text_0"
+    assert result["inputs"][0]["label"] == "My field"
+
+
+def test_analyze_workflow_ui_link_video_audio():
+    """video and audio types map to input_video_N and input_audio_N."""
+    wf = {
+        "10": {
+            "class_type": "WorkflowUILink",
+            "inputs": {
+                "input_definitions": '[{"name": "vid", "type": "video"}, {"name": "aud", "type": "audio"}]',
+            },
+        },
+        "7": {"class_type": "SaveImage", "inputs": {}},
+    }
+    result = analyze_workflow(wf, use_workflow_ui_link=True)
+    keys = {i["key"] for i in result["inputs"]}
+    assert "10.input_video_0" in keys
+    assert "10.input_audio_1" in keys
+    typ0 = next(i["type"] for i in result["inputs"] if i["key"] == "10.input_video_0")
+    typ1 = next(i["type"] for i in result["inputs"] if i["key"] == "10.input_audio_1")
+    assert typ0 == "video"
+    assert typ1 == "audio"
+
+
+def test_workflow_contains_workflow_ui_link_display_name():
+    """'WorkflowUI Link' (display name) is recognized like WorkflowUILink."""
+    wf = {"5": {"class_type": "KSampler", "inputs": {}}, "10": {"class_type": "WorkflowUI Link", "inputs": {}}}
+    has_link, node_id = workflow_contains_workflow_ui_link(wf)
+    assert has_link is True
+    assert node_id == "10"
+
+
+def test_analyze_prompt_wrapped_api_format():
+    """ComfyUI prompt-wrapped API format { prompt: { node_id: node } } is unwrapped."""
+    wf = {
+        "prompt": {
+            "10": {
+                "class_type": "WorkflowUILink",
+                "inputs": {"input_definitions": '[{"name": "prompt", "type": "text"}]'},
+            },
+            "7": {"class_type": "SaveImage", "inputs": {}},
+        },
+        "client_id": "abc",
+    }
+    result = analyze_workflow(wf, use_workflow_ui_link=True)
+    assert len(result["inputs"]) == 1
+    assert result["inputs"][0]["key"] == "10.input_text_0"
+    assert len(result["outputs"]) >= 1
+
+
+def test_analyze_workflow_ui_link_input_definitions_fallback():
+    """When input_definitions is missing but a JSON array exists in another key, fallback finds it."""
+    wf = {
+        "10": {
+            "class_type": "WorkflowUILink",
+            "inputs": {
+                "form_label": '[{"name": "steps", "type": "number"}]',
+            },
+        },
+        "7": {"class_type": "SaveImage", "inputs": {}},
+    }
+    result = analyze_workflow(wf, use_workflow_ui_link=True)
+    assert len(result["inputs"]) == 1
+    assert result["inputs"][0]["key"] == "10.input_number_0"
+
+
+def test_analyze_workflow_ui_link_infer_from_outputs_when_definitions_empty():
+    """When type widgets are empty, infer from connected outputs and names."""
+    wf = {
+        "nodes": [
+            {
+                "id": 79,
+                "type": "WorkflowUILink",
+                "widgets_values": ["", "", "Positive Prompt", "", "Random Seed", "", "Width(px)", "", "Height(Px)"],
+                    "outputs": [
+                        {"name": "text_0", "type": "STRING", "links": [1]},
+                        {"name": "text_1", "type": "STRING", "links": None},
+                        {"name": "number_1", "type": "INT", "links": [2]},
+                    {"name": "number_2", "type": "INT", "links": [3]},
+                    {"name": "number_3", "type": "INT", "links": [4]},
+                ],
+                "pos": [0, 0],
+                "size": [300, 200],
+                "flags": {},
+                "order": 0,
+                "mode": 0,
+                "properties": {},
+            },
+            {"id": 7, "type": "SaveImage", "inputs": [], "pos": [0, 0], "size": [200, 100], "flags": {}, "order": 0, "mode": 0, "properties": {}},
+        ],
+        "links": [],
+    }
+    result = analyze_workflow(wf, use_workflow_ui_link=True)
+    assert len(result["inputs"]) == 4
+    keys = {i["key"] for i in result["inputs"]}
+    assert "79.input_text_0" in keys
+    assert "79.input_number_1" in keys
+    assert "79.input_number_2" in keys
+    assert "79.input_number_3" in keys
+    labels = {i["label"] for i in result["inputs"]}
+    assert "Positive Prompt" in labels
+    assert "Random Seed" in labels
+    assert "Width(px)" in labels
+    assert "Height(Px)" in labels
+    seed_inp = next(i for i in result["inputs"] if i["key"] == "79.input_number_1")
+    assert seed_inp["type"] == "seed"
+
+
+def test_analyze_workflow_ui_link_infer_from_links_when_outputs_missing():
+    """When outputs are missing/unexpected (ComfyUI-UE), infer from workflow links array."""
+    wf = {
+        "nodes": [
+            {
+                "id": 79,
+                "type": "WorkflowUILink",
+                    "widgets_values": ["", "", "Positive Prompt", "", "Random Seed", "", "Width(px)", "", "Height(Px)"],
+                    "outputs": [],
+                "pos": [0, 0],
+                "size": [300, 200],
+                "flags": {},
+                "order": 0,
+                "mode": 0,
+                "properties": {},
+            },
+            {"id": 9, "type": "SaveImage", "inputs": [], "pos": [0, 0], "size": [200, 100], "flags": {}, "order": 0, "mode": 0, "properties": {}},
+        ],
+        "links": [
+            [73, 79, 0, "76", 0, "STRING"],
+            [74, 79, 9, "75:73", 0, "INT"],
+            [75, 79, 10, "75:68", 0, "INT"],
+            [76, 79, 11, "75:69", 0, "INT"],
+        ],
+    }
+    result = analyze_workflow(wf, use_workflow_ui_link=True)
+    assert len(result["inputs"]) == 4
+    keys = {i["key"] for i in result["inputs"]}
+    assert "79.input_text_0" in keys
+    assert "79.input_number_1" in keys
+    assert "79.input_number_2" in keys
+    assert "79.input_number_3" in keys
+    labels = {i["label"] for i in result["inputs"]}
+    assert "Positive Prompt" in labels
+    assert "Random Seed" in labels
+    assert "Width(px)" in labels
+    assert "Height(Px)" in labels
+    seed_inp = next(i for i in result["inputs"] if i["key"] == "79.input_number_1")
+    assert seed_inp["type"] == "seed"
+
+
+def test_analyze_workflow_ui_link_editor_format_display_name():
+    """Full workflow export with type 'WorkflowUI Link' (display name) is recognized and parsed."""
+    wf = {
+        "version": 1,
+        "nodes": [
+            {
+                "id": 10,
+                    "type": "WorkflowUI Link",
+                    "widgets_values": [
+                        "",  # form_label
+                        "text", "Positive prompt",  # type_0, name_0
+                        "number", "Steps",  # type_1, name_1
+                    ],
+                "pos": [0, 0],
+                "size": {"0": 300, "1": 200},
+                "flags": {},
+                "order": 0,
+                "mode": 0,
+                "properties": {},
+            },
+            {"id": 7, "type": "SaveImage", "inputs": [], "pos": [0, 0], "size": {"0": 200, "1": 100}, "flags": {}, "order": 0, "mode": 0, "properties": {}},
+        ],
+        "links": [],
+    }
+    result = analyze_workflow(wf, use_workflow_ui_link=True)
+    assert len(result["inputs"]) == 2
+    assert any(i["key"] == "10.input_text_0" and i["label"] == "Positive prompt" for i in result["inputs"])
+    assert any(i["key"] == "10.input_number_1" and i["label"] == "Steps" for i in result["inputs"])

@@ -135,13 +135,14 @@ def _import_from_workflowui_payload(payload: dict, db):
 def post_import_preview(body: dict, db=Depends(get_db)):
     name = body.get("name")
     graph = body.get("graph")
+    use_workflow_ui_link = body.get("use_workflow_ui_link") is True
     if not name or not isinstance(name, str):
         raise HTTPException(status_code=400, detail="name is required")
     if not isinstance(graph, dict) or not graph:
         raise HTTPException(status_code=400, detail="graph must be a non-empty object")
     _, _, _, _, _, _, import_service = db
     try:
-        return import_service.preview_import(name, graph)
+        return import_service.preview_import(name, graph, use_workflow_ui_link=use_workflow_ui_link)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -151,13 +152,18 @@ def post_import(body: dict, db=Depends(get_db)):
     name = body.get("name")
     graph = body.get("graph")
     force_new_version = body.get("force_new_version") is True
+    use_workflow_ui_link = body.get("use_workflow_ui_link") is True
     if not name or not isinstance(name, str):
         raise HTTPException(status_code=400, detail="name is required")
     if not isinstance(graph, dict) or not graph:
         raise HTTPException(status_code=400, detail="graph must be a non-empty object")
     _, _, _, _, _, _, import_service = db
     try:
-        result = import_service.import_workflow(name, graph, force_new_version=force_new_version)
+        result = import_service.import_workflow(
+            name, graph,
+            force_new_version=force_new_version,
+            use_workflow_ui_link=use_workflow_ui_link,
+        )
         return {
             "workflow_id": result.workflow_id,
             "version": result.version,

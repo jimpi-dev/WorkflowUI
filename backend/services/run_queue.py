@@ -126,11 +126,16 @@ def _worker_loop(
                     if images:
                         for ent in images:
                             kind = ent.get("type", "image") if isinstance(ent, dict) else "image"
-                            media.append({
+                            m = {
                                 "filename": ent.get("filename", "") if isinstance(ent, dict) else "",
                                 "subfolder": ent.get("subfolder", "") if isinstance(ent, dict) else "",
                                 "kind": kind,
-                            })
+                            }
+                            if isinstance(ent, dict) and "nodeId" in ent:
+                                m["nodeId"] = ent["nodeId"]
+                            if isinstance(ent, dict) and "outputIndex" in ent:
+                                m["outputIndex"] = ent["outputIndex"]
+                            media.append(m)
                     run_repo.update_run(
                         run_id,
                         status="done",

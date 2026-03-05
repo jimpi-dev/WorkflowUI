@@ -64,4 +64,20 @@ describe('RunParamGroup', () => {
 		expect(queryByRole('button', { name: /queue for generation/i })).toBeNull();
 		expect(queryByRole('button', { name: /random seed/i })).toBeNull();
 	});
+
+	it('hides Random seed button when hasSeedInputs is false', () => {
+		const { getByRole, queryByRole } = render(RunParamGroup, {
+			props: {
+				values: { runs: 2 },
+				formId: 'test-form',
+				onQueueClick: vi.fn(),
+				onRandomClick: vi.fn(),
+				showActions: true,
+				hasSeedInputs: false
+			}
+		});
+
+		expect(getByRole('button', { name: /queue for generation/i })).toBeInTheDocument();
+		expect(queryByRole('button', { name: /random seed/i })).toBeNull();
+	});
 });

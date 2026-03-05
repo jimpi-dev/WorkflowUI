@@ -5,7 +5,7 @@
 FROM node:20-alpine AS frontend-build
 WORKDIR /app
 
-# Backend URL empty = same origin (backend will serve static + API).
+# Backend URL empty = same origin (backend serves static + API).
 ENV BACKEND_URL=
 ENV ADAPTER_STATIC=1
 
