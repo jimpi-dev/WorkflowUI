@@ -1,4 +1,5 @@
 import json
+import logging
 import time
 import uuid
 from typing import Any
@@ -13,6 +14,7 @@ from dependencies import get_db
 from routers.import_ import _find_available_slug
 
 MEDIA_INPUT_TYPES = frozenset({"image", "video", "audio"})
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -310,9 +312,11 @@ def get_app_by_slug(slug: str, db=Depends(get_db)):
     _, workflow_repo, app_repo, _, _, _, _ = db
     app = app_repo.get_app_by_slug(slug)
     if not app:
+        logger.info("GET /app/%s: app not found in DB", slug)
         raise HTTPException(status_code=404, detail="App not found")
     version = workflow_repo.get_workflow_version(app.workflow_version_id)
     if not version:
+        logger.warning("GET /app/%s: app found but workflow_version_id=%s not found", slug, app.workflow_version_id)
         raise HTTPException(status_code=404, detail="Workflow version not found")
     detected_inputs = json.loads(version.detected_inputs_json)
     supported = json.loads(app.supported_input_kinds_json) if app.supported_input_kinds_json else None
