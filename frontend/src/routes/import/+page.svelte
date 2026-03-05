@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { getApiBase } from '$lib/config';
+	import { waitForAppToBeAvailable } from '$lib/api';
 	import { goto } from '$app/navigation';
 
 	let { data }: { data: { embedWorkflowuiMetadataOnDownload?: boolean; embedWorkflowuiMetadataOnSave?: boolean } } = $props();
@@ -188,6 +189,7 @@
 					} catch {
 					}
 				}
+				await waitForAppToBeAvailable(slug);
 				await goto(`/app/${slug}`);
 				return;
 			}
@@ -199,6 +201,7 @@
 					} catch {
 					}
 				}
+				await waitForAppToBeAvailable(slug);
 				await goto(`/app/${slug}`);
 				return;
 			}
