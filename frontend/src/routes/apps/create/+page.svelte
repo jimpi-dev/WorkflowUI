@@ -270,6 +270,7 @@
 					</span>
 					<span class="toggle-label-text">Public</span>
 				</label>
+				<p class="field-help">This setting currently has no effect. It will later control visibility of the app for different users on the same instance.</p>
 			</section>
 			<section class="section">
 				<label for="app-title">Title</label>

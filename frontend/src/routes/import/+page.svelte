@@ -171,6 +171,29 @@
 		if (jsonFileInputRef) jsonFileInputRef.click();
 	}
 
+	function isJsonFile(file: File): boolean {
+		const n = file.name.toLowerCase();
+		return n.endsWith('.json') || file.type === 'application/json';
+	}
+
+	function handleJsonDrop(e: DragEvent) {
+		e.preventDefault();
+		jsonDropZoneDragOver = false;
+		const file = e.dataTransfer?.files?.[0];
+		if (!file || !isJsonFile(file)) return;
+		selectedFileName = file.name;
+		const nameWithoutExt = file.name.replace(/\.json$/i, '');
+		if (nameWithoutExt) name = nameWithoutExt;
+		const reader = new FileReader();
+		reader.onload = () => {
+			jsonInput = String(reader.result ?? '');
+			setState('idle');
+		};
+		reader.readAsText(file);
+	}
+
+	let jsonDropZoneDragOver = $state(false);
+
 	async function handleImageFile(files: FileList | null) {
 		const file = files?.[0];
 		if (!file || !isWorkflowuiFile(file)) return;
@@ -222,65 +245,24 @@
 
 <div class="two-col-page page">
 	<aside class="panel-left panel-scroll card">
-		<h1>Import Workflow</h1>
-		<p class="muted">Engine-level graph ingestion. No app creation here.</p>
+		<h1>Import workflow</h1>
+		<p class="page-subline muted">Add a ComfyUI workflow from its JSON.</p>
 
-		<section
-			class="section import-from-image-section"
-			class:drag-over={imageDropZoneDragOver}
-			role="button"
-			tabindex="0"
-			ondragover={(e) => { e.preventDefault(); imageDropZoneDragOver = true; }}
-			ondragleave={() => { imageDropZoneDragOver = false; }}
-			ondrop={(e) => {
-				e.preventDefault();
-				imageDropZoneDragOver = false;
-				handleImageFile(e.dataTransfer?.files ?? null);
-			}}
-		>
-			<label for="import-workflow-file">Import from workflow file</label>
-			<p class="hint">Drop or select a PNG or MP3 saved from WorkflowUI (with metadata) to open or restore that workflow and app.</p>
-			<p class="metadata-status" role="status">
-				Metadata appended on download: <strong>{data?.embedWorkflowuiMetadataOnDownload ? 'Yes' : 'No'}</strong>
-				· on save to local storage: <strong>{data?.embedWorkflowuiMetadataOnSave ? 'Yes' : 'No'}</strong>
-				{#if data?.embedWorkflowuiMetadataOnDownload || data?.embedWorkflowuiMetadataOnSave}
-					— drop those files here to restore.
-				{:else}
-					— enable in backend .env (<code>WORKFLOWUI_EMBED_METADATA_ON_DOWNLOAD</code> / <code>WORKFLOWUI_EMBED_METADATA_ON_SAVE</code>) to attach metadata.
-				{/if}
-			</p>
-			<div class="import-json-options">
-				<input
-					id="import-workflow-file"
-					type="file"
-					accept="image/*,.png,audio/mpeg,.mp3"
-					class="file-input file-input-hidden"
-					bind:this={imageFileInputRef}
-					disabled={imageImporting}
-					onchange={(e) => handleImageFile((e.target as HTMLInputElement).files)}
-					aria-label="Choose workflow file (PNG or MP3)"
-				/>
-				<button type="button" class="choose-file-btn" disabled={imageImporting} onclick={chooseImageFile} aria-label="Choose workflow file">
-					Choose file
-				</button>
-				{#if imageImporting}
-					<span class="selected-file">Importing…</span>
-				{:else if imageImportMessage}
-					<span class="error-text">{imageImportMessage}</span>
-				{:else}
-					<span class="no-file">No file chosen</span>
-				{/if}
-			</div>
-		</section>
-
+		<!-- Primary: Import from workflow JSON -->
 		<section class="section">
-			<label for="import-name">Workflow name</label>
-			<input id="import-name" type="text" bind:value={name} placeholder="My Workflow" />
-		</section>
-
-		<section class="section">
-			<label for="import-graph-json">Graph JSON</label>
-			<div class="import-json-options">
+			<label for="import-graph-json" class="section-label">Workflow JSON</label>
+			<div
+				class="json-drop-zone"
+				class:drag-over={jsonDropZoneDragOver}
+				role="button"
+				tabindex="0"
+				aria-label="Drop workflow JSON file here or click to browse"
+				ondragover={(e) => { e.preventDefault(); jsonDropZoneDragOver = true; }}
+				ondragleave={() => { jsonDropZoneDragOver = false; }}
+				ondrop={handleJsonDrop}
+				onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); chooseJsonFile(); } }}
+				onclick={() => chooseJsonFile()}
+			>
 				<input
 					id="import-graph-json"
 					type="file"
@@ -290,22 +272,24 @@
 					bind:this={jsonFileInputRef}
 					aria-label="Choose JSON file"
 				/>
-				<button type="button" class="choose-file-btn" onclick={chooseJsonFile} aria-label="Choose JSON file">
-					Choose file
-				</button>
-				{#if selectedFileName}
-					<span class="selected-file" title={selectedFileName}>{selectedFileName}</span>
-				{:else}
-					<span class="no-file">No file chosen</span>
-					<span class="muted">· or paste below</span>
-				{/if}
+				<span class="json-drop-zone-label">
+					{selectedFileName ? selectedFileName : 'Drop workflow JSON here or click to browse'}
+				</span>
+				<span class="json-drop-zone-hint">.json file or paste below</span>
 			</div>
+			<p class="paste-label">Or paste JSON</p>
 			<textarea
 				class="import-textarea"
 				placeholder={'{ "3": { "class_type": "KSampler" }, ... }'}
 				bind:value={jsonInput}
-				rows="12"
+				rows="10"
+				aria-label="Paste workflow JSON"
 			></textarea>
+		</section>
+
+		<section class="section">
+			<label for="import-name">Workflow name</label>
+			<input id="import-name" type="text" bind:value={name} placeholder="My Workflow" />
 		</section>
 
 		<section class="section">
@@ -329,78 +313,72 @@
 			{/if}
 		</section>
 
-		{#if importState === 'preview-ready' && preview}
-			<section class="section sticky-save">
-				{#if preview.has_workflow_ui_link}
-					<div class="schema-choice-section">
-						<div class="schema-choice-banner">
-							<p class="schema-choice-banner-headline">WorkflowUI Link node detected</p>
-							<p class="schema-choice-banner-subtext">This workflow contains a WorkflowUI Link node. You can use it as a shorthand for app creation—it exposes only the fields you defined in ComfyUI.</p>
-						</div>
-						<div
-							class="schema-segmented-control"
-							role="tablist"
-							aria-label="Schema source"
-							onkeydown={(e) => {
-								if (e.key === 'ArrowLeft' && !useWorkflowUILink) {
-									e.preventDefault();
-									useWorkflowUILink = true;
-									refetchPreviewWithSchema();
-								} else if (e.key === 'ArrowRight' && useWorkflowUILink) {
-									e.preventDefault();
-									useWorkflowUILink = false;
-									refetchPreviewWithSchema();
-								}
-							}}
-						>
-							<button
-								type="button"
-								role="tab"
-								class="schema-option"
-								class:active={useWorkflowUILink}
-								aria-pressed={useWorkflowUILink}
-								aria-selected={useWorkflowUILink}
-								tabindex={useWorkflowUILink ? 0 : -1}
-								onclick={() => { useWorkflowUILink = true; void refetchPreviewWithSchema(); }}
-							>
-								<span class="schema-option-label">WorkflowUI Link schema</span>
-								<span class="schema-option-desc">Exposes only the fields you defined in the WorkflowUI Link node. Best for workflows designed for app creation.</span>
-							</button>
-							<button
-								type="button"
-								role="tab"
-								class="schema-option"
-								class:active={!useWorkflowUILink}
-								aria-pressed={!useWorkflowUILink}
-								aria-selected={!useWorkflowUILink}
-								tabindex={!useWorkflowUILink ? 0 : -1}
-								onclick={() => { useWorkflowUILink = false; void refetchPreviewWithSchema(); }}
-							>
-								<span class="schema-option-label">Full workflow (all nodes)</span>
-								<span class="schema-option-desc">Uses every detected input from the entire workflow—KSampler, CLIPTextEncode, LoadImage, and more.</span>
-							</button>
-						</div>
-						<p class="schema-cross-hint">You can import the same workflow again later with the other option to switch schema source.</p>
-					</div>
-				{/if}
-				{#if !preview.is_new_workflow && !preview.is_new_version}
-					<label class="force-version-wrap">
-						<input type="checkbox" bind:checked={forceNewVersion} />
-						<span>Create new version anyway</span>
-					</label>
-					<p class="hint">Same graph as latest; import would normally be skipped. Check to create v2 (e.g. to refresh detected inputs).</p>
-				{/if}
-				<button type="button" onclick={handleCreateWorkflow} disabled={creating} class="primary">
-					{creating ? 'Creating…' : (preview.is_new_workflow ? 'Create Workflow' : 'Import')}
+		<!-- Secondary: Restore from image or audio -->
+		<details class="section media-restore-section">
+			<summary class="media-restore-summary">Or restore from image or audio</summary>
+			<div
+				class="media-restore-inner"
+				class:drag-over={imageDropZoneDragOver}
+				ondragover={(e) => { e.preventDefault(); imageDropZoneDragOver = true; }}
+				ondragleave={() => { imageDropZoneDragOver = false; }}
+				ondrop={(e) => {
+					e.preventDefault();
+					imageDropZoneDragOver = false;
+					handleImageFile(e.dataTransfer?.files ?? null);
+				}}
+			>
+				<input
+					id="import-workflow-file"
+					type="file"
+					accept="image/*,.png,audio/mpeg,.mp3"
+					class="file-input file-input-hidden"
+					bind:this={imageFileInputRef}
+					disabled={imageImporting}
+					onchange={(e) => handleImageFile((e.target as HTMLInputElement).files)}
+					aria-label="Choose image or audio file (PNG or MP3)"
+				/>
+				<p class="media-restore-hint">PNG or MP3 saved from WorkflowUI with embedded metadata can reopen or restore that app.</p>
+				<p class="metadata-status" role="status">
+					Metadata on download: <strong>{data?.embedWorkflowuiMetadataOnDownload ? 'Yes' : 'No'}</strong>
+					· on save: <strong>{data?.embedWorkflowuiMetadataOnSave ? 'Yes' : 'No'}</strong>
+					{#if data?.embedWorkflowuiMetadataOnDownload || data?.embedWorkflowuiMetadataOnSave}
+						— drop those files here to restore.
+					{:else}
+						— enable in backend .env to attach metadata.
+					{/if}
+				</p>
+				<button type="button" class="choose-file-btn" disabled={imageImporting} onclick={(e) => { e.stopPropagation(); chooseImageFile(); }} aria-label="Choose image or audio file">
+					Choose file
 				</button>
-				<p class="hint">Redirects to workflow detail. No app creation.</p>
-			</section>
-		{/if}
+				{#if imageImporting}
+					<span class="selected-file">Importing…</span>
+				{:else if imageImportMessage}
+					<span class="error-text">{imageImportMessage}</span>
+				{:else}
+					<span class="no-file">No file chosen</span>
+				{/if}
+			</div>
+		</details>
 	</aside>
 
 	<div class="panel-right panel-scroll card">
 		{#if importState !== 'preview-ready' || !preview}
-			<p class="muted">Analyze a workflow to see metadata and detected inputs/outputs.</p>
+			<div class="empty-state">
+				<div class="empty-state-icon" aria-hidden="true">
+					<svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+						<path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z" />
+						<polyline points="14 2 14 8 20 8" />
+						<path d="M12 18v-6" />
+						<path d="M9 15l3 3 3-3" />
+					</svg>
+				</div>
+				<h2>Preview your workflow</h2>
+				<ol class="empty-state-steps">
+					<li>Drop a workflow JSON file or paste it on the left.</li>
+					<li>Enter a name and click <strong>Analyze</strong>.</li>
+					<li>Review metadata and detected inputs/outputs here, then <strong>Create workflow</strong>.</li>
+				</ol>
+			</div>
 		{:else}
 			<h2>Graph metadata</h2>
 			<dl class="meta-dl">
@@ -467,22 +445,126 @@
 					</tbody>
 				</table>
 			</div>
+
+			<!-- Actions: schema choice, force version, Create (moved from left) -->
+			<div class="sticky-actions">
+				{#if preview.has_workflow_ui_link}
+					<div class="schema-choice-section">
+						<div class="schema-choice-banner">
+							<p class="schema-choice-banner-headline">WorkflowUI Link node detected</p>
+							<p class="schema-choice-banner-subtext">This workflow contains a WorkflowUI Link node. You can use it as a shorthand for app creation—it exposes only the fields you defined in ComfyUI.</p>
+						</div>
+						<div
+							class="schema-segmented-control"
+							role="tablist"
+							aria-label="Schema source"
+							onkeydown={(e) => {
+								if (e.key === 'ArrowLeft' && !useWorkflowUILink) {
+									e.preventDefault();
+									useWorkflowUILink = true;
+									refetchPreviewWithSchema();
+								} else if (e.key === 'ArrowRight' && useWorkflowUILink) {
+									e.preventDefault();
+									useWorkflowUILink = false;
+									refetchPreviewWithSchema();
+								}
+							}}
+						>
+							<button
+								type="button"
+								role="tab"
+								class="schema-option"
+								class:active={useWorkflowUILink}
+								aria-pressed={useWorkflowUILink}
+								aria-selected={useWorkflowUILink}
+								tabindex={useWorkflowUILink ? 0 : -1}
+								onclick={() => { useWorkflowUILink = true; void refetchPreviewWithSchema(); }}
+							>
+								<span class="schema-option-label">WorkflowUI Link schema</span>
+								<span class="schema-option-desc">Exposes only the fields you defined in the WorkflowUI Link node. Best for workflows designed for app creation.</span>
+							</button>
+							<button
+								type="button"
+								role="tab"
+								class="schema-option"
+								class:active={!useWorkflowUILink}
+								aria-pressed={!useWorkflowUILink}
+								aria-selected={!useWorkflowUILink}
+								tabindex={!useWorkflowUILink ? 0 : -1}
+								onclick={() => { useWorkflowUILink = false; void refetchPreviewWithSchema(); }}
+							>
+								<span class="schema-option-label">Full workflow (all nodes)</span>
+								<span class="schema-option-desc">Uses every detected input from the entire workflow—KSampler, CLIPTextEncode, LoadImage, and more.</span>
+							</button>
+						</div>
+						<p class="schema-cross-hint">You can import the same workflow again later with the other option to switch schema source.</p>
+					</div>
+				{/if}
+				{#if !preview.is_new_workflow && !preview.is_new_version}
+					<label class="force-version-wrap">
+						<input type="checkbox" bind:checked={forceNewVersion} />
+						<span>Create new version anyway</span>
+					</label>
+					<p class="hint">Same graph as latest; import would normally be skipped. Check to create v2 (e.g. to refresh detected inputs).</p>
+				{/if}
+				<button type="button" onclick={handleCreateWorkflow} disabled={creating} class="primary">
+					{creating ? 'Creating…' : 'Complete import and create App'}
+				</button>
+				<p class="hint">Redirects to workflow detail. No app creation.</p>
+			</div>
 		{/if}
 	</div>
 </div>
 
 <style>
+	.page-subline {
+		margin-bottom: 1.25rem;
+	}
 	.section {
 		margin-bottom: 1.25rem;
 	}
-	.import-from-image-section {
-		border-radius: 8px;
-		padding: 0.5rem 0;
+	.section-label {
+		display: block;
+		margin-bottom: 0.5rem;
+		font-weight: 600;
 	}
-	.import-from-image-section.drag-over {
+	.json-drop-zone {
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		justify-content: center;
+		min-height: 140px;
+		padding: 1.25rem;
+		margin-bottom: 0.75rem;
+		border: 2px dashed var(--border);
+		border-radius: var(--radius-lg);
+		background: var(--surface);
+		cursor: pointer;
+		transition: border-color 0.2s ease, background 0.2s ease;
+	}
+	.json-drop-zone:hover {
+		border-color: var(--muted);
+		background: color-mix(in srgb, var(--surface) 95%, var(--accent-soft));
+	}
+	.json-drop-zone.drag-over {
+		border-color: var(--accent);
 		background: var(--accent-soft);
-		outline: 2px dashed var(--accent);
-		outline-offset: 2px;
+		outline: none;
+	}
+	.json-drop-zone-label {
+		font-weight: 500;
+		color: var(--text);
+		text-align: center;
+	}
+	.json-drop-zone-hint {
+		font-size: 0.85rem;
+		color: var(--muted);
+		margin-top: 0.25rem;
+	}
+	.paste-label {
+		font-size: 0.9rem;
+		color: var(--muted);
+		margin-bottom: 0.35rem;
 	}
 	.metadata-status {
 		font-size: 0.85rem;
@@ -500,13 +582,6 @@
 		color: var(--muted);
 		font-size: 0.9rem;
 		margin-bottom: 1rem;
-	}
-	.import-json-options {
-		display: flex;
-		align-items: center;
-		gap: 0.5rem;
-		margin-bottom: 0.5rem;
-		flex-wrap: wrap;
 	}
 	.file-input-hidden {
 		position: absolute;
@@ -549,9 +624,99 @@
 	}
 	.import-textarea {
 		width: 100%;
-		min-height: 180px;
+		min-height: 160px;
 		font-family: ui-monospace, monospace;
 		font-size: 0.85rem;
+	}
+
+	/* Secondary: restore from media (collapsible) */
+	.media-restore-section {
+		border: 1px solid var(--border);
+		border-radius: 8px;
+		background: var(--surface);
+		padding: 0 0.75rem;
+	}
+	.media-restore-summary {
+		list-style: none;
+		cursor: pointer;
+		font-weight: 500;
+		color: var(--muted);
+		font-size: 0.9rem;
+		padding: 0.75rem 0;
+	}
+	.media-restore-summary::-webkit-details-marker {
+		display: none;
+	}
+	.media-restore-summary::before {
+		content: '▸ ';
+		display: inline-block;
+		transition: transform 0.2s ease;
+	}
+	.media-restore-section[open] .media-restore-summary::before {
+		transform: rotate(90deg);
+	}
+	.media-restore-inner {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: 0.5rem;
+		padding-bottom: 0.75rem;
+		border-radius: 6px;
+	}
+	.media-restore-inner.drag-over {
+		background: var(--accent-soft);
+		outline: 2px dashed var(--accent);
+		outline-offset: 2px;
+	}
+	.media-restore-hint {
+		width: 100%;
+		font-size: 0.85rem;
+		color: var(--muted);
+		margin: 0 0 0.25rem 0;
+	}
+
+	/* Right panel empty state */
+	.empty-state {
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		text-align: center;
+		padding: 2rem 1rem;
+	}
+	.empty-state-icon {
+		color: var(--muted);
+		margin-bottom: 1rem;
+	}
+	.empty-state h2 {
+		font-size: 1.1rem;
+		margin: 0 0 1rem 0;
+	}
+	.empty-state-steps {
+		text-align: left;
+		margin: 0;
+		padding-left: 1.25rem;
+		font-size: 0.95rem;
+		color: var(--muted);
+		line-height: 1.6;
+	}
+	.empty-state-steps li {
+		margin-bottom: 0.5rem;
+	}
+
+	/* Sticky actions on right when preview ready */
+	.sticky-actions {
+		margin-top: 1.5rem;
+		padding-top: 1rem;
+		padding-bottom: 0.5rem;
+		border-top: 1px solid var(--border);
+		position: sticky;
+		bottom: 0;
+		background: var(--card);
+	}
+	.sticky-actions .hint {
+		font-size: 0.8rem;
+		color: var(--muted);
+		margin-top: 0.5rem;
 	}
 	.status-section {
 		padding: 0.75rem;
