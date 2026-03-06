@@ -26,6 +26,7 @@ def _workflow_ui_link_widget_order() -> list[str]:
 _WIDGET_ORDER: dict[str, list[str]] = {
     WORKFLOW_UI_LINK_CLASS: _workflow_ui_link_widget_order(),
     "WorkflowUI Link": _workflow_ui_link_widget_order(),
+    # Overrides when ComfyUI widget order differs from NODE_SPECS fixedInputs key order
     "EmptyLatentImage": ["width", "height", "batch_size"],
     "EmptySD3LatentImage": ["width", "height", "batch_size"],
     "SDXLEmptyLatentSizePicker+": ["resolution", "batch_size", "width_override", "height_override"],
@@ -100,6 +101,10 @@ def _normalize_to_api_format(workflow: dict[str, Any]) -> dict[str, Any]:
             inputs = dict(widgets_values)
         elif isinstance(widgets_values, list):
             widget_order = _WIDGET_ORDER.get(class_type)
+            if not widget_order:
+                spec = NODE_SPECS.get(class_type)
+                if isinstance(spec, dict) and isinstance(spec.get("fixedInputs"), dict):
+                    widget_order = list(spec["fixedInputs"].keys())
             if widget_order:
                 for idx, field in enumerate(widget_order):
                     if idx < len(widgets_values):

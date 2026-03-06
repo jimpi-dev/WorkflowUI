@@ -66,6 +66,56 @@ def get_version():
     return {"engine_version": ENGINE_VERSION}
 
 
+@router.get("/comfyui/workflows")
+def get_comfyui_workflows():
+    """Proxy to ComfyUI WorkflowUI plugin: list workflows available for import."""
+    import requests
+    base = (COMFY_URL or "").rstrip("/")
+    if not base:
+        return {"workflows": [], "error": "ComfyUI URL not configured. Set COMFYUI_URL in the backend .env."}
+    url = f"{base}/workflowui/workflows"
+    try:
+        r = requests.get(url, timeout=10)
+        r.raise_for_status()
+        data = r.json()
+    except requests.ConnectionError:
+        return {"workflows": [], "error": f"Cannot reach ComfyUI at {base}. Is it running?"}
+    except requests.Timeout:
+        return {"workflows": [], "error": f"ComfyUI at {base} did not respond in time."}
+    except requests.RequestException as e:
+        return {"workflows": [], "error": f"ComfyUI request failed: {e!s}"}
+    except Exception as e:
+        return {"workflows": [], "error": str(e)}
+    if isinstance(data, list):
+        return {"workflows": data}
+    if isinstance(data, dict) and "workflows" in data:
+        return {"workflows": data["workflows"] if isinstance(data["workflows"], list) else []}
+    return {"workflows": []}
+
+
+@router.get("/comfyui/workflows/{workflow_id}")
+def get_comfyui_workflow(workflow_id: str):
+    """Fetch a single workflow (name + graph) from ComfyUI plugin for preview/load. Does not create workflow or app."""
+    import requests
+    base = (COMFY_URL or "").rstrip("/")
+    if not base:
+        raise HTTPException(status_code=503, detail="ComfyUI URL not configured")
+    url = f"{base}/workflowui/workflows/{requests.utils.quote(workflow_id, safe='')}"
+    try:
+        r = requests.get(url, timeout=15)
+        r.raise_for_status()
+        data = r.json()
+    except requests.RequestException as e:
+        raise HTTPException(status_code=502, detail=f"ComfyUI plugin unreachable: {e!s}") from e
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=502, detail="ComfyUI plugin returned invalid response")
+    graph = data.get("graph")
+    name = data.get("name") or workflow_id or "Imported from ComfyUI"
+    if not isinstance(graph, dict) or not graph:
+        raise HTTPException(status_code=502, detail="ComfyUI plugin did not return a valid workflow graph")
+    return {"name": (name or "Imported from ComfyUI").strip() or "Imported from ComfyUI", "graph": graph}
+
+
 @router.patch("/admin/media-storage")
 def patch_media_storage(body: dict):
     if not isinstance(body, dict):
