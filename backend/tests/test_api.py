@@ -13,6 +13,16 @@ def test_get_workflow_definitions_empty(client):
     assert r.json() == []
 
 
+def test_get_config_returns_workflowui_plugin_incompatible_when_plugin_below_minimum(client):
+    with patch("routers.config.get_workflowui_plugin_status", return_value=(False, False, True)):
+        r = client.get("/config")
+    assert r.status_code == 200
+    data = r.json()
+    assert data.get("workflowuiPluginAvailable") is False
+    assert data.get("workflowuiPluginIncompatible") is True
+    assert data.get("workflowuiPluginMinVersion") == "1.0.10"
+
+
 def test_import_preview_success(client):
     r = client.post(
         "/import/preview",

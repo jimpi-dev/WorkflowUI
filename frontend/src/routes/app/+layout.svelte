@@ -27,14 +27,12 @@
 		return () => cancelAnimationFrame(id);
 	});
 
-	// URL drives project context: ?project=id → that project. Do not auto-select Quick runs so the project selector can show when no choice exists.
 	$effect(() => {
 		const fromUrl = data.projectFromUrl;
 		if (fromUrl?.id && fromUrl?.name) {
 			activeProject.select(fromUrl.id, fromUrl.name);
 		}
 	});
-	// Sync active project to URL so /app/[id] shows ?project=id (skip for Legacy and Quick runs—no project in URL)
 	$effect(() => {
 		if (!browser || !data.workflowId || !currentProject || currentProject.id === QUICK_RUNS_PROJECT_ID) return;
 		const projectInUrl = $page.url.searchParams.get('project');
@@ -44,7 +42,6 @@
 		const newUrl = $page.url.pathname + '?' + params.toString();
 		goto(newUrl, { replaceState: true, noScroll: true });
 	});
-	// Show selector when user has not chosen a project yet, or when "Switch project" was clicked in header
 	let projectSelectorOpenValue = $state(false);
 	$effect(() => {
 		const unsub = projectSelectorOpen.subscribe((v) => (projectSelectorOpenValue = v));
@@ -52,7 +49,6 @@
 	});
 	let showProjectSelector = $derived(browser && (currentProject === null || projectSelectorOpenValue));
 
-	// Sync shared header with app context (app name + project + header color) for the single AppHeader in root layout
 	$effect(() => {
 		const workflowId = data.workflowId ?? null;
 		const current = workflowId ? data.workflows?.find((w) => w.id === workflowId) : null;
@@ -84,7 +80,6 @@
 			});
 	}
 
-	// Fetch project detail for metadata in bracket when project is selected (skip for Quick runs)
 	$effect(() => {
 		const id = currentProject?.id;
 		if (!id || id === QUICK_RUNS_PROJECT_ID) {
@@ -94,7 +89,6 @@
 		refetchProjectDetail(id);
 	});
 
-	// Refetch when a run completes so run_count in bracket stays in sync
 	$effect(() => {
 		const id = currentProject?.id;
 		if (!id) return;
