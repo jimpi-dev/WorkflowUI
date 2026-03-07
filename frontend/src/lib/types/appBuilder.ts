@@ -212,8 +212,6 @@ export function moveOutputNodeOrder(draft: AppDraft, nodeId: string, direction: 
 export function setMasterSeedInputKey(draft: AppDraft, key: string | null): void {
 	draft.masterSeedInputKey = key && key.trim() ? key.trim() : null;
 }
-
-/** Prefer input with name "seed" (case-insensitive) for master seed; else first seed input. */
 export function getDefaultMasterSeedInputKey(
 	inputs: { key?: string; type?: string; name?: string }[]
 ): string | null {

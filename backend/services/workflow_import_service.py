@@ -6,7 +6,6 @@ from typing import Any
 from services.graph_hash import graph_hash
 from services.workflow_analyzer import (
     analyze_workflow,
-    _normalize_to_api_format,
     workflow_contains_workflow_ui_link,
 )
 
@@ -126,7 +125,6 @@ class WorkflowImportService:
         if not isinstance(graph, dict) or not graph:
             raise ValueError("graph must be a non-empty object")
 
-        graph = _normalize_to_api_format(graph)
         new_hash = graph_hash(graph)
         has_link, _ = workflow_contains_workflow_ui_link(graph)
         analyzed = analyze_workflow(graph, use_workflow_ui_link=use_workflow_ui_link and has_link)
