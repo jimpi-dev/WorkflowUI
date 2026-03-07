@@ -68,6 +68,16 @@ def get_version():
     return {"engine_version": ENGINE_VERSION}
 
 
+def _is_excluded_comfyui_workflow_id(workflow_id: str) -> bool:
+    if not workflow_id or not isinstance(workflow_id, str):
+        return True
+    s = workflow_id.strip()
+    if not s:
+        return True
+    basename = s.replace("\\", "/").split("/")[-1]
+    return basename.startswith(".")
+
+
 @router.get("/comfyui/workflows")
 def get_comfyui_workflows():
     """Proxy to ComfyUI WorkflowUI plugin: list workflows available for import."""
@@ -89,10 +99,19 @@ def get_comfyui_workflows():
     except Exception as e:
         return {"workflows": [], "error": str(e)}
     if isinstance(data, list):
-        return {"workflows": data}
-    if isinstance(data, dict) and "workflows" in data:
-        return {"workflows": data["workflows"] if isinstance(data["workflows"], list) else []}
-    return {"workflows": []}
+        raw = data
+    elif isinstance(data, dict) and "workflows" in data:
+        raw = data["workflows"] if isinstance(data["workflows"], list) else []
+    else:
+        raw = []
+
+    def _get_id(item: Any) -> str:
+        if isinstance(item, dict):
+            return str(item.get("id") or item.get("label") or "")
+        return str(item) if item is not None else ""
+
+    workflows = [w for w in raw if not _is_excluded_comfyui_workflow_id(_get_id(w))]
+    return {"workflows": workflows}
 
 
 @router.get("/comfyui/workflows/{workflow_id}")
