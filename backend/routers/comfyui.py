@@ -1,10 +1,32 @@
 import requests
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 
 from dependencies import COMFY_URL
 
 router = APIRouter()
+
+
+@router.get("/comfyui/logs/raw")
+def get_comfyui_logs_raw():
+    """Proxy to ComfyUI internal logs API (live terminal output). Requires ComfyUI Nov 2024+."""
+    base = (COMFY_URL or "").rstrip("/")
+    if not base:
+        raise HTTPException(status_code=503, detail="ComfyUI URL not configured")
+    url = f"{base}/internal/logs/raw"
+    try:
+        res = requests.get(url, timeout=10)
+        res.raise_for_status()
+        return res.json()
+    except requests.HTTPError as e:
+        if e.response is not None and e.response.status_code == 404:
+            raise HTTPException(
+                status_code=502,
+                detail="ComfyUI logs API not found. Ensure ComfyUI supports live terminal output (Nov 2024+).",
+            ) from e
+        raise HTTPException(status_code=502, detail=f"ComfyUI logs request failed: {e!s}") from e
+    except requests.RequestException as e:
+        raise HTTPException(status_code=502, detail=f"ComfyUI unreachable: {e!s}") from e
 
 
 @router.get("/object_info")
