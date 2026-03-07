@@ -8,6 +8,45 @@
 	const apiBase = getApiBase() || '';
 	const definitions = $derived(data?.definitions ?? []);
 
+	type SortKey = 'import_date' | 'versions' | 'apps';
+	let filter = $state('');
+	let sortBy = $state<SortKey>('import_date');
+	let sortDir = $state<'asc' | 'desc'>('desc');
+
+	function matchesFilter(wf: { name?: string | null }): boolean {
+		const terms = filter.trim().toLowerCase().split(/\s+/).filter(Boolean);
+		if (terms.length === 0) return true;
+		const name = (wf.name ?? '').toLowerCase();
+		return terms.some((t) => name.includes(t));
+	}
+
+	const filtered = $derived(definitions.filter(matchesFilter));
+	const sorted = $derived.by(() => {
+		const list = [...filtered];
+		const mult = sortDir === 'asc' ? 1 : -1;
+		switch (sortBy) {
+			case 'import_date':
+				list.sort((a, b) => mult * ((a.created_at ?? 0) - (b.created_at ?? 0)));
+				break;
+			case 'versions':
+				list.sort((a, b) => mult * ((a.version_count ?? 0) - (b.version_count ?? 0)));
+				break;
+			case 'apps':
+				list.sort((a, b) => mult * ((a.app_count ?? 0) - (b.app_count ?? 0)));
+				break;
+		}
+		return list;
+	});
+
+	function handleSortClick(key: SortKey) {
+		if (sortBy === key) {
+			sortDir = sortDir === 'asc' ? 'desc' : 'asc';
+		} else {
+			sortBy = key;
+			sortDir = 'desc';
+		}
+	}
+
 	type DeleteDialogWorkflow = { id: string; name: string; app_count: number };
 	/** When set, show delete confirm dialog (0 apps) or hint-only dialog (>0 apps). */
 	let deleteDialogWf = $state<DeleteDialogWorkflow | null>(null);
@@ -90,13 +129,40 @@
 				<h1>Workflows</h1>
 				<button type="button" class="btn-import" onclick={() => goto('/import')}>Import workflow</button>
 			</div>
-			<p class="muted table-sub">Imported workflow definitions. Open to manage versions and apps, download to export JSON.</p>
+			<p class="muted table-sub">
+				Imported workflow definitions. Open to manage versions and apps, download to export JSON.
+				{#if definitions.length > 0}
+					<span class="import-count" aria-live="polite">
+						{#if filter.trim()}
+							· Showing {filtered.length} of {definitions.length} workflow{definitions.length === 1 ? '' : 's'}
+						{:else}
+							· {definitions.length} workflow{definitions.length === 1 ? '' : 's'}
+						{/if}
+					</span>
+				{/if}
+			</p>
+			{#if definitions.length > 0}
+				<div class="search-wrap">
+					<svg class="search-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+						<circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
+					</svg>
+					<input
+						type="search"
+						placeholder="Filter by name (e.g. flux zit)"
+						bind:value={filter}
+						class="search-input"
+						aria-label="Filter workflows by name"
+					/>
+				</div>
+			{/if}
 		</div>
 		{#if definitions.length === 0}
 			<p class="empty-state">No imported workflows yet. <a href="/import">Import a workflow</a> to get started.</p>
+		{:else if sorted.length === 0}
+			<p class="empty-state">No matching workflows. Try a different filter.</p>
 		{:else if isMobile}
 			<div class="workflow-cards">
-				{#each definitions as wf}
+				{#each sorted as wf}
 					<div class="workflow-card">
 						<div class="workflow-card-header">
 							<a class="table-link" href="/workflows/{wf.id}">{wf.name}</a>
@@ -126,14 +192,35 @@
 					<thead>
 						<tr>
 							<th>Workflow</th>
-							<th>Import date</th>
-							<th class="num">Versions</th>
-							<th class="num">Apps</th>
+							<th>
+								<button type="button" class="th-sort-btn" class:active={sortBy === 'import_date'} onclick={() => handleSortClick('import_date')} aria-label="Sort by import date">
+									Import date
+									{#if sortBy === 'import_date'}
+										<span class="sort-arrow" aria-hidden="true">{sortDir === 'asc' ? '↑' : '↓'}</span>
+									{/if}
+								</button>
+							</th>
+							<th class="num">
+								<button type="button" class="th-sort-btn" class:active={sortBy === 'versions'} onclick={() => handleSortClick('versions')} aria-label="Sort by versions">
+									Versions
+									{#if sortBy === 'versions'}
+										<span class="sort-arrow" aria-hidden="true">{sortDir === 'asc' ? '↑' : '↓'}</span>
+									{/if}
+								</button>
+							</th>
+							<th class="num">
+								<button type="button" class="th-sort-btn" class:active={sortBy === 'apps'} onclick={() => handleSortClick('apps')} aria-label="Sort by apps">
+									Apps
+									{#if sortBy === 'apps'}
+										<span class="sort-arrow" aria-hidden="true">{sortDir === 'asc' ? '↑' : '↓'}</span>
+									{/if}
+								</button>
+							</th>
 							<th class="actions">Actions</th>
 						</tr>
 					</thead>
 					<tbody>
-						{#each definitions as wf}
+						{#each sorted as wf}
 							<tr>
 								<td>
 									<a class="table-link" href="/workflows/{wf.id}">{wf.name}</a>
@@ -253,6 +340,76 @@
 		margin-top: 0.25rem;
 		margin-bottom: 0;
 	}
+	.import-count {
+		display: inline-block;
+		margin-left: 0.5rem;
+		font-variant-numeric: tabular-nums;
+	}
+	.search-wrap {
+		position: relative;
+		margin-top: 0.75rem;
+		max-width: 320px;
+	}
+	.search-icon {
+		position: absolute;
+		left: 0.75rem;
+		top: 50%;
+		transform: translateY(-50%);
+		pointer-events: none;
+		color: var(--muted);
+	}
+	.search-input {
+		width: 100%;
+		padding: 0.5rem 0.75rem 0.5rem 2.25rem;
+		background: var(--surface);
+		border: 1px solid var(--border);
+		border-radius: 6px;
+		font-size: 0.9rem;
+		color: var(--text);
+	}
+	.search-input::placeholder {
+		color: var(--muted);
+	}
+	.search-input:focus {
+		outline: none;
+		border-color: var(--accent);
+		box-shadow: 0 0 0 2px var(--accent-soft);
+	}
+	.th-sort-btn {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.4rem;
+		padding: 0.25rem 0.5rem;
+		margin: -0.25rem -0.5rem;
+		background: none;
+		border: none;
+		border-radius: 6px;
+		font: inherit;
+		color: inherit;
+		cursor: pointer;
+		text-transform: uppercase;
+		letter-spacing: 0.04em;
+		font-size: 0.7rem;
+		font-weight: 600;
+		transition: color 0.15s ease, background 0.15s ease;
+	}
+	.th-sort-btn:hover {
+		color: var(--text);
+		background: color-mix(in srgb, var(--accent) 8%, transparent);
+	}
+	.th-sort-btn.active {
+		color: var(--accent);
+	}
+	.th-sort-btn.active .sort-arrow {
+		opacity: 1;
+	}
+	.sort-arrow {
+		display: inline-flex;
+		align-items: center;
+		font-size: 0.7rem;
+		opacity: 0.7;
+		font-weight: 700;
+	}
 	.empty-state {
 		color: var(--muted);
 	}
@@ -312,14 +469,20 @@
 		color: var(--accent);
 	}
 	.badge-from-image {
-		display: inline-block;
+		--badge-color: var(--accent);
+		display: inline-flex;
+		align-items: center;
+		gap: 0.25rem;
 		margin-left: 0.5rem;
-		padding: 0.15rem 0.45rem;
-		font-size: 0.7rem;
-		border-radius: 4px;
-		background: var(--accent-soft);
-		color: var(--accent);
-		font-weight: 500;
+		padding: 0.15rem 0.5rem;
+		font-size: 0.65rem;
+		font-weight: 600;
+		letter-spacing: 0.04em;
+		text-transform: uppercase;
+		border-radius: 999px;
+		background: color-mix(in srgb, var(--badge-color) 12%, transparent);
+		border: 1px solid color-mix(in srgb, var(--badge-color) 35%, transparent);
+		color: color-mix(in srgb, var(--badge-color) 90%, var(--text));
 	}
 	.table-id {
 		display: block;

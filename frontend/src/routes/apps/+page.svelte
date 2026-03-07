@@ -1513,13 +1513,19 @@
 		flex-wrap: wrap;
 	}
 	.badge-from-image {
-		display: inline-block;
-		padding: 0.15rem 0.45rem;
-		font-size: 0.7rem;
-		border-radius: 4px;
-		background: var(--accent-soft);
-		color: var(--accent);
-		font-weight: 500;
+		--badge-color: var(--accent);
+		display: inline-flex;
+		align-items: center;
+		gap: 0.25rem;
+		padding: 0.15rem 0.5rem;
+		font-size: 0.65rem;
+		font-weight: 600;
+		letter-spacing: 0.04em;
+		text-transform: uppercase;
+		border-radius: 999px;
+		background: color-mix(in srgb, var(--badge-color) 12%, transparent);
+		border: 1px solid color-mix(in srgb, var(--badge-color) 35%, transparent);
+		color: color-mix(in srgb, var(--badge-color) 90%, var(--text));
 	}
 	.app-name {
 		margin: 0;
