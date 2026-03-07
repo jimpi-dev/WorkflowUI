@@ -2,6 +2,7 @@
 	import { getApiBase, appConfig } from '$lib/config';
 	import { onMount, onDestroy } from 'svelte';
 	import DbSizeBar from '$lib/components/DbSizeBar.svelte';
+	import { consolePanelOpen } from '$lib/stores/consolePanelOpen';
 
 	interface Status {
 		queue: { running: number; pending: number };
@@ -182,6 +183,22 @@
 		<span class="status-item status-loading">Queue: —</span>
 	{/if}
 	<span class="status-sep" aria-hidden="true">|</span>
+	<button
+		type="button"
+		class="status-item status-console-btn"
+		class:active={$consolePanelOpen}
+		onclick={() => consolePanelOpen.update((v) => !v)}
+		title={$consolePanelOpen ? 'Close ComfyUI console' : 'Open ComfyUI console'}
+		aria-label={$consolePanelOpen ? 'Close console' : 'Open console'}
+		aria-pressed={$consolePanelOpen}
+	>
+		<svg class="console-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+			<polyline points="4 17 10 11 4 5"></polyline>
+			<line x1="12" y1="19" x2="20" y2="19"></line>
+		</svg>
+		<span class="console-btn-text">Console</span>
+	</button>
+	<span class="status-sep" aria-hidden="true">|</span>
 	<span class="status-item db-size">
 		<DbSizeBar
 			sizeBytes={dbSizeBytes}
@@ -269,6 +286,33 @@
 		opacity: 0.85;
 	}
 
+	.status-console-btn {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.25rem;
+		padding: 0.2rem 0.4rem;
+		border: none;
+		border-radius: 6px;
+		background: transparent;
+		color: inherit;
+		font-size: inherit;
+		cursor: pointer;
+		opacity: 0.85;
+	}
+	.status-console-btn:hover {
+		opacity: 1;
+		background: color-mix(in srgb, var(--accent) 15%, transparent);
+	}
+	.status-console-btn.active {
+		color: var(--accent);
+		opacity: 1;
+	}
+	.console-icon {
+		width: 14px;
+		height: 14px;
+		flex-shrink: 0;
+	}
+
 	@media (max-width: 639px) {
 		.status-bar {
 			flex-wrap: wrap;
@@ -293,6 +337,9 @@
 		.plugin-state-dot {
 			width: 10px;
 			height: 10px;
+		}
+		.console-btn-text {
+			display: none;
 		}
 	}
 </style>

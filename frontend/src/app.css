@@ -31,6 +31,13 @@
     --seed-overlay-bg-hover: rgba(0, 0, 0, 0.75);
     --seed-overlay-text: #fff;
     --seed-overlay-border: transparent;
+
+    /* CONSOLE (dark) */
+    --console-bg: #0d1117;
+    --console-text: #e6edf3;
+    --console-muted: #8b949e;
+    --console-error: #f85149;
+    --console-border: rgba(255, 255, 255, 0.08);
 }
 [data-theme="light"] {
     --bg: #eef2f7;
@@ -55,6 +62,13 @@
     --seed-overlay-bg-hover: rgba(255, 255, 255, 0.95);
     --seed-overlay-text: #0f172a;
     --seed-overlay-border: rgba(15, 23, 42, 0.12);
+
+    /* CONSOLE (light) */
+    --console-bg: #f0f3f6;
+    --console-text: #1f2328;
+    --console-muted: #656d76;
+    --console-error: #cf222e;
+    --console-border: rgba(31, 35, 40, 0.12);
 }
 
 * {
