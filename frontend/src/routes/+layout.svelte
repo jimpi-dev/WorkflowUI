@@ -6,6 +6,8 @@
 	import { clearHeaderAppContext } from '$lib/stores/headerAppContext';
 	import AppHeader from '$lib/components/AppHeader.svelte';
 	import ComfyUIStatusBar from '$lib/components/ComfyUIStatusBar.svelte';
+	import ComfyUIConsole from '$lib/components/ComfyUIConsole.svelte';
+	import { consolePanelOpen } from '$lib/stores/consolePanelOpen';
 	import { onMount } from 'svelte';
 	let { children } = $props();
 
@@ -48,9 +50,14 @@
 		{@render children()}
 	</main>
 
-	<footer class="app-footer" bind:this={footerEl}>
-		<ComfyUIStatusBar />
-	</footer>
+	<div class="app-footer-area">
+		{#if $consolePanelOpen}
+			<ComfyUIConsole open={$consolePanelOpen} onclose={() => consolePanelOpen.set(false)} />
+		{/if}
+		<footer class="app-footer" bind:this={footerEl}>
+			<ComfyUIStatusBar />
+		</footer>
+	</div>
 
 	{#if $appBooting}
 		<div class="app-booting-mask" role="status" aria-live="polite" aria-label="Loading app">
@@ -88,6 +95,11 @@
 		flex-direction: column;
 	}
 
+	.app-footer-area {
+		flex-shrink: 0;
+		display: flex;
+		flex-direction: column;
+	}
 	/* Footer always at bottom of layout, never overlays content. Height var used by app page for mobile run bar offset. */
 	.app-footer {
 		flex-shrink: 0;
