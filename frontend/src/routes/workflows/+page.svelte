@@ -48,13 +48,21 @@
 	}
 
 	type DeleteDialogWorkflow = { id: string; name: string; app_count: number };
-	/** When set, show delete confirm dialog (0 apps) or hint-only dialog (>0 apps). */
 	let deleteDialogWf = $state<DeleteDialogWorkflow | null>(null);
 	let deleteLoading = $state(false);
 	let deleteError = $state<string | null>(null);
 
 	let isMobile = $state(false);
+	let importWarning = $state<string | null>(null);
 	onMount(() => {
+		try {
+			const w = sessionStorage.getItem('workflowui_import_warning');
+			if (typeof w === 'string' && w) {
+				importWarning = w;
+				sessionStorage.removeItem('workflowui_import_warning');
+			}
+		} catch {
+		}
 		const mq = window.matchMedia('(max-width: 639px)');
 		const set = () => { isMobile = mq.matches; };
 		set();
@@ -62,7 +70,6 @@
 		return () => mq.removeEventListener('change', set);
 	});
 
-	/** Backend stores created_at in milliseconds. Show e.g. "18 Feb 2025, 10:30 AM". */
 	function formatImportDate(createdAt: number | null | undefined): string {
 		if (createdAt == null || createdAt === 0) return '—';
 		const ms = createdAt < 1e12 ? createdAt * 1000 : createdAt;
@@ -124,6 +131,12 @@
 
 <div class="workflows-page page">
 	<div class="panel-scroll card">
+		{#if importWarning}
+			<div class="import-warning-banner" role="alert">
+				<span>{importWarning}</span>
+				<button type="button" class="import-warning-dismiss" onclick={() => (importWarning = null)} aria-label="Dismiss">×</button>
+			</div>
+		{/if}
 		<div class="page-header">
 			<div class="page-title-row">
 				<h1>Workflows</h1>
@@ -305,6 +318,33 @@
 		flex: 1;
 		min-height: 0;
 		overflow-y: auto;
+	}
+	.import-warning-banner {
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+		padding: 0.75rem 1rem;
+		margin-bottom: 1rem;
+		background: color-mix(in srgb, var(--warning) 20%, transparent);
+		border: 1px solid var(--warning);
+		border-radius: 6px;
+		color: var(--warning);
+		font-size: 0.9rem;
+	}
+	.import-warning-banner span {
+		flex: 1;
+	}
+	.import-warning-dismiss {
+		background: none;
+		border: none;
+		font-size: 1.25rem;
+		line-height: 1;
+		cursor: pointer;
+		opacity: 0.8;
+		padding: 0.25rem;
+	}
+	.import-warning-dismiss:hover {
+		opacity: 1;
 	}
 	.page-header {
 		margin-bottom: 1rem;
@@ -538,7 +578,6 @@
 		color: var(--warning);
 	}
 
-	/* Mobile card layout: only when isMobile (≤639px); desktop always sees table */
 	.workflow-cards {
 		display: flex;
 		flex-direction: column;
@@ -582,7 +621,6 @@
 		min-height: 44px;
 	}
 
-	/* Delete workflow dialog (same style as DeleteProjectDialog / delete-run-dialog) */
 	.dialog-backdrop {
 		position: fixed;
 		inset: 0;

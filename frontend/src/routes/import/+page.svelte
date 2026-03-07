@@ -36,20 +36,16 @@
 	let comfyuiSelectedId = $state<string>('');
 	let comfyuiImporting = $state(false);
 	let comfyuiImportError = $state('');
-	/** Client-side workflow list (so Refresh can update without full page reload) */
 	let comfyuiWorkflowsList = $state<{ id: string; label: string }[]>([]);
-	/** Error from last fetch (so we show why list is empty) */
 	let comfyuiWorkflowsError = $state<string | null>(null);
 	let comfyuiWorkflowsLoading = $state(false);
 	let comfyuiFilter = $state('');
 
 	const apiBase = getApiBase() || '';
-	/** Use client list if we have one, else fall back to load data */
 	const comfyuiWorkflows = $derived(
 		comfyuiWorkflowsList.length > 0 ? comfyuiWorkflowsList : (data?.comfyuiWorkflows ?? [])
 	);
 	const comfyuiErrorToShow = $derived(comfyuiWorkflowsError ?? data?.comfyuiWorkflowsError ?? null);
-	/** Workflows filtered by comfyuiFilter (match id or label, case-insensitive). */
 	const comfyuiWorkflowsFiltered = $derived.by(() => {
 		const q = (comfyuiFilter || '').trim().toLowerCase();
 		if (!q) return comfyuiWorkflows;
@@ -119,7 +115,6 @@
 			});
 			if (res.ok) preview = await res.json();
 		} catch {
-			// ignore
 		}
 	}
 
@@ -152,6 +147,12 @@
 				return;
 			}
 			const data = await res.json();
+			if (data.warning && typeof data.warning === 'string') {
+				try {
+					sessionStorage.setItem('workflowui_import_warning', data.warning);
+				} catch {
+				}
+			}
 			await goto(`/workflows/${data.workflow_id}`);
 		} catch (e) {
 			setState('error', e instanceof Error ? e.message : String(e));
@@ -266,7 +267,6 @@
 		}
 	}
 
-	/** Sync initial load data into client state so we can later overwrite with Refresh. */
 	$effect(() => {
 		const list = data?.comfyuiWorkflows;
 		const err = data?.comfyuiWorkflowsError;
@@ -304,7 +304,6 @@
 		}
 	}
 
-	/** Load selected ComfyUI workflow into the form and run preview so user can review detected nodes and then click Create workflow. */
 	async function handleLoadWorkflowFromComfyui() {
 		const id = comfyuiSelectedId?.trim();
 		if (!id) {
@@ -800,7 +799,6 @@
 		font-size: 0.85rem;
 	}
 
-	/* Secondary: restore from media (collapsible) */
 	.media-restore-section {
 		border: 1px solid var(--border);
 		border-radius: 8px;
@@ -885,7 +883,6 @@
 		margin: 0 0 0.25rem 0;
 	}
 
-	/* Right panel empty state */
 	.empty-state {
 		display: flex;
 		flex-direction: column;
@@ -913,7 +910,6 @@
 		margin-bottom: 0.5rem;
 	}
 
-	/* Sticky actions on right when preview ready */
 	.sticky-actions {
 		margin-top: 1.5rem;
 		padding-top: 1rem;

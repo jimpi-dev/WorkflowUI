@@ -1585,7 +1585,6 @@
 		gap: 0.35rem 0.75rem;
 		margin-top: 0;
 		margin-bottom: 0;
-		/* Match .action-btn vertical padding (0.4rem) so box and label height align with buttons */
 		padding: 0.4rem 0.6rem;
 		box-sizing: border-box;
 		display: inline-flex;

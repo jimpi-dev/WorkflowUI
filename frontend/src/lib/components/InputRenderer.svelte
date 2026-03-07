@@ -1008,7 +1008,7 @@ import VaeCombo from './VaeCombo.svelte';
 
     .form-row > * {
         flex: 1;
-        min-width: 0; /* verhindert overflow bugs */
+        min-width: 0;
     }
 
     .lora-stack-wrapper {

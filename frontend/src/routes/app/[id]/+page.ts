@@ -30,7 +30,6 @@ export const load = async ({ params, fetch, url }) => {
 			sendFromOutput = url.searchParams.get('send_from_output');
 		} catch {
 		}
-		// cache: 'no-store' so the browser doesn't return cached SPA HTML from the document request to the same URL
 		const [appRes, cfgRes] = await Promise.all([
 			fetch(`${apiBase}/app/${params.id}`, { cache: 'no-store' }),
 			fetch(`${apiBase}/config`, { cache: 'no-store' })
@@ -51,7 +50,6 @@ export const load = async ({ params, fetch, url }) => {
 		if (appRes.status === 404) {
 			return { appRemoved: true, workflowId: params.id, comfyuiDeleteSupported, sendFromPreload: null };
 		}
-		// If we get 200 but response is HTML (e.g. browser returned cached SPA from document request to same URL), treat as app not found.
 		const contentType = appRes.headers.get("content-type") ?? "";
 		if (appRes.ok && contentType.toLowerCase().includes("text/html")) {
 			return { appRemoved: true, workflowId: params.id, comfyuiDeleteSupported, sendFromPreload: null };
@@ -61,11 +59,9 @@ export const load = async ({ params, fetch, url }) => {
 			try {
 				appData = await appRes.json();
 			} catch {
-				// Non-JSON response — treat as app not found
 				appData = {} as { workflow_version?: unknown; app?: unknown };
 			}
 			if (!appData?.workflow_version || !appData?.app) {
-				// Invalid or empty response
 			} else {
 			const wv = appData.workflow_version ?? {};
 			const app = appData.app ?? {};
@@ -97,7 +93,6 @@ export const load = async ({ params, fetch, url }) => {
 				}
 				detectedInputs = sorted;
 			}
-			// Apply input visibility (from app builder)
 			if (uiConfig?.visibleInputs && Array.isArray(uiConfig.visibleInputs) && uiConfig.visibleInputs.length > 0) {
 				const visibleSet = new Set(uiConfig.visibleInputs);
 				detectedInputs = detectedInputs.filter((i: { key?: string }) => i.key && visibleSet.has(i.key));
@@ -165,7 +160,6 @@ export const load = async ({ params, fetch, url }) => {
 				}
 			}
 			const bindings = bindingsFromInputs(detectedInputs);
-			// Master seed: pass through from ui_config so runner uses it; AutoForm resolves by key (falls back to first seed if not found).
 			const rawMasterSeed =
 				(uiConfig as Record<string, unknown>)?.masterSeedInputKey ??
 				(uiConfig as Record<string, unknown>)?.master_seed_input_key;
@@ -252,7 +246,6 @@ export const load = async ({ params, fetch, url }) => {
 							}
 						}
 					} catch {
-						// ignore
 					}
 				}
 			}
@@ -273,9 +266,6 @@ export const load = async ({ params, fetch, url }) => {
 			}
 		}
 
-		// /app/:id — the id is always the app slug. GET /app/:slug failed (404 or invalid).
-		// Do not fall back to GET /workflow/:id: that endpoint is for file-based workflows (workflows/*.json),
-		// not for DB-backed apps, so it would 404 and show "Workflow not found" incorrectly.
 		return { appRemoved: true, workflowId: params.id, comfyuiDeleteSupported, sendFromPreload: null };
 	} catch (err) {
 		const message = err instanceof Error ? err.message : String(err);

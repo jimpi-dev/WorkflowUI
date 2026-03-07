@@ -66,6 +66,14 @@
     align-items: start;
 }
 
+/* When supported nodes section is minimized, blog uses full width for better media viewing */
+.home-content.home-content-nodes-minimized {
+    grid-template-columns: 1fr;
+}
+.home-content.home-content-nodes-minimized .home-col-nodes {
+    max-width: 100%;
+}
+
 .home-col {
     min-width: 0;
 }
@@ -195,9 +203,49 @@
 .node-classes-header {
     display: flex;
     align-items: center;
-    justify-content: space-between;
     gap: 0.75rem;
     margin-bottom: 0.35rem;
+    flex-wrap: wrap;
+}
+
+.node-classes-collapse-btn {
+    margin-left: auto;
+    padding: 0.35rem 0.6rem;
+    font-size: 0.85rem;
+    color: var(--muted);
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    cursor: pointer;
+    font: inherit;
+}
+
+.node-classes-collapse-btn:hover {
+    color: var(--text);
+    background: var(--surface);
+    border-color: var(--muted);
+}
+
+.node-classes-collapse-btn:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+}
+
+.node-classes-section-minimized .node-classes-header {
+    margin-bottom: 0;
+}
+
+.node-classes-body {
+    margin-top: 0;
+}
+
+.node-classes-section-minimized .node-classes-body {
+    display: none;
+}
+
+.node-classes-section-minimized {
+    padding: 0.75rem 1rem 0.75rem 1.35rem;
+    position: static;
 }
 
 .node-classes-title {
