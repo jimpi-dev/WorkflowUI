@@ -110,7 +110,6 @@
 	let deleteProjectDialogOpen = $state(false);
 
 	let metadataPanelRunId = $state<string | null>(null);
-	/** 'run' = from run group header (run metadata + snapshot only); 'output' = from image (output context, current behavior) */
 	let metadataPanelMode = $state<'output' | 'run'>('output');
 
 	let deleteRunGroupPending = $state<{ groupId: string; runs: ApiRun[] } | null>(null);
@@ -1288,7 +1287,6 @@
 		}
 		deleteError = null;
 		if (byRun.size > 0) {
-			// total was 0, already handled above
 		} else {
 			await deleteRemoteRunGroup(group);
 		}

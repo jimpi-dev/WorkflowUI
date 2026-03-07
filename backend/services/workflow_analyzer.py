@@ -100,6 +100,10 @@ def _normalize_to_api_format(workflow: dict[str, Any]) -> dict[str, Any]:
             inputs = dict(widgets_values)
         elif isinstance(widgets_values, list):
             widget_order = _WIDGET_ORDER.get(class_type)
+            if not widget_order:
+                spec = NODE_SPECS.get(class_type)
+                if isinstance(spec, dict) and isinstance(spec.get("fixedInputs"), dict):
+                    widget_order = list(spec["fixedInputs"].keys())
             if widget_order:
                 for idx, field in enumerate(widget_order):
                     if idx < len(widgets_values):
@@ -657,7 +661,7 @@ def _workflow_ui_link_field(slot: int, typ: str) -> str:
         return f"input_boolean_{slot}"
     if typ in ("number", "seed"):
         return f"input_number_{slot}"
-    return f"input_text_{slot}"  # text, select, or unknown
+    return f"input_text_{slot}"
 
 
 def _find_input_definitions_fallback(inputs: dict[str, Any]) -> list[dict[str, Any]]:
@@ -840,7 +844,6 @@ def _analyze_workflow_ui_link_node(
 ) -> dict[str, Any]:
     """Build inputs from WorkflowUILink node; outputs from rest of graph (SaveImage etc.)."""
     node_inputs = node.get("inputs") or {}
-    # Prefer structured type_0..7, name_0..7 widgets over JSON input_definitions
     input_defs = _input_definitions_from_type_widgets(node_inputs)
     if not input_defs:
         input_defs = _parse_workflow_ui_link_definitions(node_inputs.get("input_definitions"))
@@ -890,7 +893,6 @@ def _analyze_workflow_ui_link_node(
         inputs.append(inp)
         bindings.append({"key": key, "nodeId": node_id, "field": field})
 
-    # Outputs come from the rest of the graph (SaveImage, VHS_VideoCombine, etc.), not from WorkflowUILink
     outputs: list[dict[str, Any]] = []
     for nid, n in workflow.items():
         if nid == node_id or not isinstance(n, dict):
@@ -942,8 +944,6 @@ def analyze_workflow(workflow: dict[str, Any], use_workflow_ui_link: bool = Fals
             )
             return result
 
-    # When using full workflow mapping, still include WorkflowUILink inputs as entry points
-    # (they feed into other nodes and are the user-defined start of the workflow)
     form_label: str | None = None
     has_link, link_node_id = workflow_contains_workflow_ui_link(workflow)
     if has_link and link_node_id:
