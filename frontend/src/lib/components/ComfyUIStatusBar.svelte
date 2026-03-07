@@ -17,6 +17,7 @@
 	let error = $state<string | null>(null);
 	let workflowuiPluginAvailable = $state<boolean | null>(null);
 	let workflowuiPluginIncompatible = $state(false);
+	let workflowuiPluginMinVersion = $state<string | null>(null);
 
 	const POLL_INTERVAL_MS = 4000;
 	const POLL_INTERVAL_HIDDEN_MS = 12000;
@@ -32,9 +33,14 @@
 			const data = await res.json();
 			workflowuiPluginAvailable = data.workflowuiPluginAvailable === true;
 			workflowuiPluginIncompatible = data.workflowuiPluginIncompatible === true;
+			workflowuiPluginMinVersion =
+				typeof data.workflowuiPluginMinVersion === 'string' && data.workflowuiPluginMinVersion
+					? data.workflowuiPluginMinVersion
+					: null;
 		} catch {
 			workflowuiPluginAvailable = null;
 			workflowuiPluginIncompatible = false;
+			workflowuiPluginMinVersion = null;
 		}
 	}
 
@@ -121,9 +127,17 @@
 	{#if workflowuiPluginAvailable === false}
 		<span class="status-sep" aria-hidden="true">|</span>
 		{#if workflowuiPluginIncompatible}
-			<span class="status-item status-warning plugin-state" role="status" title="Update the WorkflowUI plugin on ComfyUI to the required version for full compatibility.">
+			<span
+				class="status-item status-warning plugin-state"
+				role="status"
+				title={workflowuiPluginMinVersion
+					? `Update the WorkflowUI plugin on ComfyUI to at least version ${workflowuiPluginMinVersion} for full compatibility.`
+					: 'Update the WorkflowUI plugin on ComfyUI to the required version for full compatibility.'}
+			>
 				<span class="plugin-state-dot plugin-state-incompatible" aria-hidden="true"></span>
-				<span class="plugin-state-text">WorkflowUI plugin version incompatible — update the ComfyUI addon for full compatibility.</span>
+				<span class="plugin-state-text">
+					WorkflowUI plugin version incompatible — update the ComfyUI addon to ≥{workflowuiPluginMinVersion ?? 'required version'} for full compatibility.
+				</span>
 			</span>
 		{:else}
 			<span class="status-item status-warning plugin-state" role="status" title="Install or update the WorkflowUI plugin on ComfyUI for more features (e.g. delete on server, media browse).">

@@ -62,17 +62,22 @@ def get_workflowui_plugin_status(comfy_url: str) -> tuple[bool, bool, bool]:
         cap_res = requests.get(f"{base}/workflowui/media/capabilities", timeout=3)
         if cap_res.ok and cap_res.headers.get("content-type", "").startswith("application/json"):
             cap_data = cap_res.json()
-            if isinstance(cap_data, dict) and cap_data.get("workflowui_plugin") is True:
+            workflowui_plugin = cap_data.get("workflowui_plugin") if isinstance(cap_data, dict) else None
+            if isinstance(cap_data, dict) and (workflowui_plugin is True or workflowui_plugin == "true"):
                 delete_supported = bool(cap_data.get("delete") is True)
                 try:
                     ver_res = requests.get(f"{base}/workflowui/version_info", timeout=3)
                     if ver_res.ok and ver_res.headers.get("content-type", "").startswith("application/json"):
                         ver_data = ver_res.json()
                         if isinstance(ver_data, dict):
-                            installed = ver_data.get("workflowui_plugin_version")
-                            if isinstance(installed, str) and installed.strip():
-                                plugin_available = version_meets_minimum(installed.strip(), WORKFLOWUI_PLUGIN_MIN_VERSION)
-                                plugin_incompatible = not plugin_available
+                            raw_version = ver_data.get("workflowui_plugin_version")
+                            if raw_version is not None:
+                                installed = str(raw_version).strip() if not isinstance(raw_version, str) else raw_version.strip()
+                                if installed:
+                                    plugin_available = version_meets_minimum(installed, WORKFLOWUI_PLUGIN_MIN_VERSION)
+                                    plugin_incompatible = not plugin_available
+                                else:
+                                    plugin_incompatible = True
                             else:
                                 plugin_incompatible = True
                         else:
