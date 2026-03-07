@@ -326,7 +326,6 @@
         bottom: 6px;
         left: 6px;
     }
-    /* Audio: place hover actions and seed above the native playback bar so they are not hidden */
     :global(.output-thumb.output-thumb-audio) {
         --thumb-audio-bar-offset: 52px;
     }

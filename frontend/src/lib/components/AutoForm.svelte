@@ -130,7 +130,6 @@
         const backendIds = new Set<string>();
         runIdToBackendIds.set(runId, backendIds);
 
-        // One base random seed per batch; each run gets base + i so N runs get N distinct seeds
         const randomBase =
             parentSeedInput && useRandomSeedPerRun && runs > 0
                 ? Math.floor(Math.random() * (COMFYUI_INT_MAX + 1))
