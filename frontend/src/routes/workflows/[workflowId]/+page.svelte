@@ -7,7 +7,6 @@
 	const versions = $derived(workflow?.versions ?? []);
 	let selectedVersionId = $state<string | null>(null);
 	let downloading = $state(false);
-	// Sync selected version when data loads or when current selection is no longer in list
 	$effect(() => {
 		const v = workflow?.versions ?? [];
 		if (!v.length) return;
@@ -16,7 +15,6 @@
 	});
 	const selectedVersion = $derived(versions.find((v) => v.id === selectedVersionId) ?? versions[0]);
 	const apps = $derived(selectedVersion?.apps ?? []);
-	/** All apps across all versions (for delete confirmation message). */
 	const allApps = $derived(
 		versions.flatMap((v: { apps?: { title: string; slug: string }[] }) => v.apps ?? [])
 	);

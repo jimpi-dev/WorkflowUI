@@ -181,7 +181,6 @@
 				const defaultSeedKey = getDefaultMasterSeedInputKey(version.detected_inputs ?? []);
 				if (defaultSeedKey) setMasterSeedInputKey(appDraft!, defaultSeedKey);
 				for (const input of version.detected_inputs ?? []) {
-					// Do not set label override for WorkflowUILink inputs; their label is already from the node (name field)
 					if (input.key && input.metaTitle && (input as { classType?: string }).classType !== 'WorkflowUILink') {
 						setInputOverride(appDraft!, input.key, { label: input.metaTitle });
 					}

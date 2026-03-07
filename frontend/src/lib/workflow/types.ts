@@ -20,7 +20,6 @@ export type WorkflowInput = {
     default?: any;
     nodeId: string;
     field: string;
-    /** Original name from input_definitions (e.g. "seed" for reserved master seed) */
     name?: string;
     min?: number;
     max?: number;

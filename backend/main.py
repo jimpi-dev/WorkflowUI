@@ -27,8 +27,6 @@ if hasattr(sys.stdout, "reconfigure"):
 from dependencies import get_db
 from routers import config, runs, projects, comfyui, import_, apps, workflows, execution
 
-# Optional API path prefix (e.g. "/api"). When set, all API routes are under this path so a reverse
-# proxy can forward only this path to the backend and serve the SPA for everything else.
 API_PREFIX = (os.environ.get("WORKFLOWUI_API_PREFIX") or "").strip()
 if API_PREFIX and not API_PREFIX.startswith("/"):
     API_PREFIX = "/" + API_PREFIX
@@ -85,7 +83,6 @@ class SPAFallbackMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request, call_next):
         if request.method != "GET":
             return await call_next(request)
-        # Never serve SPA for API-prefixed paths; let the API routes handle them.
         if API_PREFIX and (request.url.path or "").startswith(API_PREFIX):
             return await call_next(request)
         sec_fetch_dest = request.headers.get("sec-fetch-dest", "")
