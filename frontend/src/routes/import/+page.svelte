@@ -3,7 +3,7 @@
 	import { waitForAppToBeAvailable } from '$lib/api';
 	import { goto } from '$app/navigation';
 
-	let { data }: { data: { embedWorkflowuiMetadataOnDownload?: boolean; embedWorkflowuiMetadataOnSave?: boolean } } = $props();
+	let { data }: { data: { embedWorkflowuiMetadataOnDownload?: boolean; embedWorkflowuiMetadataOnSave?: boolean; comfyuiWorkflows?: { id: string; label: string }[]; comfyuiWorkflowsError?: string | null } } = $props();
 
 	type ImportState = 'idle' | 'parsing' | 'analyzing' | 'preview-ready' | 'error';
 
@@ -33,7 +33,31 @@
 	let imageImportMessage = $state('');
 	let imageDropZoneDragOver = $state(false);
 
+	let comfyuiSelectedId = $state<string>('');
+	let comfyuiImporting = $state(false);
+	let comfyuiImportError = $state('');
+	/** Client-side workflow list (so Refresh can update without full page reload) */
+	let comfyuiWorkflowsList = $state<{ id: string; label: string }[]>([]);
+	/** Error from last fetch (so we show why list is empty) */
+	let comfyuiWorkflowsError = $state<string | null>(null);
+	let comfyuiWorkflowsLoading = $state(false);
+	let comfyuiFilter = $state('');
+
 	const apiBase = getApiBase() || '';
+	/** Use client list if we have one, else fall back to load data */
+	const comfyuiWorkflows = $derived(
+		comfyuiWorkflowsList.length > 0 ? comfyuiWorkflowsList : (data?.comfyuiWorkflows ?? [])
+	);
+	const comfyuiErrorToShow = $derived(comfyuiWorkflowsError ?? data?.comfyuiWorkflowsError ?? null);
+	/** Workflows filtered by comfyuiFilter (match id or label, case-insensitive). */
+	const comfyuiWorkflowsFiltered = $derived.by(() => {
+		const q = (comfyuiFilter || '').trim().toLowerCase();
+		if (!q) return comfyuiWorkflows;
+		return comfyuiWorkflows.filter(
+			(w) =>
+				(w.id || '').toLowerCase().includes(q) || (w.label || '').toLowerCase().includes(q)
+		);
+	});
 
 	function setState(s: ImportState, err = '') {
 		importState = s;
@@ -241,6 +265,90 @@
 			imageImporting = false;
 		}
 	}
+
+	/** Sync initial load data into client state so we can later overwrite with Refresh. */
+	$effect(() => {
+		const list = data?.comfyuiWorkflows;
+		const err = data?.comfyuiWorkflowsError;
+		if (list && list.length > 0) {
+			comfyuiWorkflowsList = list;
+			comfyuiWorkflowsError = null;
+		} else if (err) {
+			comfyuiWorkflowsError = err;
+		}
+	});
+
+	async function refreshComfyuiWorkflows() {
+		comfyuiWorkflowsError = null;
+		comfyuiWorkflowsLoading = true;
+		try {
+			const res = await fetch(`${apiBase}/comfyui/workflows`);
+			const body = await res.json().catch(() => ({}));
+			const list = Array.isArray(body) ? body : body?.workflows;
+			if (Array.isArray(list)) {
+				comfyuiWorkflowsList = list.map((w: { id?: string; label?: string }) => ({
+					id: typeof w.id === 'string' ? w.id : String(w.id ?? ''),
+					label: typeof w.label === 'string' ? w.label : (w.id != null ? String(w.id) : '')
+				})).filter((w: { id: string }) => w.id);
+			} else {
+				comfyuiWorkflowsList = [];
+			}
+			if (comfyuiWorkflowsList.length === 0 && typeof body?.error === 'string' && body.error) {
+				comfyuiWorkflowsError = body.error;
+			}
+		} catch (e) {
+			comfyuiWorkflowsError = e instanceof Error ? e.message : 'Failed to load workflow list';
+			comfyuiWorkflowsList = [];
+		} finally {
+			comfyuiWorkflowsLoading = false;
+		}
+	}
+
+	/** Load selected ComfyUI workflow into the form and run preview so user can review detected nodes and then click Create workflow. */
+	async function handleLoadWorkflowFromComfyui() {
+		const id = comfyuiSelectedId?.trim();
+		if (!id) {
+			comfyuiImportError = 'Select a workflow first.';
+			return;
+		}
+		comfyuiImportError = '';
+		comfyuiImporting = true;
+		setState('idle', '');
+		try {
+			const res = await fetch(`${apiBase}/comfyui/workflows/${encodeURIComponent(id)}`);
+			if (!res.ok) {
+				const d = await res.json().catch(() => ({}));
+				comfyuiImportError = (d.detail ?? res.statusText) || 'Failed to load workflow';
+				return;
+			}
+			const { name: wfName, graph } = await res.json();
+			if (!graph || typeof graph !== 'object') {
+				comfyuiImportError = 'Invalid workflow response';
+				return;
+			}
+			const workflowName = (typeof wfName === 'string' && wfName.trim()) ? wfName.trim() : id;
+			name = workflowName;
+			jsonInput = JSON.stringify(graph, null, 2);
+			selectedFileName = null;
+			setState('analyzing', '');
+			const previewRes = await fetch(`${apiBase}/import/preview`, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ name: workflowName, graph, use_workflow_ui_link: useWorkflowUILink })
+			});
+			if (!previewRes.ok) {
+				const d = await previewRes.json().catch(() => ({}));
+				setState('error', (d.detail as string) || previewRes.statusText);
+				return;
+			}
+			preview = await previewRes.json();
+			setState('preview-ready', '');
+		} catch (e) {
+			comfyuiImportError = e instanceof Error ? e.message : 'Failed to load workflow';
+		} finally {
+			comfyuiImporting = false;
+		}
+	}
 </script>
 
 <div class="two-col-page page">
@@ -248,7 +356,70 @@
 		<h1>Import workflow</h1>
 		<p class="page-subline muted">Add a ComfyUI workflow from its JSON.</p>
 
-		<!-- Primary: Import from workflow JSON -->
+		<!-- Import from ComfyUI: browse workflows on ComfyUI and import as app (top) -->
+		<details class="section comfyui-import-section" open={comfyuiWorkflows.length > 0}>
+			<summary class="media-restore-summary">Import from ComfyUI</summary>
+			<div class="media-restore-inner">
+				<p class="media-restore-hint">Load a workflow from the ComfyUI WorkflowUI plugin. The workflow will appear in the preview below so you can review detected nodes, then save it with <strong>Create workflow</strong>. The plugin must expose <code>GET /workflowui/workflows</code> and <code>GET /workflowui/workflows/:id</code>.</p>
+				<button
+					type="button"
+					class="choose-file-btn comfyui-refresh-btn"
+					disabled={comfyuiWorkflowsLoading}
+					onclick={refreshComfyuiWorkflows}
+					aria-label="Refresh workflow list from ComfyUI"
+				>
+					{comfyuiWorkflowsLoading ? 'Loading…' : 'Refresh list'}
+				</button>
+				{#if comfyuiWorkflows.length === 0}
+					{#if comfyuiErrorToShow}
+						<p class="error-text comfyui-error-msg">{comfyuiErrorToShow}</p>
+						<p class="muted comfyui-tips">Check: (1) Backend .env has <code>COMFYUI_URL</code> pointing at ComfyUI (e.g. http://localhost:8188). (2) ComfyUI is running and WorkflowUIPlugin is loaded. (3) Plugin workflows folder exists (default: ComfyUI <code>user/default/workflows/</code>) or <code>WORKFLOWUI_WORKFLOWS_DIR</code> is set, with .json files inside.</p>
+					{:else}
+						<p class="muted">No workflows from ComfyUI. Add .json workflow files to the plugin's workflows folder (default: ComfyUI <code>user/default/workflows/</code> or set <code>WORKFLOWUI_WORKFLOWS_DIR</code>), then click <strong>Refresh list</strong>.</p>
+					{/if}
+				{:else}
+					<label for="comfyui-workflow-filter" class="field-label">Filter workflows</label>
+					<input
+						id="comfyui-workflow-filter"
+						type="text"
+						class="comfyui-filter-input"
+						placeholder="Type to filter by name or id…"
+						bind:value={comfyuiFilter}
+						aria-label="Filter workflow list"
+					/>
+					<label for="comfyui-workflow-select" class="field-label">Workflow</label>
+					<select
+						id="comfyui-workflow-select"
+						bind:value={comfyuiSelectedId}
+						disabled={comfyuiImporting}
+						class="comfyui-select"
+						aria-label="Select workflow from ComfyUI"
+					>
+						<option value="">— Select —</option>
+						{#each comfyuiWorkflowsFiltered as w}
+							<option value={w.id}>{w.label || w.id}</option>
+						{/each}
+					</select>
+					{#if comfyuiWorkflowsFiltered.length === 0}
+						<p class="muted">No workflows match the filter.</p>
+					{/if}
+					<button
+						type="button"
+						class="choose-file-btn primary"
+						disabled={comfyuiImporting || !comfyuiSelectedId}
+						onclick={handleLoadWorkflowFromComfyui}
+						aria-label="Load selected workflow into form and show preview"
+					>
+						{comfyuiImporting ? 'Loading…' : 'Load workflow'}
+					</button>
+					{#if comfyuiImportError}
+						<p class="error-text">{comfyuiImportError}</p>
+					{/if}
+				{/if}
+			</div>
+		</details>
+
+		<!-- Drop workflow JSON or paste -->
 		<section class="section">
 			<label for="import-graph-json" class="section-label">Workflow JSON</label>
 			<div
@@ -667,6 +838,45 @@
 		background: var(--accent-soft);
 		outline: 2px dashed var(--accent);
 		outline-offset: 2px;
+	}
+	.comfyui-import-section {
+		margin-top: 1rem;
+	}
+	.comfyui-refresh-btn {
+		margin-bottom: 0.5rem;
+	}
+	.comfyui-error-msg {
+		margin-bottom: 0.5rem;
+	}
+	.comfyui-tips {
+		font-size: 0.85rem;
+		margin-top: 0.5rem;
+		line-height: 1.4;
+	}
+	.comfyui-tips code {
+		font-size: 0.8rem;
+		background: var(--surface);
+		padding: 0.1rem 0.25rem;
+		border-radius: 4px;
+	}
+	.comfyui-filter-input {
+		display: block;
+		width: 100%;
+		max-width: 20rem;
+		margin-bottom: 0.5rem;
+		padding: 0.35rem 0.5rem;
+	}
+	.comfyui-select {
+		display: block;
+		width: 100%;
+		max-width: 20rem;
+		margin: 0.5rem 0 0.75rem;
+		padding: 0.4rem 0.6rem;
+		border-radius: var(--radius);
+		border: 1px solid var(--border);
+		background: var(--surface);
+		color: inherit;
+		font-size: 0.95rem;
 	}
 	.media-restore-hint {
 		width: 100%;
