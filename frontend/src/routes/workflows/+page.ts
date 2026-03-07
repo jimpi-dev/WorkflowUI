@@ -7,7 +7,6 @@ export async function load({ fetch }) {
 		const res = await fetch(`${apiBase}/workflow-definitions`);
 		if (res.ok) definitions = await res.json();
 	} catch {
-		// ignore
 	}
 	return { definitions };
 }

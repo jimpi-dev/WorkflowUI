@@ -218,7 +218,7 @@ def upload_image(
 @router.post("/upload_media")
 def upload_media(
     file: UploadFile = File(..., alias="file"),
-    type: str = "image",  # image | video | audio
+    type: str = "image",
     app_id: str | None = None,
     db=Depends(get_db),
 ):

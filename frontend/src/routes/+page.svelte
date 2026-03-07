@@ -7,16 +7,13 @@
 
 	type PostWithHtml = BlogPost & { html: string };
 
-	/** Sorted list of supported ComfyUI node class names (for home page lookup). */
 	const SUPPORTED_NODE_CLASSES = Object.keys(NODE_SPECS).sort();
 
-	// No server load: avoid fetching /__data.json when navigating to / (backend serves static and would return index.html).
 	let { data = { blogPosts: [] } }: { data: { blogPosts: BlogPost[] } } = $props();
 	let blogPosts = $state<PostWithHtml[]>([]);
-	/** Set of post keys (slug+date) that are expanded; all expanded by default */
 	let expandedKeys = $state<Set<string>>(new Set());
 
-	/** Search filter for supported node classes (home page). */
+	let nodesSectionMinimized = $state(false);
 	let nodeClassSearch = $state('');
 	let filteredNodeClasses = $derived(
 		nodeClassSearch.trim() === ''
@@ -39,7 +36,6 @@
 				import('marked')
 			]);
 			const raw = getBlogPosts();
-			// Use lexer + parser for sync rendering (avoids marked() async/throw issues in v17)
 			const render = (content: string): string => {
 				try {
 					const tokens = lexer(content);
@@ -50,7 +46,6 @@
 				}
 			};
 			blogPosts = raw.map((post) => ({ ...post, html: render(post.content) }));
-			// Auto-expand all posts
 			expandedKeys = new Set(blogPosts.map((p) => p.slug + p.date));
 		} catch (e) {
 			console.error('Blog load failed:', e);
@@ -64,7 +59,6 @@
 		expandedKeys = next;
 	}
 
-	/** Derive title from first # heading or slug */
 	function getTitle(content: string, slug: string): string {
 		const match = content.match(/^#\s+(.+)$/m);
 		return match ? match[1].trim() : slug.replace(/-/g, ' ');
@@ -86,7 +80,7 @@
 	</div>
 </div>
 
-<div class="home-content">
+<div class="home-content" class:home-content-nodes-minimized={nodesSectionMinimized}>
 	<div class="home-col home-col-blog">
 		{#if blogPosts.length > 0}
 			<section class="blog-section" aria-label="Blog and updates">
@@ -120,11 +114,27 @@
 	</div>
 
 	<div class="home-col home-col-nodes">
-		<section class="node-classes-section" aria-label="Supported node classes">
+		<section class="node-classes-section" class:node-classes-section-minimized={nodesSectionMinimized} aria-label="Supported node classes">
 			<div class="node-classes-header">
 				<h2 class="node-classes-title">Supported node classes</h2>
 				<span class="node-classes-badge">{SUPPORTED_NODE_CLASSES.length}</span>
+				<button
+					type="button"
+					class="node-classes-collapse-btn"
+					onclick={() => (nodesSectionMinimized = !nodesSectionMinimized)}
+					onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); nodesSectionMinimized = !nodesSectionMinimized; } }}
+					aria-expanded={!nodesSectionMinimized}
+					aria-controls="node-classes-body"
+					title={nodesSectionMinimized ? 'Expand to show list and search' : 'Collapse to give more space to the blog'}
+				>
+					{#if nodesSectionMinimized}
+						Expand
+					{:else}
+						Collapse
+					{/if}
+				</button>
 			</div>
+			<div id="node-classes-body" class="node-classes-body" hidden={nodesSectionMinimized}>
 			<p class="node-classes-desc">
 				ComfyUI node types WorkflowUI can render in app forms. Search to check support.
 			</p>
@@ -165,6 +175,7 @@
 					</ul>
 				</div>
 			{/if}
+			</div>
 		</section>
 	</div>
 </div>
