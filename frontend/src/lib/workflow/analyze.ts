@@ -87,7 +87,6 @@ function analyzeWorkflowUILinkNode(nodeId: string, node: Record<string, any>, wo
         bindings.push({ key, nodeId, field });
     }
 
-    // Outputs from rest of graph (SaveImage etc.), not from WorkflowUILink
     const outputs: WorkflowOutput[] = [];
     for (const [nid, n] of Object.entries(workflow)) {
         if (nid === nodeId || !n || typeof n !== 'object') continue;

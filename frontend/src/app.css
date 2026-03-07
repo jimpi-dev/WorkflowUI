@@ -3,38 +3,30 @@
 @import './lib/styles/gallery.css';
 
 :root {
-    /* BASE */
     --bg: #0f1724;
     --card: #161c2b;
     --surface: #1c2333;
-    
-    /* BORDERS */
+
     --border: rgba(255, 255, 255, 0.06);
 
-    /* TEXT */
     --text: #e5eaf3;
     --muted: #8f98a8;
 
-    /* ACCENT SYSTEM */
     --accent: #6d5dfc;
     --accent-hover: #5b4ce6;
     --accent-soft: rgba(109, 93, 252, 0.12);
     --accent-contrast: #fff;
 
-    /* STATUS */
     --success: #22c55e;
     --warning: #f59e0b;
-    --partial-badge: #f0c674; 
+    --partial-badge: #f0c674;
 
-    /* SURFACES */
     --radius-lg: 12px;
     --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.1);
 
-    /* BREAKPOINTS */
     --bp-mobile: 639px;
     --bp-tablet: 899px;
 
-    /* GALLERY SEED OVERLAY (dark) */
     --seed-overlay-bg: rgba(0, 0, 0, 0.5);
     --seed-overlay-bg-hover: rgba(0, 0, 0, 0.75);
     --seed-overlay-text: #fff;
@@ -47,7 +39,6 @@
     --console-error: #f85149;
     --console-border: rgba(255, 255, 255, 0.08);
 }
-/* ===== LIGHT MODE ===== */
 [data-theme="light"] {
     --bg: #eef2f7;
     --card: #ffffff;
@@ -67,7 +58,6 @@
     --warning: #d97706;
     --partial-badge: #b8860b;
 
-    /* GALLERY SEED OVERLAY (light) */
     --seed-overlay-bg: rgba(255, 255, 255, 0.88);
     --seed-overlay-bg-hover: rgba(255, 255, 255, 0.95);
     --seed-overlay-text: #0f172a;
@@ -130,8 +120,6 @@ button:disabled {
     opacity: 0.6;
     cursor: not-allowed;
 }
-
-/* Per-field preset P icon: force fill when selected (button has aria-pressed or data-preset-selected) */
 button[aria-pressed="true"] .preset-icon rect,
 button[data-preset-selected="true"] .preset-icon rect {
     fill: var(--accent-soft, rgba(109, 93, 252, 0.25)) !important;
@@ -188,8 +176,6 @@ select {
     line-height: 1.4;
     font-size: 0.9rem;
 }
-
-/* Minimal global img: responsive default; components (e.g. .card, .gallery) override as needed */
 img {
     max-width: 100%;
     height: auto;
@@ -213,9 +199,6 @@ textarea,
 input {
     width: 100%;
 }
-
-/* When lightbox is open on app page, hide divider, edge toggles, mobile tabs and header so they don't overlay the image.
-   Use both body:has(.lightbox) and app-layout:has([data-lightbox-open]) so one of them matches. */
 body:has(.lightbox) .edge-toggle-group,
 body:has(.lightbox) .app-divider,
 body:has(.lightbox) .app-mobile-tabs,
@@ -232,8 +215,6 @@ body:has(.lightbox) .app-header-wrap,
 input[type="range"] {
     width: 100%;
 }
-
-/* Slider thumb: same look in Edge (WebKit) and Firefox (avoid OS accent color) */
 input[type="range"]::-webkit-slider-thumb {
     -webkit-appearance: none;
     appearance: none;
@@ -253,15 +234,11 @@ input[type="range"]::-moz-range-thumb {
     cursor: pointer;
     box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.15);
 }
-
-/* Chrome, Edge, Safari */
 input[type="number"]::-webkit-inner-spin-button,
 input[type="number"]::-webkit-outer-spin-button {
     -webkit-appearance: none;
     margin: 0;
 }
-
-/* Firefox */
 input[type="number"] {
     -moz-appearance: textfield;
 }
@@ -292,8 +269,6 @@ select:focus {
 .form-root {
     width: 100%;
 }
-
-/* Home-specific mobile rules live in src/lib/styles/home.css */
 @media (max-width: 899px) {
     .two-col-page {
         flex-direction: column;

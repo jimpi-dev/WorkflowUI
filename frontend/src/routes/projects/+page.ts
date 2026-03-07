@@ -18,7 +18,6 @@ export const load = async ({ fetch, url, depends }) => {
 	depends('app:projects');
 	const base = getApiBase() || '';
 	const showArchive = url.searchParams.get('tab') === 'archive';
-	// Fetch both lists in parallel so we can show counts on both tabs
 	let activeProjects: ProjectSummary[] = [];
 	let archivedProjects: ProjectSummary[] = [];
 	try {

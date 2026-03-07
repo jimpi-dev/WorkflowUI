@@ -1,15 +1,20 @@
 import json
+import logging
 import time
 import uuid
 
+import requests
 from fastapi import APIRouter, HTTPException, Depends, UploadFile, File
 
 from services.workflow_import_service import IdempotentImport
+from services.workflow_convert import convert_workflow_via_comfy, is_api_format_prompt
+
+logger = logging.getLogger(__name__)
 from services.png_metadata import read_workflowui_chunk
 from services.mp3_metadata import read_workflowui_metadata as read_workflowui_metadata_mp3
 from version import ENGINE_VERSION
 
-from dependencies import get_db
+from dependencies import get_db, COMFY_URL
 
 router = APIRouter()
 
@@ -157,6 +162,31 @@ def post_import(body: dict, db=Depends(get_db)):
         raise HTTPException(status_code=400, detail="name is required")
     if not isinstance(graph, dict) or not graph:
         raise HTTPException(status_code=400, detail="graph must be a non-empty object")
+    conversion_warning = None
+    if graph.get("nodes") is not None and COMFY_URL:
+        logger.info(
+            "Import (POST /import): converting UI workflow to API format (COMFY_URL=%s)",
+            COMFY_URL.rstrip("/"),
+        )
+        api_graph = convert_workflow_via_comfy(COMFY_URL, graph)
+        if api_graph is not None:
+            graph = api_graph
+            logger.info("Import (POST /import): conversion SUCCESS — storing API format (%s nodes).", len(graph))
+        else:
+            logger.warning(
+                "Import (POST /import): conversion FAILED or unavailable — storing UI format. "
+                "Generation will retry conversion (may fail or OOM).",
+            )
+            conversion_warning = (
+                "Workflow conversion to API format failed (ComfyUI converter error or unavailable). "
+                "Stored in UI format. When you run a generation, conversion will be retried; if it fails again you may see errors or OOM."
+            )
+    elif graph.get("nodes") is not None and not COMFY_URL:
+        logger.info("Import (POST /import): COMFY_URL not set, storing UI format as-is.")
+        conversion_warning = (
+            "ComfyUI URL not set. Workflow stored in UI format. "
+            "Set COMFYUI_URL so conversion runs at import and generation uses API format."
+        )
     _, _, _, _, _, _, import_service = db
     try:
         result = import_service.import_workflow(
@@ -164,7 +194,7 @@ def post_import(body: dict, db=Depends(get_db)):
             force_new_version=force_new_version,
             use_workflow_ui_link=use_workflow_ui_link,
         )
-        return {
+        out = {
             "workflow_id": result.workflow_id,
             "version": result.version,
             "graph_hash": result.graph_hash,
@@ -173,6 +203,9 @@ def post_import(body: dict, db=Depends(get_db)):
             "internal_nodes": result.internal_nodes,
             "workflow_version_id": result.workflow_version_id,
         }
+        if conversion_warning:
+            out["warning"] = conversion_warning
+        return out
     except IdempotentImport as e:
         raise HTTPException(
             status_code=409,
@@ -237,3 +270,109 @@ def post_import_from_file(file: UploadFile = File(..., alias="file"), db=Depends
     if not isinstance(payload, dict):
         return {"action": "ignored", "reason": "invalid_snapshot"}
     return _import_from_workflowui_payload(payload, db)
+
+
+def _minimal_app_payload(workflow_name: str, graph: dict, db) -> dict:
+    """Build minimal workflow+app payload for _import_from_workflowui_payload."""
+    _, workflow_repo, app_repo, _, _, _, _ = db
+    resolved_name = _find_available_workflow_name(workflow_name.strip() or "Imported from ComfyUI", workflow_repo)
+    base_slug = (workflow_name.strip() or "app").lower().replace(" ", "-") or "app"
+    resolved_slug = _find_available_slug(base_slug, app_repo)
+    return {
+        "workflow": {"name": resolved_name, "graph": graph},
+        "app": {
+            "slug": resolved_slug,
+            "title": (workflow_name.strip() or resolved_slug).strip(),
+            "description": "",
+            "ui_config": {},
+            "default_inputs": None,
+            "default_outputs": None,
+            "is_public": False,
+        },
+    }
+
+
+def _fetch_workflow_from_comfyui_plugin(workflow_id: str):
+    """Fetch workflow in API format from ComfyUI WorkflowUI plugin. Returns (name, graph) or raises HTTPException."""
+    base = (COMFY_URL or "").rstrip("/")
+    if not base:
+        raise HTTPException(status_code=503, detail="ComfyUI URL not configured")
+    url = f"{base}/workflowui/workflows/{requests.utils.quote(workflow_id, safe='')}"
+    try:
+        r = requests.get(url, timeout=15)
+        r.raise_for_status()
+        data = r.json()
+    except requests.RequestException as e:
+        raise HTTPException(
+            status_code=502,
+            detail=f"ComfyUI plugin unreachable: {e!s}",
+        ) from e
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=502, detail="ComfyUI plugin returned invalid response")
+    graph = data.get("graph")
+    name = data.get("name") or workflow_id or "Imported from ComfyUI"
+    if not isinstance(graph, dict) or not graph:
+        raise HTTPException(status_code=502, detail="ComfyUI plugin did not return a valid workflow graph")
+    return name.strip() or "Imported from ComfyUI", graph
+
+
+@router.post("/import/from-comfyui")
+def post_import_from_comfyui(body: dict, db=Depends(get_db)):
+    graph = body.get("graph")
+    name = body.get("name")
+    comfyui_workflow_id = body.get("comfyui_workflow_id")
+
+    if comfyui_workflow_id and isinstance(comfyui_workflow_id, str) and comfyui_workflow_id.strip():
+        name, graph = _fetch_workflow_from_comfyui_plugin(comfyui_workflow_id.strip())
+        has_nodes = isinstance(graph, dict) and isinstance(graph.get("nodes"), list)
+        logger.info(
+            "Import from ComfyUI: fetched workflow '%s', graph has %s nodes (UI format=%s)",
+            name,
+            len(graph.get("nodes", [])) if has_nodes else "N/A",
+            has_nodes,
+        )
+    elif isinstance(graph, dict) and graph:
+        name = (name or "Imported from ComfyUI").strip() or "Imported from ComfyUI"
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail="Provide either 'graph' (with optional 'name') or 'comfyui_workflow_id'",
+        )
+
+    conversion_warning = None
+    if isinstance(graph, dict) and graph.get("nodes") is not None and COMFY_URL:
+        logger.info(
+            "Import from ComfyUI: converting UI workflow to API format (COMFY_URL=%s)",
+            COMFY_URL.rstrip("/"),
+        )
+        api_graph = convert_workflow_via_comfy(COMFY_URL, graph)
+        if api_graph is not None:
+            graph = api_graph
+            logger.info(
+                "Import from ComfyUI: conversion SUCCESS — storing API format (%s nodes).",
+                len(graph),
+            )
+        else:
+            logger.warning(
+                "Import from ComfyUI: conversion FAILED or unavailable — storing UI format. "
+                "Run may use built-in conversion (possible OOM).",
+            )
+            conversion_warning = (
+                "Workflow conversion to API format failed at import (ComfyUI converter error or unavailable). "
+                "Stored in UI format. Generation will retry conversion; if it fails again you may see errors or OOM."
+            )
+    else:
+        if isinstance(graph, dict) and is_api_format_prompt(graph):
+            logger.info("Import from ComfyUI: graph already API format (%s nodes), no conversion.", len(graph))
+        elif isinstance(graph, dict) and graph.get("nodes") is not None and not COMFY_URL:
+            logger.info("Import from ComfyUI: COMFY_URL not set, skipping convert; storing as-is.")
+            conversion_warning = (
+                "ComfyUI URL not set at import. Workflow stored in UI format. "
+                "Set COMFYUI_URL so conversion runs at import and generation uses API format."
+            )
+
+    payload = _minimal_app_payload(name, graph, db)
+    out = _import_from_workflowui_payload(payload, db)
+    if conversion_warning and isinstance(out, dict):
+        out["warning"] = conversion_warning
+    return out

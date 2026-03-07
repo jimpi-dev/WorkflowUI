@@ -14,6 +14,7 @@ from services.comfyui_info import (
     set_cached_status,
     fetch_comfyui_status_system_stats,
     COMFYUI_STATUS_TTL_SEC,
+    WORKFLOWUI_PLUGIN_MIN_VERSION,
 )
 from version import ENGINE_VERSION
 
@@ -110,6 +111,7 @@ def get_config(db=Depends(get_db)):
         "comfyuiDeleteSupported": comfyui_delete_supported,
         "workflowuiPluginAvailable": workflowui_plugin_available,
         "workflowuiPluginIncompatible": workflowui_plugin_incompatible,
+        "workflowuiPluginMinVersion": WORKFLOWUI_PLUGIN_MIN_VERSION,
         "mediaStorage": {
             "enabled": media_cfg.enabled,
             "rootPath": media_cfg.root_path,
@@ -125,7 +127,6 @@ def get_config(db=Depends(get_db)):
 @router.get("/version")
 def get_version():
     return {"engine_version": ENGINE_VERSION}
-
 
 @router.get("/config/diagnostics/run-table")
 def get_run_table_diagnostics(db=Depends(get_db)):
@@ -181,6 +182,73 @@ def post_vacuum(db=Depends(get_db)):
     logger.info("DB vacuum ended, freed %d bytes (%.1f MB)", freed, freed / 1_048_576)
     return {"dbSizeBytes": size_after}
 
+def _is_excluded_comfyui_workflow_id(workflow_id: str) -> bool:
+    if not workflow_id or not isinstance(workflow_id, str):
+        return True
+    s = workflow_id.strip()
+    if not s:
+        return True
+    basename = s.replace("\\", "/").split("/")[-1]
+    return basename.startswith(".")
+
+
+@router.get("/comfyui/workflows")
+def get_comfyui_workflows():
+    """Proxy to ComfyUI WorkflowUI plugin: list workflows available for import."""
+    import requests
+    base = (COMFY_URL or "").rstrip("/")
+    if not base:
+        return {"workflows": [], "error": "ComfyUI URL not configured. Set COMFYUI_URL in the backend .env."}
+    url = f"{base}/workflowui/workflows"
+    try:
+        r = requests.get(url, timeout=10)
+        r.raise_for_status()
+        data = r.json()
+    except requests.ConnectionError:
+        return {"workflows": [], "error": f"Cannot reach ComfyUI at {base}. Is it running?"}
+    except requests.Timeout:
+        return {"workflows": [], "error": f"ComfyUI at {base} did not respond in time."}
+    except requests.RequestException as e:
+        return {"workflows": [], "error": f"ComfyUI request failed: {e!s}"}
+    except Exception as e:
+        return {"workflows": [], "error": str(e)}
+    if isinstance(data, list):
+        raw = data
+    elif isinstance(data, dict) and "workflows" in data:
+        raw = data["workflows"] if isinstance(data["workflows"], list) else []
+    else:
+        raw = []
+
+    def _get_id(item: Any) -> str:
+        if isinstance(item, dict):
+            return str(item.get("id") or item.get("label") or "")
+        return str(item) if item is not None else ""
+
+    workflows = [w for w in raw if not _is_excluded_comfyui_workflow_id(_get_id(w))]
+    return {"workflows": workflows}
+
+
+@router.get("/comfyui/workflows/{workflow_id}")
+def get_comfyui_workflow(workflow_id: str):
+    """Fetch a single workflow (name + graph) from ComfyUI plugin for preview/load. Does not create workflow or app."""
+    import requests
+    base = (COMFY_URL or "").rstrip("/")
+    if not base:
+        raise HTTPException(status_code=503, detail="ComfyUI URL not configured")
+    url = f"{base}/workflowui/workflows/{requests.utils.quote(workflow_id, safe='')}"
+    try:
+        r = requests.get(url, timeout=15)
+        r.raise_for_status()
+        data = r.json()
+    except requests.RequestException as e:
+        raise HTTPException(status_code=502, detail=f"ComfyUI plugin unreachable: {e!s}") from e
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=502, detail="ComfyUI plugin returned invalid response")
+    graph = data.get("graph")
+    name = data.get("name") or workflow_id or "Imported from ComfyUI"
+    if not isinstance(graph, dict) or not graph:
+        raise HTTPException(status_code=502, detail="ComfyUI plugin did not return a valid workflow graph")
+    return {"name": (name or "Imported from ComfyUI").strip() or "Imported from ComfyUI", "graph": graph}
 
 @router.patch("/admin/media-storage")
 def patch_media_storage(body: dict):
