@@ -1,6 +1,10 @@
 import pytest
 
-from services.workflow_analyzer import analyze_workflow, workflow_contains_workflow_ui_link
+from services.workflow_analyzer import (
+    analyze_workflow,
+    apply_default_inputs_to_graph,
+    workflow_contains_workflow_ui_link,
+)
 
 
 def test_analyze_returns_inputs_outputs_bindings(sample_workflow_graph):
@@ -387,9 +391,9 @@ def test_analyze_workflow_ui_link_editor_format_widgets_values():
                 "id": 10,
                 "type": "WorkflowUILink",
                 "widgets_values": [
-                    "",  # form_label
-                    "text", "Positive prompt",  # type_0, name_0 (name is also the label)
-                    "number", "Steps",  # type_1, name_1
+                    "",
+                    "text", "Positive prompt",
+                    "number", "Steps",
                 ],
                 "pos": [0, 0],
                 "size": {"0": 300, "1": 200},
@@ -579,9 +583,9 @@ def test_analyze_workflow_ui_link_editor_format_display_name():
                 "id": 10,
                     "type": "WorkflowUI Link",
                     "widgets_values": [
-                        "",  # form_label
-                        "text", "Positive prompt",  # type_0, name_0
-                        "number", "Steps",  # type_1, name_1
+                        "",
+                        "text", "Positive prompt",
+                        "number", "Steps",
                     ],
                 "pos": [0, 0],
                 "size": {"0": 300, "1": 200},
@@ -598,3 +602,56 @@ def test_analyze_workflow_ui_link_editor_format_display_name():
     assert len(result["inputs"]) == 2
     assert any(i["key"] == "10.input_text_0" and i["label"] == "Positive prompt" for i in result["inputs"])
     assert any(i["key"] == "10.input_number_1" and i["label"] == "Steps" for i in result["inputs"])
+
+
+def test_apply_default_inputs_to_graph_image_filename():
+    """Image inputs: default_inputs value can be string filename or {filename: name}; graph gets string."""
+    workflow = {
+        "1": {
+            "class_type": "WorkflowUILink",
+            "inputs": {"form_label": "Params", "input_image_0": ""},
+        },
+    }
+    detected_inputs = [
+        {"key": "1.input_image_0", "nodeId": "1", "field": "input_image_0", "label": "Image"},
+    ]
+    apply_default_inputs_to_graph(workflow, detected_inputs, {"1.input_image_0": "uploaded_xyz.png"})
+    assert workflow["1"]["inputs"]["input_image_0"] == "uploaded_xyz.png"
+
+
+def test_apply_default_inputs_to_graph_image_value_normalized_from_dict():
+    """When default_inputs has {filename: 'name'}, apply_default_inputs_to_graph writes the string 'name'."""
+    workflow = {
+        "1": {
+            "class_type": "WorkflowUILink",
+            "inputs": {"form_label": "Params", "input_image_0": ""},
+        },
+    }
+    detected_inputs = [
+        {"key": "1.input_image_0", "nodeId": "1", "field": "input_image_0"},
+    ]
+    apply_default_inputs_to_graph(
+        workflow, detected_inputs, {"1.input_image_0": {"filename": "hash123.jpg", "subfolder": ""}}
+    )
+    assert workflow["1"]["inputs"]["input_image_0"] == "hash123.jpg"
+
+
+def test_apply_default_inputs_to_graph_multiple_image_slots():
+    """Multiple image slots can receive different filenames; same filename can be reused for multiple slots."""
+    workflow = {
+        "1": {
+            "class_type": "WorkflowUILink",
+            "inputs": {"form_label": "Params", "input_image_0": "", "input_image_1": ""},
+        },
+    }
+    detected_inputs = [
+        {"key": "1.input_image_0", "nodeId": "1", "field": "input_image_0"},
+        {"key": "1.input_image_1", "nodeId": "1", "field": "input_image_1"},
+    ]
+    default_inputs = {
+        "1.input_image_0": "upload_a.png",
+        "1.input_image_1": "upload_a.png",
+    }
+    apply_default_inputs_to_graph(workflow, detected_inputs, default_inputs)
+    assert workflow["1"]["inputs"]["input_image_0"] == "upload_a.png"
+    assert workflow["1"]["inputs"]["input_image_1"] == "upload_a.png"

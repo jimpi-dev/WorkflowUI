@@ -222,11 +222,9 @@
 				list.sort((a, b) => (b.run_count ?? 0) - (a.run_count ?? 0));
 				break;
 			default:
-				// updated (last used) – API already returns updated_at DESC, we just preserve and sort
 				list.sort((a, b) => (b.updated_at ?? b.created_at ?? 0) - (a.updated_at ?? a.created_at ?? 0));
 				break;
 		}
-		// Pin Quick runs first so "just generate" outputs are always easy to find
 		const quickIdx = list.findIndex((p) => p.id === QUICK_RUNS_PROJECT_ID);
 		if (quickIdx > 0) {
 			const [quick] = list.splice(quickIdx, 1);
@@ -917,7 +915,6 @@
 		background: rgba(255, 255, 255, 0.4);
 	}
 
-	/* List view: full-width gradient strip (same as apps list view) */
 	.list-view .card-visual {
 		width: 100%;
 		height: 8px;
@@ -1207,7 +1204,6 @@
 		opacity: 0.8;
 	}
 
-	/* Scrollbar for projects scroll area (grid and list view) */
 	.projects-scroll-wrap::-webkit-scrollbar {
 		width: 8px;
 	}
