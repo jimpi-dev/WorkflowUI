@@ -10,6 +10,7 @@ from services.comfyui_info import (
     set_cached_status,
     fetch_comfyui_status_system_stats,
     COMFYUI_STATUS_TTL_SEC,
+    WORKFLOWUI_PLUGIN_MIN_VERSION,
 )
 from version import ENGINE_VERSION
 
@@ -51,6 +52,7 @@ def get_config():
         "comfyuiDeleteSupported": comfyui_delete_supported,
         "workflowuiPluginAvailable": workflowui_plugin_available,
         "workflowuiPluginIncompatible": workflowui_plugin_incompatible,
+        "workflowuiPluginMinVersion": WORKFLOWUI_PLUGIN_MIN_VERSION,
         "mediaStorage": {
             "enabled": media_cfg.enabled,
             "rootPath": media_cfg.root_path,
