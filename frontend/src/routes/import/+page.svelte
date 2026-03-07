@@ -1,7 +1,9 @@
 <script lang="ts">
+	import { tick, onDestroy } from 'svelte';
 	import { getApiBase } from '$lib/config';
 	import { waitForAppToBeAvailable } from '$lib/api';
 	import { goto } from '$app/navigation';
+	import { createWorkflowDropdownBody } from '$lib/components/loraDropdownBody';
 
 	let { data }: { data: { embedWorkflowuiMetadataOnDownload?: boolean; embedWorkflowuiMetadataOnSave?: boolean; comfyuiWorkflows?: { id: string; label: string }[]; comfyuiWorkflowsError?: string | null } } = $props();
 
@@ -40,6 +42,9 @@
 	let comfyuiWorkflowsError = $state<string | null>(null);
 	let comfyuiWorkflowsLoading = $state(false);
 	let comfyuiFilter = $state('');
+	let comfyuiComboOpen = $state(false);
+	let comfyuiComboEl: HTMLDivElement;
+	let comfyuiFilterInputEl: HTMLInputElement;
 
 	const apiBase = getApiBase() || '';
 	const comfyuiWorkflows = $derived(
@@ -53,6 +58,70 @@
 			(w) =>
 				(w.id || '').toLowerCase().includes(q) || (w.label || '').toLowerCase().includes(q)
 		);
+	});
+
+	const comfyuiSelectedLabel = $derived(
+		comfyuiSelectedId
+			? (comfyuiWorkflows.find((w) => w.id === comfyuiSelectedId)?.label ?? comfyuiSelectedId)
+			: '— Select workflow from ComfyUI —'
+	);
+
+	const getWorkflowLabel = (id: string) =>
+		comfyuiWorkflows.find((w) => w.id === id)?.label ?? id;
+	const comfyuiDropdownBody = createWorkflowDropdownBody(getWorkflowLabel);
+	onDestroy(() => comfyuiDropdownBody.unmount());
+
+	function openComfyuiCombo() {
+		comfyuiComboOpen = true;
+		comfyuiFilter = '';
+		tick().then(() => {
+			comfyuiFilterInputEl?.focus();
+			if (!comfyuiComboEl) return;
+			const rect = comfyuiComboEl.getBoundingClientRect();
+			const listHeight = 280;
+			const gap = 4;
+			const spaceBelow = window.innerHeight - (rect.bottom + gap);
+			const spaceAbove = rect.top - gap;
+			const showAbove = spaceBelow < listHeight && spaceAbove > spaceBelow;
+			const left = rect.left;
+			const top = showAbove ? Math.max(0, rect.top - listHeight - gap) : rect.bottom + gap;
+			const maxH = showAbove ? Math.min(listHeight, spaceAbove) : Math.min(listHeight, spaceBelow);
+			const width = Math.max(rect.width, 280);
+			comfyuiDropdownBody.mount({
+				left,
+				top,
+				width,
+				maxHeight: maxH,
+				items: comfyuiWorkflowsFiltered.map((w) => w.id),
+				onSelect: selectWorkflow,
+				onClose: closeComfyuiCombo
+			});
+		});
+	}
+
+	function closeComfyuiCombo() {
+		comfyuiDropdownBody.unmount();
+		comfyuiComboOpen = false;
+		comfyuiFilter = '';
+	}
+
+	function selectWorkflow(id: string) {
+		comfyuiSelectedId = id;
+		closeComfyuiCombo();
+	}
+
+	function handleComfyuiComboKeydown(e: KeyboardEvent) {
+		if (e.key === 'Escape') {
+			e.preventDefault();
+			closeComfyuiCombo();
+			comfyuiFilterInputEl?.blur();
+		}
+	}
+
+	$effect(() => {
+		if (comfyuiComboOpen && comfyuiWorkflowsFiltered.length >= 0) {
+			comfyuiDropdownBody.update(comfyuiWorkflowsFiltered.map((w) => w.id));
+		}
 	});
 
 	function setState(s: ImportState, err = '') {
@@ -358,61 +427,84 @@
 		<!-- Import from ComfyUI: browse workflows on ComfyUI and import as app (top) -->
 		<details class="section comfyui-import-section" open={comfyuiWorkflows.length > 0}>
 			<summary class="media-restore-summary">Import from ComfyUI</summary>
-			<div class="media-restore-inner">
-				<p class="media-restore-hint">Load a workflow from the ComfyUI WorkflowUI plugin. The workflow will appear in the preview below so you can review detected nodes, then save it with <strong>Create workflow</strong>. The plugin must expose <code>GET /workflowui/workflows</code> and <code>GET /workflowui/workflows/:id</code>.</p>
-				<button
-					type="button"
-					class="choose-file-btn comfyui-refresh-btn"
-					disabled={comfyuiWorkflowsLoading}
-					onclick={refreshComfyuiWorkflows}
-					aria-label="Refresh workflow list from ComfyUI"
-				>
-					{comfyuiWorkflowsLoading ? 'Loading…' : 'Refresh list'}
-				</button>
+			<div class="comfyui-import-inner">
+				<p class="media-restore-hint comfyui-hint">Load a workflow from the ComfyUI WorkflowUI plugin. The workflow will appear in the preview below so you can review detected nodes, then save it with <strong>Create workflow</strong>. The plugin must expose <code>GET /workflowui/workflows</code> and <code>GET /workflowui/workflows/:id</code>.</p>
 				{#if comfyuiWorkflows.length === 0}
-					{#if comfyuiErrorToShow}
-						<p class="error-text comfyui-error-msg">{comfyuiErrorToShow}</p>
-						<p class="muted comfyui-tips">Check: (1) Backend .env has <code>COMFYUI_URL</code> pointing at ComfyUI (e.g. http://localhost:8188). (2) ComfyUI is running and WorkflowUIPlugin is loaded. (3) Plugin workflows folder exists (default: ComfyUI <code>user/default/workflows/</code>) or <code>WORKFLOWUI_WORKFLOWS_DIR</code> is set, with .json files inside.</p>
-					{:else}
-						<p class="muted">No workflows from ComfyUI. Add .json workflow files to the plugin's workflows folder (default: ComfyUI <code>user/default/workflows/</code> or set <code>WORKFLOWUI_WORKFLOWS_DIR</code>), then click <strong>Refresh list</strong>.</p>
-					{/if}
+					<div class="comfyui-empty-state">
+						<button
+							type="button"
+							class="choose-file-btn comfyui-refresh-btn"
+							disabled={comfyuiWorkflowsLoading}
+							onclick={refreshComfyuiWorkflows}
+							aria-label="Refresh workflow list from ComfyUI"
+						>
+							{comfyuiWorkflowsLoading ? 'Loading…' : 'Refresh list'}
+						</button>
+						{#if comfyuiErrorToShow}
+							<p class="error-text comfyui-error-msg">{comfyuiErrorToShow}</p>
+							<p class="muted comfyui-tips">Check: (1) Backend .env has <code>COMFYUI_URL</code> pointing at ComfyUI (e.g. http://localhost:8188). (2) ComfyUI is running and WorkflowUIPlugin is loaded. (3) Plugin workflows folder exists (default: ComfyUI <code>user/default/workflows/</code>) or <code>WORKFLOWUI_WORKFLOWS_DIR</code> is set, with .json files inside.</p>
+						{:else}
+							<p class="muted">No workflows from ComfyUI. Add .json workflow files to the plugin's workflows folder (default: ComfyUI <code>user/default/workflows/</code> or set <code>WORKFLOWUI_WORKFLOWS_DIR</code>), then click <strong>Refresh list</strong>.</p>
+						{/if}
+					</div>
 				{:else}
-					<label for="comfyui-workflow-filter" class="field-label">Filter workflows</label>
-					<input
-						id="comfyui-workflow-filter"
-						type="text"
-						class="comfyui-filter-input"
-						placeholder="Type to filter by name or id…"
-						bind:value={comfyuiFilter}
-						aria-label="Filter workflow list"
-					/>
-					<label for="comfyui-workflow-select" class="field-label">Workflow</label>
-					<select
-						id="comfyui-workflow-select"
-						bind:value={comfyuiSelectedId}
-						disabled={comfyuiImporting}
-						class="comfyui-select"
-						aria-label="Select workflow from ComfyUI"
-					>
-						<option value="">— Select —</option>
-						{#each comfyuiWorkflowsFiltered as w}
-							<option value={w.id}>{w.label || w.id}</option>
-						{/each}
-					</select>
-					{#if comfyuiWorkflowsFiltered.length === 0}
-						<p class="muted">No workflows match the filter.</p>
-					{/if}
-					<button
-						type="button"
-						class="choose-file-btn primary"
-						disabled={comfyuiImporting || !comfyuiSelectedId}
-						onclick={handleLoadWorkflowFromComfyui}
-						aria-label="Load selected workflow into form and show preview"
-					>
-						{comfyuiImporting ? 'Loading…' : 'Load workflow'}
-					</button>
+					<div class="comfyui-flow">
+						<div class="comfyui-combo-wrap" bind:this={comfyuiComboEl}>
+							{#if comfyuiComboOpen}
+								<div
+									class="comfyui-combo"
+									role="combobox"
+									aria-expanded="true"
+									aria-haspopup="listbox"
+									aria-controls="workflow-combo-listbox"
+									aria-label="Select workflow from ComfyUI"
+								>
+									<input
+										bind:this={comfyuiFilterInputEl}
+										type="text"
+										class="comfyui-combo-input"
+										placeholder="Filter workflows…"
+										bind:value={comfyuiFilter}
+										onkeydown={handleComfyuiComboKeydown}
+										aria-label="Filter workflow list"
+									/>
+								</div>
+							{:else}
+								<button
+									type="button"
+									class="comfyui-combo-trigger"
+									title={comfyuiSelectedLabel}
+									onclick={openComfyuiCombo}
+									disabled={comfyuiImporting}
+									aria-label="Select workflow from ComfyUI"
+								>
+									{comfyuiSelectedLabel}
+								</button>
+							{/if}
+						</div>
+						<div class="comfyui-actions">
+							<button
+								type="button"
+								class="choose-file-btn primary comfyui-load-btn"
+								disabled={comfyuiImporting || !comfyuiSelectedId}
+								onclick={handleLoadWorkflowFromComfyui}
+								aria-label="Load selected workflow into form and show preview"
+							>
+								{comfyuiImporting ? 'Loading…' : 'Load workflow'}
+							</button>
+							<button
+								type="button"
+								class="choose-file-btn"
+								disabled={comfyuiWorkflowsLoading}
+								onclick={refreshComfyuiWorkflows}
+								aria-label="Refresh workflow list from ComfyUI"
+							>
+								{comfyuiWorkflowsLoading ? 'Loading…' : 'Refresh list'}
+							</button>
+						</div>
+					</div>
 					{#if comfyuiImportError}
-						<p class="error-text">{comfyuiImportError}</p>
+						<p class="error-text comfyui-error-msg">{comfyuiImportError}</p>
 					{/if}
 				{/if}
 			</div>
@@ -840,16 +932,55 @@
 	.comfyui-import-section {
 		margin-top: 1rem;
 	}
+	.comfyui-import-inner {
+		display: flex;
+		flex-direction: column;
+		gap: 0.75rem;
+		padding-bottom: 0.75rem;
+		min-width: 0;
+	}
+	.comfyui-hint {
+		margin: 0;
+		word-wrap: break-word;
+		overflow-wrap: break-word;
+	}
+	.comfyui-empty-state {
+		display: flex;
+		flex-direction: column;
+		gap: 0.5rem;
+		min-width: 0;
+	}
 	.comfyui-refresh-btn {
-		margin-bottom: 0.5rem;
+		align-self: flex-start;
+	}
+	.comfyui-flow {
+		display: flex;
+		flex-direction: column;
+		gap: 0.5rem;
+		min-width: 0;
+		max-width: 100%;
+	}
+	.comfyui-actions {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: 0.5rem;
+		min-width: 0;
+	}
+	.comfyui-load-btn {
+		flex-shrink: 0;
 	}
 	.comfyui-error-msg {
 		margin-bottom: 0.5rem;
+		overflow-wrap: break-word;
+		word-wrap: break-word;
 	}
 	.comfyui-tips {
 		font-size: 0.85rem;
 		margin-top: 0.5rem;
 		line-height: 1.4;
+		overflow-wrap: break-word;
+		word-wrap: break-word;
 	}
 	.comfyui-tips code {
 		font-size: 0.8rem;
@@ -857,24 +988,61 @@
 		padding: 0.1rem 0.25rem;
 		border-radius: 4px;
 	}
-	.comfyui-filter-input {
-		display: block;
+	.comfyui-combo-wrap {
+		min-width: 0;
+		position: relative;
+		max-width: 100%;
 		width: 100%;
-		max-width: 20rem;
-		margin-bottom: 0.5rem;
-		padding: 0.35rem 0.5rem;
 	}
-	.comfyui-select {
+	.comfyui-combo {
+		position: relative;
+		width: 100%;
+		min-width: 0;
+	}
+	.comfyui-combo-input {
+		width: 100%;
+		padding: 0.35rem 0.5rem;
+		font-size: 0.85rem;
+		color: var(--text);
+		background: var(--accent-soft);
+		border: 1px solid var(--accent);
+		border-radius: 6px;
+		outline: none;
+		box-sizing: border-box;
+	}
+	.comfyui-combo-input:focus {
+		border-color: var(--accent);
+		box-shadow: 0 0 0 2px var(--accent-soft);
+	}
+	.comfyui-combo-trigger {
 		display: block;
 		width: 100%;
-		max-width: 20rem;
-		margin: 0.5rem 0 0.75rem;
+		box-sizing: border-box;
+		text-align: left;
 		padding: 0.4rem 0.6rem;
-		border-radius: var(--radius);
-		border: 1px solid var(--border);
-		background: var(--surface);
+		font: inherit;
+		font-weight: 500;
+		font-size: 0.9rem;
 		color: inherit;
-		font-size: 0.95rem;
+		background: var(--accent-soft);
+		border: 1px solid var(--border);
+		border-radius: 6px;
+		cursor: pointer;
+		border-bottom: 1px dotted transparent;
+		transition: background 0.15s, border-color 0.15s;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+		min-width: 0;
+	}
+	.comfyui-combo-trigger:hover:not(:disabled) {
+		background: var(--accent-soft);
+		border-color: var(--accent);
+		border-bottom-color: var(--accent);
+	}
+	.comfyui-combo-trigger:disabled {
+		opacity: 0.6;
+		cursor: not-allowed;
 	}
 	.media-restore-hint {
 		width: 100%;
