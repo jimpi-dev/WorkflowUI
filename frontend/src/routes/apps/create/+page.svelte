@@ -938,9 +938,9 @@
 		display: flex;
 		gap: 0.2rem;
 	}
-	.output-node-wrap .output-card {
-		border-radius: 0;
-		border-left: none;
+  :global(.output-node-wrap .output-card) {
+    border-radius: 0;
+    border-left: none;
 		border-right: none;
 		border-bottom: none;
 		margin-bottom: 0;
