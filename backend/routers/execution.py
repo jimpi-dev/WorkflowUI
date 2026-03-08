@@ -21,6 +21,8 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 ALLOWED_IMAGE_EXTENSIONS = frozenset({".png", ".jpg", ".jpeg", ".webp", ".gif"})
+ALLOWED_VIDEO_EXTENSIONS = frozenset({".mp4", ".webm", ".mkv", ".mov"})
+ALLOWED_AUDIO_EXTENSIONS = frozenset({".mp3", ".wav", ".ogg", ".flac", ".m4a"})
 _INTEGER_BINDING_FIELDS = frozenset({
     "width", "height", "width_override", "height_override", "batch_size",
     "steps", "cfg", "seed", "noise_seed",
@@ -211,6 +213,70 @@ def upload_image(
         raise HTTPException(status_code=502, detail=f"ComfyUI upload failed: {e!s}")
     finally:
         image.file.close()
+
+
+@router.post("/upload_media")
+def upload_media(
+    file: UploadFile = File(..., alias="file"),
+    type: str = "image",
+    app_id: str | None = None,
+    db=Depends(get_db),
+):
+    """Upload image, video, or audio to ComfyUI input folder. Use type=image|video|audio."""
+    if app_id:
+        _, _, app_repo, _, _, _, _ = db
+        app = app_repo.get_app_by_id(app_id) if app_repo else None
+        comfy_url = _normalize_comfy_url(app.comfyui_url or COMFY_URL) if app else COMFY_URL
+    else:
+        comfy_url = COMFY_URL
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="Missing filename")
+    ext = Path(file.filename).suffix.lower()
+    media_type = (type or "image").lower()
+    if media_type == "image":
+        allowed = ALLOWED_IMAGE_EXTENSIONS
+        content_prefix = "image/"
+    elif media_type == "video":
+        allowed = ALLOWED_VIDEO_EXTENSIONS
+        content_prefix = "video/"
+    elif media_type == "audio":
+        allowed = ALLOWED_AUDIO_EXTENSIONS
+        content_prefix = "audio/"
+    else:
+        raise HTTPException(status_code=400, detail="type must be image, video, or audio")
+    if ext not in allowed:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported {media_type} format. Use: {', '.join(sorted(allowed))}",
+        )
+    if file.content_type and not file.content_type.startswith(content_prefix) and not file.content_type.startswith("application/"):
+        raise HTTPException(status_code=400, detail=f"File must be a {media_type} file")
+    try:
+        content = file.file.read()
+        _ensure_input_data_dir()
+        hash_name = _content_hash_name(content, ext)
+        local_path = INPUT_DATA_DIR / hash_name
+        if not local_path.exists():
+            with open(local_path, "wb") as f:
+                f.write(content)
+        mime = file.content_type or "application/octet-stream"
+        files = {"image": (hash_name, content, mime)}
+        res = requests.post(
+            f"{comfy_url.rstrip('/')}/upload/image",
+            files=files,
+            timeout=60,
+        )
+        res.raise_for_status()
+        data = res.json()
+        return {
+            "name": hash_name,
+            "subfolder": data.get("subfolder", ""),
+            "type": data.get("type", "input"),
+        }
+    except requests.RequestException as e:
+        raise HTTPException(status_code=502, detail=f"ComfyUI upload failed: {e!s}")
+    finally:
+        file.file.close()
 
 
 @router.get("/image")

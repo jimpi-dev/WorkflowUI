@@ -10,18 +10,23 @@ export const load = async ({ url, fetch }) => {
 	}
 	const base = getApiBase();
 
+	const noStore = { cache: 'no-store' as RequestCache };
 	let workflows: { id: string; label: string; output_count?: number }[] = [];
 	try {
 		const workflowsUrl = base ? `${base}/workflows` : '/workflows';
-		workflows = await fetch(workflowsUrl).then((r) => r.json());
+		const r = await fetch(workflowsUrl, noStore);
+		workflows = r.ok ? await r.json() : [];
 	} catch {
+		workflows = [];
 	}
 
 	let publicApps: { id: string; slug: string; title: string; description?: string | null }[] = [];
 	try {
 		const appsUrl = base ? `${base}/apps/public` : '/apps/public';
-		publicApps = await fetch(appsUrl).then((r) => r.json());
+		const r = await fetch(appsUrl, noStore);
+		publicApps = r.ok ? await r.json() : [];
 	} catch {
+		publicApps = [];
 	}
 
 	let appTitle: string | null = null;
@@ -30,7 +35,7 @@ export const load = async ({ url, fetch }) => {
 	if (workflowId) {
 		try {
 			const appUrl = base ? `${base}/app/${workflowId}` : `/app/${workflowId}`;
-			const appRes = await fetch(appUrl);
+			const appRes = await fetch(appUrl, noStore);
 			if (appRes.ok) {
 				const data = await appRes.json();
 				appTitle = data?.app?.title ?? null;
@@ -46,7 +51,7 @@ export const load = async ({ url, fetch }) => {
 	if (projectIdFromUrl) {
 		try {
 			const projUrl = base ? `${base}/projects/${projectIdFromUrl}` : `/projects/${projectIdFromUrl}`;
-			const projRes = await fetch(projUrl);
+			const projRes = await fetch(projUrl, noStore);
 			if (projRes.ok) {
 				const proj = await projRes.json();
 				projectFromUrl = { id: proj.id, name: proj.name };

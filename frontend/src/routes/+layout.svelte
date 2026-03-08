@@ -6,13 +6,15 @@
 	import { clearHeaderAppContext } from '$lib/stores/headerAppContext';
 	import AppHeader from '$lib/components/AppHeader.svelte';
 	import ComfyUIStatusBar from '$lib/components/ComfyUIStatusBar.svelte';
+	import ComfyUIConsole from '$lib/components/ComfyUIConsole.svelte';
+	import PluginWelcomeModal from '$lib/components/PluginWelcomeModal.svelte';
+	import { consolePanelOpen } from '$lib/stores/consolePanelOpen';
 	import { onMount } from 'svelte';
 	let { children } = $props();
 
 	let layoutEl: HTMLDivElement | null = $state(null);
 	let footerEl: HTMLElement | null = $state(null);
 
-	// Clear header app context when leaving /app/... so subtitle doesn't show stale data
 	let isAppRoute = $derived(
 		$page.url.pathname === '/app' || $page.url.pathname.startsWith('/app/')
 	);
@@ -42,15 +44,21 @@
 </svelte:head>
 
 <div class="app-layout has-status-bar" bind:this={layoutEl}>
+	<PluginWelcomeModal />
 	<AppHeader />
 
 	<main class="app-viewport">
 		{@render children()}
 	</main>
 
-	<footer class="app-footer" bind:this={footerEl}>
-		<ComfyUIStatusBar />
-	</footer>
+	<div class="app-footer-area">
+		{#if $consolePanelOpen}
+			<ComfyUIConsole open={$consolePanelOpen} onclose={() => consolePanelOpen.set(false)} />
+		{/if}
+		<footer class="app-footer" bind:this={footerEl}>
+			<ComfyUIStatusBar />
+		</footer>
+	</div>
 
 	{#if $appBooting}
 		<div class="app-booting-mask" role="status" aria-live="polite" aria-label="Loading app">
@@ -71,7 +79,6 @@
 		min-height: 100vh;
 		overflow: hidden;
 	}
-	/* Mobile: use dynamic viewport so footer isn't pushed below browser chrome. --app-footer-height set by ResizeObserver for flush run bar. */
 	@media (max-width: 639px) {
 		.app-layout {
 			height: 100dvh;
@@ -79,7 +86,6 @@
 		}
 	}
 
-	/* Viewport: the only scroll container; content (apps, projects, etc.) scrolls inside it */
 	.app-viewport {
 		flex: 1;
 		min-height: 0;
@@ -88,8 +94,13 @@
 		flex-direction: column;
 	}
 
-	/* Footer always at bottom of layout, never overlays content. Height var used by app page for mobile run bar offset. */
-	.app-footer {
+	.app-footer-area {
+		flex-shrink: 0;
+		display: flex;
+		flex-direction: column;
+	}
+	
+    .app-footer {
 		flex-shrink: 0;
 	}
 

@@ -3,6 +3,11 @@ import type { NodeSpec } from '../types';
 export const ImageScaleBySpec: NodeSpec = {
     classType: 'ImageScaleBy',
     fixedInputs: {
+        upscale_method: {
+            type: 'select',
+            label: 'Upscale method',
+            optionSource: 'upscale_methods'
+        },
         scale_by: {
             type: 'number',
             label: 'Scale by',

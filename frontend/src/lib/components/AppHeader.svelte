@@ -5,6 +5,7 @@
 	import { page } from '$app/stores';
 	import { QUICK_RUNS_PROJECT_ID } from '$lib/constants';
 	import { appConfig, getApiBase } from '$lib/config';
+	import { waitForAppToBeAvailable } from '$lib/api';
 	import { headerAppContext } from '$lib/stores/headerAppContext';
 	import { presetHeaderStore, togglePresetHeaderCreation, requestOpenPresetList } from '$lib/stores/presetHeader';
 	import { projectSelectorOpen } from '$lib/stores/projectSelectorOpen';
@@ -83,6 +84,7 @@
 					} catch {
 					}
 				}
+				await waitForAppToBeAvailable(slug);
 				await goto(`/app/${slug}`);
 				return;
 			}
@@ -94,6 +96,7 @@
 					} catch {
 					}
 				}
+				await waitForAppToBeAvailable(slug);
 				await goto(`/app/${slug}`);
 				return;
 			}
@@ -280,6 +283,7 @@
 							class="header-subtitle-project"
 							class:header-subtitle-project-has-color={$headerAppContext.projectHeaderColor}
 							style={$headerAppContext.projectHeaderColor ? `--project-name-color: ${$headerAppContext.projectHeaderColor}` : ''}
+							title="Go to current project (you will leave this app page)"
 						>
 							{$headerAppContext.projectDetail ? $headerAppContext.projectDetail.name : $headerAppContext.projectName}
 							{#if $headerAppContext.projectDetail}

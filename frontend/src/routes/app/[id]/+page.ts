@@ -1,5 +1,6 @@
 import { analyzeWorkflow } from '$lib/workflow';
 import { appConfig, getApiBase } from '$lib/config';
+import { getDefaultMasterSeedInputKey } from '$lib/types/appBuilder';
 
 export const ssr = appConfig.ssr;
 
@@ -30,8 +31,8 @@ export const load = async ({ params, fetch, url }) => {
 		} catch {
 		}
 		const [appRes, cfgRes] = await Promise.all([
-			fetch(`${apiBase}/app/${params.id}`),
-			fetch(`${apiBase}/config`)
+			fetch(`${apiBase}/app/${params.id}`, { cache: 'no-store' }),
+			fetch(`${apiBase}/config`, { cache: 'no-store' })
 		]);
 		let comfyuiDeleteSupported = false;
 		let embedWorkflowuiMetadataOnDownload = false;
@@ -49,8 +50,19 @@ export const load = async ({ params, fetch, url }) => {
 		if (appRes.status === 404) {
 			return { appRemoved: true, workflowId: params.id, comfyuiDeleteSupported, sendFromPreload: null };
 		}
+		const contentType = appRes.headers.get("content-type") ?? "";
+		if (appRes.ok && contentType.toLowerCase().includes("text/html")) {
+			return { appRemoved: true, workflowId: params.id, comfyuiDeleteSupported, sendFromPreload: null };
+		}
 		if (appRes.ok) {
-			const appData = await appRes.json();
+			let appData: { workflow_version?: unknown; app?: unknown };
+			try {
+				appData = await appRes.json();
+			} catch {
+				appData = {} as { workflow_version?: unknown; app?: unknown };
+			}
+			if (!appData?.workflow_version || !appData?.app) {
+			} else {
 			const wv = appData.workflow_version ?? {};
 			const app = appData.app ?? {};
 		
@@ -81,7 +93,6 @@ export const load = async ({ params, fetch, url }) => {
 				}
 				detectedInputs = sorted;
 			}
-			// Apply input visibility (from app builder)
 			if (uiConfig?.visibleInputs && Array.isArray(uiConfig.visibleInputs) && uiConfig.visibleInputs.length > 0) {
 				const visibleSet = new Set(uiConfig.visibleInputs);
 				detectedInputs = detectedInputs.filter((i: { key?: string }) => i.key && visibleSet.has(i.key));
@@ -149,21 +160,22 @@ export const load = async ({ params, fetch, url }) => {
 				}
 			}
 			const bindings = bindingsFromInputs(detectedInputs);
-			// Master seed: pass through from ui_config so runner uses it; AutoForm resolves by key (falls back to first seed if not found).
 			const rawMasterSeed =
 				(uiConfig as Record<string, unknown>)?.masterSeedInputKey ??
 				(uiConfig as Record<string, unknown>)?.master_seed_input_key;
 			const masterSeedInputKey =
 				typeof rawMasterSeed === 'string' && rawMasterSeed.trim()
 					? rawMasterSeed.trim()
-					: undefined;
+					: getDefaultMasterSeedInputKey(detectedInputs) ?? undefined;
+			const formLabel = typeof wv.form_label === 'string' && wv.form_label.trim() ? wv.form_label.trim() : undefined;
 			const workflowModel = {
 				inputs: detectedInputs,
 				outputs: detectedOutputs,
 				bindings,
-				...(masterSeedInputKey ? { masterSeedInputKey } : {})
+				...(masterSeedInputKey ? { masterSeedInputKey } : {}),
+				...(formLabel ? { form_label: formLabel } : {})
 			};
-			const [listRes, objectInfoRes, lorasRes, lycorisTypesRes, checkpointsRes, devicesRes, rifeModelsRes, unetGgufModelsRes, stableCascadeModelsRes, upscaleModelsRes] = await Promise.all([
+			const [listRes, objectInfoRes, lorasRes, lycorisTypesRes, checkpointsRes, devicesRes, rifeModelsRes, unetGgufModelsRes, stableCascadeModelsRes, upscaleModelsRes, upscaleMethodsRes] = await Promise.all([
 				fetch(`${apiBase}/workflows`),
 				fetch(`${apiBase}/object_info`).catch(() => null),
 				fetch(`${apiBase}/loras`).catch(() => null),
@@ -173,7 +185,8 @@ export const load = async ({ params, fetch, url }) => {
 				fetch(`${apiBase}/rife_models`).catch(() => null),
 				fetch(`${apiBase}/unet_gguf_models`).catch(() => null),
 				fetch(`${apiBase}/stable_cascade_models`).catch(() => null),
-				fetch(`${apiBase}/upscale_models`).catch(() => null)
+				fetch(`${apiBase}/upscale_models`).catch(() => null),
+				fetch(`${apiBase}/upscale_methods`).catch(() => null)
 			]);
 			const objectInfo = objectInfoRes?.ok ? await objectInfoRes.json() : { samplers: [], schedulers: [] };
 			const { samplers = [], schedulers = [] } = objectInfo;
@@ -187,6 +200,7 @@ export const load = async ({ params, fetch, url }) => {
 			const stableCascadeStageB = Array.isArray(stableCascadeModels.stage_b) ? stableCascadeModels.stage_b : [];
 			const stableCascadeStageC = Array.isArray(stableCascadeModels.stage_c) ? stableCascadeModels.stage_c : [];
 			const upscaleModels = upscaleModelsRes?.ok ? (await upscaleModelsRes.json())?.upscale_models ?? [] : [];
+			const upscaleMethods = upscaleMethodsRes?.ok ? (await upscaleMethodsRes.json())?.upscale_methods ?? [] : [];
 			for (const input of workflowModel.inputs) {
 				if (input.optionSource === 'samplers' && samplers.length) input.options = samplers;
 				if (input.optionSource === 'schedulers' && schedulers.length) input.options = schedulers;
@@ -199,8 +213,16 @@ export const load = async ({ params, fetch, url }) => {
 				if (input.optionSource === 'stable_cascade_stage_b' && stableCascadeStageB.length) input.options = stableCascadeStageB;
 				if (input.optionSource === 'stable_cascade_stage_c' && stableCascadeStageC.length) input.options = stableCascadeStageC;
 				if (input.optionSource === 'upscale_models' && Array.isArray(upscaleModels) && upscaleModels.length) input.options = upscaleModels;
+				if (input.optionSource === 'upscale_methods' && Array.isArray(upscaleMethods) && upscaleMethods.length) input.options = upscaleMethods;
 			}
-			const workflows = listRes.ok ? await listRes.json() : [];
+			let workflows: unknown[] = [];
+			if (listRes.ok) {
+				try {
+					workflows = await listRes.json();
+				} catch {
+					workflows = [];
+				}
+			}
 			const workflowLoraPaths = extractLoraPathsFromDetectedInputs(detectedInputs);
 			
 			let sendFromPreload: { runId: string; outputIndex: number; inputKey: string; filename: string; subfolder: string; type: string } | null = null;
@@ -227,7 +249,6 @@ export const load = async ({ params, fetch, url }) => {
 							}
 						}
 					} catch {
-						// ignore
 					}
 				}
 			}
@@ -245,105 +266,10 @@ export const load = async ({ params, fetch, url }) => {
 				embedWorkflowuiMetadataOnSave,
 				sendFromPreload
 			};
-		}
-		
-		const [wfRes, listRes, objectInfoRes, lorasRes, lycorisTypesRes, checkpointsRes, devicesRes, rifeModelsRes, unetGgufModelsRes, stableCascadeModelsRes, clipVisionModelsRes, upscaleModelsRes] = await Promise.all([
-			fetch(`${apiBase}/workflow/${params.id}`),
-			fetch(`${apiBase}/workflows`),
-			fetch(`${apiBase}/object_info`).catch(() => null),
-			fetch(`${apiBase}/loras`).catch(() => null),
-			fetch(`${apiBase}/lycoris_types`).catch(() => null),
-			fetch(`${apiBase}/checkpoints`).catch(() => null),
-			fetch(`${apiBase}/devices`).catch(() => null),
-			fetch(`${apiBase}/rife_models`).catch(() => null),
-			fetch(`${apiBase}/unet_gguf_models`).catch(() => null),
-			fetch(`${apiBase}/stable_cascade_models`).catch(() => null),
-			fetch(`${apiBase}/clip_vision_models`).catch(() => null),
-			fetch(`${apiBase}/upscale_models`).catch(() => null)
-		]);
-
-		if (!wfRes.ok) {
-			const body = await wfRes.json().catch(() => ({}));
-			const msg = (body as { detail?: string }).detail ?? `Workflow failed to load: ${wfRes.status}`;
-			throw new Error(msg);
-		}
-		const workflowJson = await wfRes.json();
-		if (!workflowJson || typeof workflowJson !== 'object') {
-			throw new Error('Invalid workflow response');
-		}
-		const workflowModel = analyzeWorkflow(workflowJson);
-
-		const workflowLoraPaths = extractLoraPathsFromWorkflow(workflowJson as Record<string, unknown>);
-
-		const objectInfo = objectInfoRes?.ok ? await objectInfoRes.json() : { samplers: [], schedulers: [] };
-		const { samplers = [], schedulers = [] } = objectInfo;
-		const loras = lorasRes?.ok ? (await lorasRes.json())?.loras ?? [] : [];
-		const lycorisTypes = lycorisTypesRes?.ok ? (await lycorisTypesRes.json())?.lycoris_types ?? [] : [];
-		const checkpoints = checkpointsRes?.ok ? (await checkpointsRes.json())?.checkpoints ?? [] : [];
-		const devices = devicesRes?.ok ? (await devicesRes.json())?.devices ?? [] : [];
-		const rifeModels = rifeModelsRes?.ok ? (await rifeModelsRes.json())?.rife_models ?? [] : [];
-		const unetGgufModels = unetGgufModelsRes?.ok ? (await unetGgufModelsRes.json())?.unet_gguf_models ?? [] : [];
-		const stableCascadeModels = stableCascadeModelsRes?.ok ? (await stableCascadeModelsRes.json()) ?? {} : {};
-		const stableCascadeStageB = Array.isArray(stableCascadeModels.stage_b) ? stableCascadeModels.stage_b : [];
-		const stableCascadeStageC = Array.isArray(stableCascadeModels.stage_c) ? stableCascadeModels.stage_c : [];
-		const clipVisionModels = clipVisionModelsRes?.ok ? (await clipVisionModelsRes.json())?.clip_vision_models ?? [] : [];
-		const upscaleModels = upscaleModelsRes?.ok ? (await upscaleModelsRes.json())?.upscale_models ?? [] : [];
-
-		for (const input of workflowModel.inputs) {
-			if (input.optionSource === 'samplers' && samplers.length) {
-				input.options = samplers;
-			}
-			if (input.optionSource === 'schedulers' && schedulers.length) {
-				input.options = schedulers;
-			}
-			if (input.optionSource === 'loras' && Array.isArray(loras) && loras.length) {
-				input.options = loras;
-			}
-			if (input.optionSource === 'lycoris_types' && Array.isArray(lycorisTypes) && lycorisTypes.length) {
-				input.options = lycorisTypes;
-			}
-			if (input.optionSource === 'checkpoints' && Array.isArray(checkpoints) && checkpoints.length) {
-				input.options = checkpoints;
-			}
-			if (input.optionSource === 'devices' && Array.isArray(devices) && devices.length) {
-				input.options = devices;
-			}
-			if (input.optionSource === 'rife_models' && Array.isArray(rifeModels) && rifeModels.length) {
-				input.options = rifeModels;
-			}
-			if (input.optionSource === 'unet_gguf_models' && Array.isArray(unetGgufModels) && unetGgufModels.length) {
-				input.options = unetGgufModels;
-			}
-			if (input.optionSource === 'stable_cascade_stage_b' && stableCascadeStageB.length) {
-				input.options = stableCascadeStageB;
-			}
-			if (input.optionSource === 'stable_cascade_stage_c' && stableCascadeStageC.length) {
-				input.options = stableCascadeStageC;
-			}
-			if (input.optionSource === 'clip_vision_models' && Array.isArray(clipVisionModels) && clipVisionModels.length) {
-				input.options = clipVisionModels;
-			}
-			if (input.optionSource === 'upscale_models' && Array.isArray(upscaleModels) && upscaleModels.length) {
-				input.options = upscaleModels;
 			}
 		}
 
-		const workflows = listRes.ok ? await listRes.json() : [];
-
-		return {
-			workflowJson,
-			workflowModel,
-			workflowLoraPaths,
-			workflowId: params.id,
-			workflows,
-			appId: null,
-			appConfig: null,
-			isAppBySlug: false,
-			comfyuiDeleteSupported,
-			embedWorkflowuiMetadataOnDownload,
-			embedWorkflowuiMetadataOnSave,
-			sendFromPreload: null
-		};
+		return { appRemoved: true, workflowId: params.id, comfyuiDeleteSupported, sendFromPreload: null };
 	} catch (err) {
 		const message = err instanceof Error ? err.message : String(err);
 		throw new Error(`Page load failed: ${message}`);

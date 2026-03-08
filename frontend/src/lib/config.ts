@@ -22,3 +22,4 @@ export function getApiBase(): string {
 }
 
 export const COMFYUI_MAX_SEED = 2 ** 50;
+export const COMFYUI_INT_MAX = 2147483647;

@@ -1,7 +1,31 @@
 import re
 from typing import Any
 
+WORKFLOW_UI_LINK_CLASS = "WorkflowUILink"
+
+def _workflow_ui_link_widget_order() -> list[str]:
+    order = ["form_label"]
+    for i in range(8):
+        order.append(f"type_{i}")
+        order.append(f"name_{i}")
+    for i in range(8):
+        order.append(f"input_text_{i}")
+    for i in range(8):
+        order.append(f"input_number_{i}")
+    for i in range(8):
+        order.append(f"input_image_{i}")
+    for i in range(8):
+        order.append(f"input_video_{i}")
+    for i in range(8):
+        order.append(f"input_audio_{i}")
+    for i in range(8):
+        order.append(f"input_boolean_{i}")
+    return order
+
+
 _WIDGET_ORDER: dict[str, list[str]] = {
+    WORKFLOW_UI_LINK_CLASS: _workflow_ui_link_widget_order(),
+    "WorkflowUI Link": _workflow_ui_link_widget_order(),
     "EmptyLatentImage": ["width", "height", "batch_size"],
     "EmptySD3LatentImage": ["width", "height", "batch_size"],
     "SDXLEmptyLatentSizePicker+": ["resolution", "batch_size", "width_override", "height_override"],
@@ -17,9 +41,43 @@ _WIDGET_ORDER: dict[str, list[str]] = {
 }
 
 
+def _is_api_format_graph(d: dict[str, Any]) -> bool:
+    """True if d looks like ComfyUI API format: { node_id: { class_type, inputs } }."""
+    if not d or not isinstance(d, dict):
+        return False
+    for v in d.values():
+        if isinstance(v, dict) and ("class_type" in v or "inputs" in v):
+            return True
+    return False
+
+
+def _extract_workflow_for_analysis(workflow: dict[str, Any]) -> dict[str, Any]:
+    """Unwrap nested structures (e.g. { workflow: { graph: {...} } }, { prompt: {...} }) so we get the analyzable graph."""
+    if not isinstance(workflow, dict):
+        return workflow
+    if workflow.get("nodes") is not None:
+        return workflow
+    if _is_api_format_graph(workflow):
+        return workflow
+    for key in ("graph", "workflow", "prompt"):
+        inner = workflow.get(key)
+        if isinstance(inner, dict) and inner.get("nodes") is not None:
+            return inner
+        if isinstance(inner, dict) and _is_api_format_graph(inner):
+            return inner
+        if isinstance(inner, dict):
+            deeper = inner.get("graph") or inner.get("workflow")
+            if isinstance(deeper, dict) and deeper.get("nodes") is not None:
+                return deeper
+            if isinstance(deeper, dict) and _is_api_format_graph(deeper):
+                return deeper
+    return workflow
+
+
 def _normalize_to_api_format(workflow: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(workflow, dict):
         return workflow
+    workflow = _extract_workflow_for_analysis(workflow)
     nodes = workflow.get("nodes")
     if not isinstance(nodes, list):
         return workflow
@@ -34,24 +92,37 @@ def _normalize_to_api_format(workflow: dict[str, Any]) -> dict[str, Any]:
         class_type = node.get("type") or node.get("class_type")
         if not class_type:
             continue
+        if class_type == "WorkflowUI Link":
+            class_type = WORKFLOW_UI_LINK_CLASS
         inputs: dict[str, Any] = {}
-        widget_order = _WIDGET_ORDER.get(class_type)
-        widgets_values = node.get("widgets_values")
-        if isinstance(widgets_values, list) and widget_order:
-            for idx, field in enumerate(widget_order):
-                if idx < len(widgets_values):
-                    inputs[field] = widgets_values[idx]
-        elif isinstance(node.get("inputs"), dict):
+        widgets_values = node.get("widgets_values") or node.get("widgetsValues") or node.get("widget_values")
+        if isinstance(widgets_values, dict):
+            inputs = dict(widgets_values)
+        elif isinstance(widgets_values, list):
+            widget_order = _WIDGET_ORDER.get(class_type)
+            if not widget_order:
+                spec = NODE_SPECS.get(class_type)
+                if isinstance(spec, dict) and isinstance(spec.get("fixedInputs"), dict):
+                    widget_order = list(spec["fixedInputs"].keys())
+            if widget_order:
+                for idx, field in enumerate(widget_order):
+                    if idx < len(widgets_values):
+                        inputs[field] = widgets_values[idx]
+        if not inputs and isinstance(node.get("inputs"), dict):
             inputs = dict(node["inputs"])
         meta = node.get("_meta")
         if not meta and isinstance(node.get("properties"), dict):
             s_r_name = (node.get("properties") or {}).get("Node name for S&R")
             if isinstance(s_r_name, str) and s_r_name.strip():
                 meta = {"title": s_r_name.strip()}
+        normalized = {"class_type": class_type, "inputs": inputs}
         if meta:
-            out[node_id] = {"class_type": class_type, "inputs": inputs, "_meta": meta}
-        else:
-            out[node_id] = {"class_type": class_type, "inputs": inputs}
+            normalized["_meta"] = meta
+        if class_type == WORKFLOW_UI_LINK_CLASS:
+            raw_outputs = node.get("outputs")
+            if isinstance(raw_outputs, list):
+                normalized["_raw_outputs"] = raw_outputs
+        out[node_id] = normalized
     return out if out else workflow
 
 
@@ -172,6 +243,7 @@ NODE_SPECS: dict[str, dict[str, Any]] = {
     },
     "ImageScaleBy": {
         "fixedInputs": {
+            "upscale_method": {"type": "select", "label": "Upscale method", "optionSource": "upscale_methods"},
             "scale_by": {"type": "number", "label": "Scale by", "min": 0.01, "max": 4, "step": 0.01, "slider": True},
         },
     },
@@ -354,7 +426,7 @@ NODE_SPECS: dict[str, dict[str, Any]] = {
     },
     "ImageScaleToTotalPixels": {
         "fixedInputs": {
-            "upscale_method": {"type": "select", "label": "Upscale method", "options": ["nearest-exact", "bilinear", "area", "bicubic", "lanczos"]},
+            "upscale_method": {"type": "select", "label": "Upscale method", "optionSource": "upscale_methods"},
             "megapixels": {"type": "number", "label": "Megapixels", "min": 0.1, "max": 100, "step": 0.1},
             "resolution_steps": {"type": "number", "label": "Resolution steps", "min": 1, "max": 16},
             "image": {"type": "image", "label": "Image"},
@@ -388,7 +460,7 @@ NODE_SPECS: dict[str, dict[str, Any]] = {
     },
     "ImageScale": {
         "fixedInputs": {
-            "upscale_method": {"type": "select", "label": "Upscale method", "options": ["nearest-exact", "bilinear", "area", "bicubic", "lanczos"]},
+            "upscale_method": {"type": "select", "label": "Upscale method", "optionSource": "upscale_methods"},
             "width": {"type": "number", "label": "Width", "min": 64, "max": 8192, "step": 8},
             "height": {"type": "number", "label": "Height", "min": 64, "max": 8192, "step": 8},
             "crop": {"type": "select", "label": "Crop", "options": ["disabled", "center", "top", "bottom", "left", "right"]},
@@ -432,7 +504,7 @@ NODE_SPECS: dict[str, dict[str, Any]] = {
     },
     "LatentUpscaleBy": {
         "fixedInputs": {
-            "upscale_method": {"type": "select", "label": "Upscale method", "options": ["nearest-exact", "bilinear", "area", "bicubic", "lanczos"]},
+            "upscale_method": {"type": "select", "label": "Upscale method", "optionSource": "upscale_methods"},
             "scale_by": {"type": "number", "label": "Scale by", "min": 0.25, "max": 4, "step": 0.25, "slider": True},
         },
     },
@@ -523,7 +595,7 @@ NODE_SPECS: dict[str, dict[str, Any]] = {
         "fixedInputs": {
             "width": {"type": "number", "label": "Width", "min": 64, "max": 8192, "step": 8},
             "height": {"type": "number", "label": "Height", "min": 64, "max": 8192, "step": 8},
-            "upscale_method": {"type": "select", "label": "Upscale method", "options": ["nearest-exact", "bilinear", "area", "bicubic", "lanczos"]},
+            "upscale_method": {"type": "select", "label": "Upscale method", "optionSource": "upscale_methods"},
             "keep_proportion": {"type": "select", "label": "Keep proportion", "options": ["resize", "crop", "pad"]},
             "pad_color": {"type": "text", "label": "Pad color"},
             "crop_position": {"type": "select", "label": "Crop position", "options": ["center", "top", "bottom", "left", "right"]},
@@ -540,13 +612,350 @@ NODE_SPECS: dict[str, dict[str, Any]] = {
 }
 
 
-def analyze_workflow(workflow: dict[str, Any]) -> dict[str, Any]:
+def _parse_workflow_ui_link_definitions(raw: Any) -> list[dict[str, Any]]:
+    """Parse JSON from input_definitions or output_definitions. Returns [] on failure."""
+    if raw is None:
+        return []
+    if isinstance(raw, list):
+        return raw
+    if isinstance(raw, str) and raw.strip():
+        try:
+            parsed = __import__("json").loads(raw)
+            return parsed if isinstance(parsed, list) else []
+        except Exception:
+            pass
+    return []
+
+
+WORKFLOW_UI_LINK_TYPES = (WORKFLOW_UI_LINK_CLASS, "WorkflowUI Link")
+
+
+def workflow_contains_workflow_ui_link(workflow: dict[str, Any]) -> tuple[bool, str | None]:
+    """Return (has_link, first_link_node_id or None)."""
+    wf = _normalize_to_api_format(workflow)
+    for nid, n in wf.items():
+        if isinstance(n, dict) and n.get("class_type") in WORKFLOW_UI_LINK_TYPES:
+            return True, nid
+    return False, None
+
+
+def extract_form_label_from_graph(workflow: dict[str, Any]) -> str | None:
+    """Extract form_label from the WorkflowUILink node in the graph, if present."""
+    wf = _normalize_to_api_format(workflow)
+    for nid, n in wf.items():
+        if isinstance(n, dict) and n.get("class_type") in WORKFLOW_UI_LINK_TYPES:
+            inputs = n.get("inputs") or {}
+            fl = (inputs.get("form_label") or "").strip()
+            return fl if fl else None
+    return None
+
+
+def _workflow_ui_link_field(slot: int, typ: str) -> str:
+    """Map definition type to actual input field name for WorkflowUILink node."""
+    if typ == "image":
+        return f"input_image_{slot}"
+    if typ == "video":
+        return f"input_video_{slot}"
+    if typ == "audio":
+        return f"input_audio_{slot}"
+    if typ == "boolean":
+        return f"input_boolean_{slot}"
+    if typ in ("number", "seed"):
+        return f"input_number_{slot}"
+    return f"input_text_{slot}"
+
+
+def _find_input_definitions_fallback(inputs: dict[str, Any]) -> list[dict[str, Any]]:
+    """When input_definitions is missing, scan values for a JSON array of {name, type} objects."""
+    import json as _json
+    for v in inputs.values():
+        if not isinstance(v, str) or not v.strip().startswith("["):
+            continue
+        try:
+            parsed = _json.loads(v)
+            if isinstance(parsed, list) and parsed and isinstance(parsed[0], dict):
+                if "name" in parsed[0] or "type" in parsed[0]:
+                    return parsed
+        except Exception:
+            pass
+    return []
+
+
+def _parse_workflow_ui_link_output_name(name: str) -> tuple[int | None, str | None]:
+    """Parse output name like text_0, number_1, image_2 -> (slot, type)."""
+    for prefix in ("text_", "number_", "image_", "video_", "audio_"):
+        if name.startswith(prefix):
+            try:
+                slot = int(name[len(prefix):])
+                if 0 <= slot < 8:
+                    typ = "number" if prefix == "number_" else prefix.rstrip("_")
+                    return slot, typ
+            except ValueError:
+                pass
+    return None, None
+
+
+def _origin_slot_to_slot_and_type(origin_slot: int) -> tuple[int, str] | None:
+    """Map WorkflowUILink output index (origin_slot) to (slot 0-7, type)."""
+    if origin_slot < 0 or origin_slot >= 40:
+        return None
+    slot = origin_slot % 8
+    if origin_slot < 8:
+        return slot, "text"
+    if origin_slot < 16:
+        return slot, "number"
+    if origin_slot < 24:
+        return slot, "image"
+    if origin_slot < 32:
+        return slot, "video"
+    return slot, "audio"
+
+
+def _infer_input_definitions_from_links(
+    link_node_id: str,
+    links: list[Any],
+    node_inputs: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Infer input definitions from workflow links array (ComfyUI 0.4 format).
+    Links format: [link_id, origin_id, origin_slot, target_id, target_slot, type] (6 elements)."""
+    if not isinstance(links, list):
+        return []
+    link_node_id_str = str(link_node_id)
+    by_slot: dict[int, tuple[str, str]] = {}
+    for link in links:
+        if isinstance(link, (list, tuple)) and len(link) >= 4:
+            if len(link) >= 6:
+                origin_id, origin_slot = str(link[1]), link[2]
+            else:
+                origin_id, origin_slot = str(link[0]), link[1]
+            if str(origin_id) != link_node_id_str or origin_slot is None:
+                continue
+            try:
+                origin_slot_int = int(origin_slot)
+            except (TypeError, ValueError):
+                continue
+            mapped = _origin_slot_to_slot_and_type(origin_slot_int)
+            if mapped is None:
+                continue
+            slot, typ = mapped
+            name_val = (node_inputs.get(f"name_{slot}") or node_inputs.get(f"title_{slot}") or "").strip()
+            label = name_val or f"Field {slot}"
+            use_seed = typ == "number" and "seed" in label.lower()
+            dtype = "seed" if use_seed else typ
+            name_slug = label.lower().replace(" ", "_").replace("(", "").replace(")", "").replace(".", "") or f"field_{slot}"
+            if slot not in by_slot:
+                by_slot[slot] = (dtype, label, name_slug)
+        elif isinstance(link, dict):
+            origin_id = str(link.get("origin_id", link.get("originId", "")))
+            origin_slot = link.get("origin_slot", link.get("originSlot"))
+            if origin_id != link_node_id_str or origin_slot is None:
+                continue
+            try:
+                origin_slot_int = int(origin_slot)
+            except (TypeError, ValueError):
+                continue
+            mapped = _origin_slot_to_slot_and_type(origin_slot_int)
+            if mapped is None:
+                continue
+            slot, typ = mapped
+            name_val = (node_inputs.get(f"name_{slot}") or node_inputs.get(f"title_{slot}") or "").strip()
+            label = name_val or f"Field {slot}"
+            use_seed = typ == "number" and "seed" in label.lower()
+            dtype = "seed" if use_seed else typ
+            name_slug = label.lower().replace(" ", "_").replace("(", "").replace(")", "").replace(".", "") or f"field_{slot}"
+            if slot not in by_slot:
+                by_slot[slot] = (dtype, label, name_slug)
+    result: list[dict[str, Any]] = []
+    for slot in sorted(by_slot.keys()):
+        dtype, label, name_slug = by_slot[slot]
+        result.append({"name": name_slug, "type": dtype, "label": label})
+    return result
+
+
+def _infer_input_definitions_from_names(node_inputs: dict[str, Any]) -> list[dict[str, Any]]:
+    """Fallback: build definitions from name_0..name_7 when outputs inference fails."""
+    result: list[dict[str, Any]] = []
+    for i in range(8):
+        name = (node_inputs.get(f"name_{i}") or node_inputs.get(f"title_{i}") or "").strip()
+        if not name:
+            continue
+        use_seed = "seed" in name.lower()
+        name_slug = name.lower().replace(" ", "_").replace("(", "").replace(")", "").replace(".", "") or f"field_{i}"
+        typ = "seed" if use_seed else ("number" if any(x in name.lower() for x in ["width", "height", "steps", "px", "size"]) else "text")
+        result.append({"name": name_slug, "type": typ})
+    return result
+
+
+def _infer_input_definitions_from_outputs(node: dict[str, Any]) -> list[dict[str, Any]]:
+    """Infer input definitions from WorkflowUILink outputs and title widgets when input_definitions is [].
+    Used when workflow was saved with empty definitions but has outputs wired and titles set."""
+    raw_outputs = node.get("_raw_outputs")
+    if not isinstance(raw_outputs, list):
+        return []
+    node_inputs = node.get("inputs") or {}
+    by_slot: dict[int, tuple[str, str, str, bool]] = {}
+    for out in raw_outputs:
+        if not isinstance(out, dict):
+            continue
+        name = out.get("name")
+        if not name or not isinstance(name, str):
+            continue
+        links = out.get("links")
+        has_link = isinstance(links, list) and len(links) > 0
+        slot, typ = _parse_workflow_ui_link_output_name(name)
+        if slot is None or typ is None:
+            continue
+        name_val = (node_inputs.get(f"name_{slot}") or node_inputs.get(f"title_{slot}") or "").strip()
+        if not has_link and not name_val:
+            continue
+        label = name_val or f"Field {slot}"
+        use_seed = typ == "number" and "seed" in label.lower()
+        dtype = "seed" if use_seed else typ
+        name_slug = label.lower().replace(" ", "_").replace("(", "").replace(")", "").replace(".", "") or f"field_{slot}"
+        prev = by_slot.get(slot)
+        if prev is None or (has_link and not prev[3]):
+            by_slot[slot] = (dtype, label, name_slug, has_link)
+    result: list[dict[str, Any]] = []
+    for slot in sorted(by_slot.keys()):
+        dtype, label, name_slug, _ = by_slot[slot]
+        result.append({"name": name_slug, "type": dtype, "label": label})
+    return result
+
+
+def _input_definitions_from_type_widgets(node_inputs: dict[str, Any]) -> list[dict[str, Any]]:
+    """Build input_definitions from type_0..7, name_0..7 widgets. Name is used as both identifier and label."""
+    result: list[dict[str, Any]] = []
+    for i in range(8):
+        typ = (node_inputs.get(f"type_{i}") or "").strip().lower()
+        if not typ:
+            continue
+        name = (node_inputs.get(f"name_{i}") or "").strip()
+        if not name:
+            name = f"field_{i}"
+        result.append({"name": name, "type": typ})
+    return result
+
+
+def _analyze_workflow_ui_link_node(
+    node_id: str,
+    node: dict[str, Any],
+    workflow: dict[str, Any],
+    *,
+    raw_links: list[Any] | None = None,
+) -> dict[str, Any]:
+    """Build inputs from WorkflowUILink node; outputs from rest of graph (SaveImage etc.)."""
+    node_inputs = node.get("inputs") or {}
+    input_defs = _input_definitions_from_type_widgets(node_inputs)
+    if not input_defs:
+        input_defs = _parse_workflow_ui_link_definitions(node_inputs.get("input_definitions"))
+    if not input_defs:
+        input_defs = _find_input_definitions_fallback(node_inputs)
+    if not input_defs:
+        input_defs = _infer_input_definitions_from_outputs(node)
+    if not input_defs and raw_links:
+        input_defs = _infer_input_definitions_from_links(node_id, raw_links, node_inputs)
+    if not input_defs:
+        input_defs = _infer_input_definitions_from_names(node_inputs)
+    meta = node.get("_meta") or {}
+    node_title = (meta.get("title") or "WorkflowUILink").replace("_", " ")
+    meta_title = (meta.get("title") or "").replace("_", " ") or None
+
+    inputs: list[dict[str, Any]] = []
+    bindings: list[dict[str, str]] = []
+
+    for i, item in enumerate(input_defs):
+        if not isinstance(item, dict):
+            continue
+        name = item.get("name")
+        if not name or not isinstance(name, str):
+            continue
+        typ = (item.get("type") or "text").lower()
+        field = _workflow_ui_link_field(i, typ)
+        key = f"{node_id}.{field}"
+        label = (item.get("label") or name).replace("_", " ")
+        is_seed = typ == "seed"
+        inp = {
+            "key": key,
+            "label": label,
+            "role": "seed" if is_seed else "parameter",
+            "parent": node_title,
+            "type": typ if typ in ("text", "number", "seed", "image", "video", "audio", "select", "boolean") else "text",
+            "default": node_inputs.get(field) if field in node_inputs else item.get("default"),
+            "nodeId": node_id,
+            "field": field,
+            "classType": WORKFLOW_UI_LINK_CLASS,
+            "metaTitle": meta_title,
+        }
+        if name:
+            inp["name"] = name
+        for k in ("min", "max", "step", "slider", "options", "optionSource"):
+            if k in item:
+                inp[k] = item[k]
+        inputs.append(inp)
+        bindings.append({"key": key, "nodeId": node_id, "field": field})
+
+    outputs: list[dict[str, Any]] = []
+    for nid, n in workflow.items():
+        if nid == node_id or not isinstance(n, dict):
+            continue
+        spec = NODE_SPECS.get(n.get("class_type") or "")
+        if not spec:
+            continue
+        out_spec = spec.get("outputs") or {}
+        if not out_spec:
+            continue
+        meta = n.get("_meta") or {}
+        node_title = (meta.get("title") or n.get("class_type") or nid).replace("_", " ")
+        out_meta_title = (meta.get("title") or "").replace("_", " ") if meta.get("title") else None
+        if out_spec.get("type") == "image":
+            outputs.append({"nodeId": nid, "type": "image", "label": node_title, "metaTitle": out_meta_title})
+        if out_spec.get("type") == "video":
+            outputs.append({"nodeId": nid, "type": "video", "label": node_title, "metaTitle": out_meta_title})
+        if out_spec.get("type") == "audio":
+            outputs.append({"nodeId": nid, "type": "audio", "label": node_title, "metaTitle": out_meta_title})
+
+    form_label = (node_inputs.get("form_label") or "").strip()
+    result: dict[str, Any] = {"inputs": inputs, "outputs": outputs, "bindings": bindings}
+    if form_label:
+        result["form_label"] = form_label
+    return result
+
+
+def analyze_workflow(workflow: dict[str, Any], use_workflow_ui_link: bool = False) -> dict[str, Any]:
+    raw_workflow = _extract_workflow_for_analysis(workflow) if isinstance(workflow, dict) else {}
+    raw_links = raw_workflow.get("links") if isinstance(raw_workflow, dict) else None
     workflow = _normalize_to_api_format(workflow)
     inputs: list[dict[str, Any]] = []
     bindings: list[dict[str, str]] = []
     outputs: list[dict[str, Any]] = []
     internal_nodes: dict[str, str] = {}
     image_input_index = 0
+
+    if use_workflow_ui_link:
+        link_node_id = None
+        link_node = None
+        for nid, n in workflow.items():
+            if isinstance(n, dict) and n.get("class_type") in WORKFLOW_UI_LINK_TYPES:
+                link_node_id = nid
+                link_node = n
+                break
+        if link_node_id is not None and link_node is not None:
+            result = _analyze_workflow_ui_link_node(
+                link_node_id, link_node, workflow, raw_links=raw_links
+            )
+            return result
+
+    form_label: str | None = None
+    has_link, link_node_id = workflow_contains_workflow_ui_link(workflow)
+    if has_link and link_node_id:
+        link_node = workflow.get(link_node_id)
+        if isinstance(link_node, dict):
+            link_result = _analyze_workflow_ui_link_node(
+                link_node_id, link_node, workflow, raw_links=raw_links
+            )
+            inputs.extend(link_result.get("inputs") or [])
+            bindings.extend(link_result.get("bindings") or [])
+            form_label = link_result.get("form_label") or None
 
     for node_id, node in workflow.items():
         if not isinstance(node, dict):
@@ -721,4 +1130,6 @@ def analyze_workflow(workflow: dict[str, Any]) -> dict[str, Any]:
     result: dict[str, Any] = {"inputs": inputs, "outputs": outputs, "bindings": bindings}
     if internal_nodes:
         result["internal_nodes"] = [{"classType": k, "label": v} for k, v in internal_nodes.items()]
+    if form_label:
+        result["form_label"] = form_label
     return result

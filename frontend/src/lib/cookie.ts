@@ -56,6 +56,7 @@ export const DELETE_CONFIRM_KEYS = {
     delete_remote: SKIP_DELETE_CONFIRM_PREFIX + 'delete_remote',
     delete_local: SKIP_DELETE_CONFIRM_PREFIX + 'delete_local',
     delete_all: SKIP_DELETE_CONFIRM_PREFIX + 'delete_all',
+    delete_run: SKIP_DELETE_CONFIRM_PREFIX + 'delete_run',
 } as const;
 
 export type DeleteConfirmKey = keyof typeof DELETE_CONFIRM_KEYS;

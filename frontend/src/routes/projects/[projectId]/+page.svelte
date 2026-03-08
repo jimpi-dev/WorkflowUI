@@ -110,7 +110,6 @@
 	let deleteProjectDialogOpen = $state(false);
 
 	let metadataPanelRunId = $state<string | null>(null);
-	/** 'run' = from run group header (run metadata + snapshot only); 'output' = from image (output context, current behavior) */
 	let metadataPanelMode = $state<'output' | 'run'>('output');
 
 	let deleteRunGroupPending = $state<{ groupId: string; runs: ApiRun[] } | null>(null);
@@ -475,6 +474,10 @@
 	}
 
 	function requestDeleteRunGroup(group: (typeof runGroups)[0]) {
+		if (getSkipDeleteConfirmCookie('delete_run')) {
+			deleteRunGroup(group).catch(() => {});
+			return;
+		}
 		deleteRunGroupPending = { groupId: group.groupId, runs: group.runs };
 	}
 
@@ -1288,7 +1291,6 @@
 		}
 		deleteError = null;
 		if (byRun.size > 0) {
-			// total was 0, already handled above
 		} else {
 			await deleteRemoteRunGroup(group);
 		}
@@ -2619,27 +2621,18 @@
 		{@const mainMsg = n > 1
 			? `Delete ${n} generations permanently? This cannot be undone.`
 			: 'Delete this prompt (and all its files) permanently? This cannot be undone.'}
-		<div
-			class="delete-run-dialog-overlay"
-			role="dialog"
-			aria-modal="true"
-			aria-labelledby="delete-run-dialog-title"
-			tabindex="-1"
-			onclick={() => { deleteRunGroupPending = null; }}
-			onkeydown={(e) => { if (e.key === 'Escape') deleteRunGroupPending = null; }}
-		>
-			<div class="delete-run-dialog-card" role="presentation" tabindex="-1" onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.stopPropagation()}>
-				<h2 id="delete-run-dialog-title">Delete Run with all of its generations</h2>
-				{#if hasFav}
-					<p class="delete-run-dialog-warning">This run includes favorited generations. They will be removed from favorites.</p>
-				{/if}
-				<p class="delete-run-dialog-msg">{mainMsg}</p>
-				<div class="delete-run-dialog-actions">
-					<button type="button" class="delete-run-dialog-btn secondary" onclick={() => { deleteRunGroupPending = null; }}>Cancel</button>
-					<button type="button" class="delete-run-dialog-btn danger" onclick={confirmDeleteRunGroup}>Delete Run</button>
-				</div>
-			</div>
-		</div>
+		{@const deleteRunMessage = hasFav ? `This run includes favorited generations. They will be removed from favorites.\n\n${mainMsg}` : mainMsg}
+		<ConfirmDeleteDialog
+			open={true}
+			title="Delete Run with all of its generations"
+			message={deleteRunMessage}
+			confirmLabel="Delete Run"
+			onConfirm={async (dontShowAgain) => {
+				if (dontShowAgain) setSkipDeleteConfirmCookie('delete_run', true);
+				await confirmDeleteRunGroup();
+			}}
+			onCancel={() => { deleteRunGroupPending = null; }}
+		/>
 	{/if}
 
 	{#if deleteConfirmPending}
@@ -4503,70 +4496,6 @@
 	}
 	.delete-error-dismiss:hover {
 		opacity: 1;
-	}
-	.delete-run-dialog-overlay {
-		position: fixed;
-		inset: 0;
-		background: rgba(0, 0, 0, 0.5);
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		z-index: 1000;
-	}
-	.delete-run-dialog-card {
-		background: var(--surface);
-		border: 1px solid var(--border);
-		border-radius: 12px;
-		padding: 1.5rem;
-		max-width: 28rem;
-		box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2);
-	}
-	.delete-run-dialog-card h2 {
-		margin-top: 0;
-		margin-bottom: 1rem;
-		font-size: 1.25rem;
-		color: var(--text);
-	}
-	.delete-run-dialog-warning {
-		margin-bottom: 0.75rem;
-		font-size: 0.95rem;
-		color: var(--warning, #e6a23c);
-	}
-	.delete-run-dialog-msg {
-		margin-bottom: 1rem;
-		color: var(--text);
-	}
-	.delete-run-dialog-actions {
-		display: flex;
-		gap: 0.75rem;
-		justify-content: flex-end;
-		margin-top: 1rem;
-	}
-	.delete-run-dialog-btn {
-		padding: 0.5rem 1rem;
-		border-radius: 8px;
-		font-size: 0.9rem;
-		font-weight: 500;
-		cursor: pointer;
-		border: 1px solid transparent;
-	}
-	.delete-run-dialog-btn.secondary {
-		background: var(--surface);
-		color: var(--text);
-		border-color: var(--border);
-	}
-	.delete-run-dialog-btn.secondary:hover {
-		background: color-mix(in srgb, var(--accent) 15%, var(--surface));
-		border-color: var(--accent);
-	}
-	.delete-run-dialog-btn.danger {
-		background: var(--error, #c55);
-		color: white;
-		border-color: var(--error, #c55);
-	}
-	.delete-run-dialog-btn.danger:hover {
-		background: var(--error-hover, #e55);
-		border-color: var(--error-hover, #e55);
 	}
 	.run-group-no-images {
 		padding: 1.5rem;

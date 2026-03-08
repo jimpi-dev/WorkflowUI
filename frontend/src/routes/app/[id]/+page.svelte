@@ -51,7 +51,6 @@
     let triggerRun = $state<(() => void) | null>(null);
     let autoFormRef = $state<{ runWithRandomSeed?: (useRandom: boolean) => void } | null>(null);
 
-    /** App form presets (when appId set). */
     let presets = $state<AppPreset[]>([]);
     let presetCreationOn = $state(false);
     let presetKeysToSaveList = $state<string[]>([]);
@@ -153,6 +152,12 @@
         else presetKeysToSaveList = presetKeysToSaveList.filter((k) => k !== key);
     }
 
+    const hasSeedInputs = $derived.by(() => {
+        const wm = data.workflowModel;
+        if (!wm?.inputs) return false;
+        return wm.inputs.some((i: { role?: string; type?: string }) => i.role === 'seed' || i.type === 'seed');
+    });
+
     const masterSeedHint = $derived.by(() => {
         const wm = data.workflowModel;
         if (!wm?.inputs) return null;
@@ -198,7 +203,6 @@
             .then(async (run: { input_snapshot?: { values?: Record<string, unknown> } } | null) => {
                 if (!run?.input_snapshot?.values || typeof run.input_snapshot.values !== 'object') return;
                 await tick();
-                // Merge run values (including LoadImage filename) so Replicate run prepopulates everything.
                 const runValues = run.input_snapshot.values as Record<string, unknown>;
                 for (const [k, v] of Object.entries(runValues)) {
                     formValues[k] = v;
@@ -276,7 +280,6 @@
                 formValues[firstImageInput.key] = filename;
                 sendFromContext = { runId: sendFromRun, outputIndex, inputKey: firstImageInput.key, filename, subfolder, type };
                 prefilledSendFromKey = key;
-                // Force reactivity so ImageInput re-renders with new value and prefill props
                 formValues = formValues;
             })
             .catch(() => {});
@@ -416,7 +419,6 @@
         splitPosition = DEFAULT_SPLIT;
     }
 
-    /** On mobile, show Inputs tab first when navigating to an app. */
     let lastInitialMobileLayoutWorkflowId = $state<string | null>(null);
     $effect(() => {
         const wf = data.workflowId;
@@ -537,7 +539,6 @@
             if (typeof crypto !== 'undefined' && typeof crypto.getRandomValues === 'function') {
                 const bytes = new Uint8Array(16);
                 crypto.getRandomValues(bytes);
-                // RFC4122 v4
                 bytes[6] = (bytes[6] & 0x0f) | 0x40;
                 bytes[8] = (bytes[8] & 0x3f) | 0x80;
                 const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, '0'));
@@ -1170,7 +1171,8 @@
                         onSubmit={submitRunForm}
                         onQueueClick={() => (randomizeSeedOnSubmit = false)}
                         onRandomClick={() => (randomizeSeedOnSubmit = true)}
-                        masterSeedHint={masterSeedHint}
+                        masterSeedHint={hasSeedInputs ? masterSeedHint : null}
+                        hasSeedInputs={hasSeedInputs}
                         showActions={!isMobile}
                 />
             {/key}
@@ -1258,16 +1260,18 @@
             >
                 Queue for generation ({formValues.runs ?? 1}x)
             </button>
-            <button
-                type="button"
-                class="secondary"
-                onclick={() => triggerMobileRun('random')}
-                onpointerup={(e) => { if ((e as PointerEvent).pointerType === 'touch') { e.preventDefault(); triggerMobileRun('random'); } }}
-                ontouchend={(e) => { e.preventDefault(); triggerMobileRun('random'); }}
-                title="Generate with a random seed"
-            >
-                🎲 Random seed ({formValues.runs ?? 1}x)
-            </button>
+            {#if hasSeedInputs}
+                <button
+                    type="button"
+                    class="secondary"
+                    onclick={() => triggerMobileRun('random')}
+                    onpointerup={(e) => { if ((e as PointerEvent).pointerType === 'touch') { e.preventDefault(); triggerMobileRun('random'); } }}
+                    ontouchend={(e) => { e.preventDefault(); triggerMobileRun('random'); }}
+                    title="Generate with a random seed"
+                >
+                    🎲 Random seed ({formValues.runs ?? 1}x)
+                </button>
+            {/if}
         </div>
     {/if}
 
@@ -1626,7 +1630,6 @@
         }
     }
 
-    /* Mobile tabs: hidden on desktop */
     .app-mobile-tabs {
         display: none;
     }
@@ -1635,7 +1638,6 @@
         display: none;
     }
 
-    /* Mobile: single column, tabs to switch Inputs/Results, edge toggles above status bar. Desktop unchanged. */
     @media (max-width: 639px) {
         .page.app-layout {
             --mobile-run-bar-height: 58px;
@@ -1696,7 +1698,6 @@
             min-width: 0;
         }
 
-        /* On mobile "split" mode show results (right) by default; user can tap "Show inputs". */
         .app-layout-split .left {
             flex: 0 0 0;
             width: 0;

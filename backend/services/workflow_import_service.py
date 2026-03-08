@@ -4,7 +4,10 @@ import uuid
 from typing import Any
 
 from services.graph_hash import graph_hash
-from services.workflow_analyzer import analyze_workflow, _normalize_to_api_format
+from services.workflow_analyzer import (
+    analyze_workflow,
+    workflow_contains_workflow_ui_link,
+)
 
 class ImportResult:
     def __init__(
@@ -33,19 +36,22 @@ class WorkflowImportService:
     def __init__(self, workflow_repo: Any):
         self._repo = workflow_repo
 
-    def preview_import(self, name: str, graph: dict[str, Any]) -> dict[str, Any]:
+    def preview_import(
+        self, name: str, graph: dict[str, Any], *, use_workflow_ui_link: bool = False
+    ) -> dict[str, Any]:
         if not name or not name.strip():
             raise ValueError("name is required")
         if not isinstance(graph, dict) or not graph:
             raise ValueError("graph must be a non-empty object")
         new_hash = graph_hash(graph)
-        analyzed = analyze_workflow(graph)
+        has_link, link_node_id = workflow_contains_workflow_ui_link(graph)
+        analyzed = analyze_workflow(graph, use_workflow_ui_link=use_workflow_ui_link and has_link)
         detected_inputs = analyzed["inputs"]
         detected_outputs = analyzed["outputs"]
         internal_nodes = analyzed.get("internal_nodes") or []
         existing = self._repo.get_workflow_by_name(name.strip())
         if existing is None:
-            return {
+            out = {
                 "graph_hash": new_hash,
                 "detected_inputs": detected_inputs,
                 "detected_outputs": detected_outputs,
@@ -55,9 +61,13 @@ class WorkflowImportService:
                 "existing_workflow_id": None,
                 "existing_version": None,
             }
+            if has_link:
+                out["has_workflow_ui_link"] = True
+                out["workflow_ui_link_node_id"] = link_node_id
+            return out
         latest = self._repo.get_latest_version(existing.id)
         if latest is None:
-            return {
+            out = {
                 "graph_hash": new_hash,
                 "detected_inputs": detected_inputs,
                 "detected_outputs": detected_outputs,
@@ -67,8 +77,12 @@ class WorkflowImportService:
                 "existing_workflow_id": existing.id,
                 "existing_version": None,
             }
+            if has_link:
+                out["has_workflow_ui_link"] = True
+                out["workflow_ui_link_node_id"] = link_node_id
+            return out
         if latest.graph_hash == new_hash:
-            return {
+            out = {
                 "graph_hash": new_hash,
                 "detected_inputs": detected_inputs,
                 "detected_outputs": detected_outputs,
@@ -78,7 +92,11 @@ class WorkflowImportService:
                 "existing_workflow_id": existing.id,
                 "existing_version": latest.version,
             }
-        return {
+            if has_link:
+                out["has_workflow_ui_link"] = True
+                out["workflow_ui_link_node_id"] = link_node_id
+            return out
+        out = {
             "graph_hash": new_hash,
             "detected_inputs": detected_inputs,
             "detected_outputs": detected_outputs,
@@ -88,18 +106,28 @@ class WorkflowImportService:
             "existing_workflow_id": existing.id,
             "existing_version": latest.version,
         }
+        if has_link:
+            out["has_workflow_ui_link"] = True
+            out["workflow_ui_link_node_id"] = link_node_id
+        return out
 
     def import_workflow(
-        self, name: str, graph: dict[str, Any], *, force_new_version: bool = False, created_from_image_import: bool = False
+        self,
+        name: str,
+        graph: dict[str, Any],
+        *,
+        force_new_version: bool = False,
+        created_from_image_import: bool = False,
+        use_workflow_ui_link: bool = False,
     ) -> ImportResult:
         if not name or not name.strip():
             raise ValueError("name is required")
         if not isinstance(graph, dict) or not graph:
             raise ValueError("graph must be a non-empty object")
 
-        graph = _normalize_to_api_format(graph)
         new_hash = graph_hash(graph)
-        analyzed = analyze_workflow(graph)
+        has_link, _ = workflow_contains_workflow_ui_link(graph)
+        analyzed = analyze_workflow(graph, use_workflow_ui_link=use_workflow_ui_link and has_link)
         detected_inputs = analyzed["inputs"]
         detected_outputs = analyzed["outputs"]
         internal_nodes = analyzed.get("internal_nodes") or []

@@ -20,7 +20,7 @@ export const ImageResizeKJv2Spec: NodeSpec = {
         upscale_method: {
             type: 'select',
             label: 'Upscale method',
-            options: ['nearest-exact', 'bilinear', 'area', 'bicubic', 'lanczos']
+            optionSource: 'upscale_methods'
         },
         keep_proportion: {
             type: 'select',

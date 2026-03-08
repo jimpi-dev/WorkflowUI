@@ -318,6 +318,7 @@
 					</span>
 					<span class="toggle-label-text">Public</span>
 				</label>
+				<p class="field-help">This setting currently has no effect. It will later control visibility of the app for different users on the same instance.</p>
 			</section>
 			<section class="section">
 				<label for="app-title">Title</label>
@@ -953,9 +954,9 @@
 		display: flex;
 		gap: 0.2rem;
 	}
-	.output-node-wrap .output-card {
-		border-radius: 0;
-		border-left: none;
+  :global(.output-node-wrap .output-card) {
+    border-radius: 0;
+    border-left: none;
 		border-right: none;
 		border-bottom: none;
 		margin-bottom: 0;

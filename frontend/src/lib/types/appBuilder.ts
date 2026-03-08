@@ -212,6 +212,18 @@ export function moveOutputNodeOrder(draft: AppDraft, nodeId: string, direction: 
 export function setMasterSeedInputKey(draft: AppDraft, key: string | null): void {
 	draft.masterSeedInputKey = key && key.trim() ? key.trim() : null;
 }
+export function getDefaultMasterSeedInputKey(
+	inputs: { key?: string; type?: string; name?: string }[]
+): string | null {
+	const seedInputs = inputs.filter(
+		(i) => (i.type === 'seed' || (i as { role?: string }).role === 'seed') && i.key?.trim()
+	);
+	if (seedInputs.length === 0) return null;
+	const namedSeed = seedInputs.find(
+		(i) => (i.name ?? '').toLowerCase().trim() === 'seed'
+	);
+	return (namedSeed?.key ?? seedInputs[0]?.key)?.trim() ?? null;
+}
 
 export function setIgnoreLoadImageDefault(draft: AppDraft, value: boolean): void {
 	draft.ignoreLoadImageDefault = value;

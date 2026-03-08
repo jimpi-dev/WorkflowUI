@@ -153,3 +153,12 @@ export function createVaeDropdownBody(): ComboDropdownBodyApi {
             path.split('/').pop()?.replace(/\.(safetensors|ckpt|bin)$/i, '') ?? path
     });
 }
+
+export function createWorkflowDropdownBody(getLabel: (id: string) => string): ComboDropdownBodyApi {
+    return createComboDropdownBody({
+        listboxId: 'workflow-combo-listbox',
+        ariaLabel: 'Workflow list',
+        emptyMessage: 'No workflows match.',
+        formatLabel: getLabel
+    });
+}
