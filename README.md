@@ -44,6 +44,7 @@ Hint: To toggle the theme, you have click on a certain part of the apps logo
 ![Send to App Flow](./Docs/CreateAppBoth.jpg)
 ![Send to App Flow](./Docs/AppComplexity.jpg)
 ![Send to App Flow](./Docs/QuickRunsBoth.jpg)
+![Send to App Flow](./Docs/MixedProjectComfyConsole.jpg)
 ![Send to App Flow](./Docs/SendToAppFlow.jpg)
 ![Send to App Flow](./Docs/HonorableMentions.jpg)
 
