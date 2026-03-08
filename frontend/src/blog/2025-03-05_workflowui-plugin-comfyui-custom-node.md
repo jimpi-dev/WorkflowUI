@@ -10,8 +10,6 @@ The node is a pass-through: you set a **form label** (section title in the app) 
 
 ![WorkflowUI Link node in the ComfyUI graph](assets/2025-03-05_workflowui-plugin-comfyui-custom-node_1.jpg)
 
-![Alt text](assets/2025-03-05_workflowui-plugin-comfyui-custom-node_1.jpg)
-
 ---
 
 ## Importing a Workflow That Contains the Node
