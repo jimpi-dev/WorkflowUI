@@ -1,3 +1,4 @@
+import json
 import logging
 import sqlite3
 from pathlib import Path
@@ -23,6 +24,22 @@ import time
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+
+def _get_frontend_version() -> str | None:
+    """Read frontend (WorkflowUI) version from frontend/package.json for status bar display."""
+    try:
+        # backend/routers/config.py -> repo root -> frontend/package.json
+        root = Path(__file__).resolve().parent.parent.parent
+        pkg_path = root / "frontend" / "package.json"
+        if not pkg_path.is_file():
+            return None
+        raw = pkg_path.read_text(encoding="utf-8")
+        data = json.loads(raw)
+        version = data.get("version")
+        return str(version).strip() if isinstance(version, str) and version else None
+    except Exception:
+        return None
 
 
 def _get_db_size_bytes(db_path: str) -> int:
@@ -104,7 +121,8 @@ def get_config(db=Depends(get_db)):
     media_cfg = get_media_storage_config()
     comfyui_delete_supported, workflowui_plugin_available, workflowui_plugin_incompatible = get_workflowui_plugin_status(COMFY_URL)
     embed_cfg = get_workflowui_embed_config()
-    return {
+    frontend_version = _get_frontend_version()
+    payload: dict[str, Any] = {
         "comfyui_url": COMFY_URL,
         "quick_runs_project_id": QUICK_RUNS_PROJECT_ID,
         "engine_version": ENGINE_VERSION,
@@ -122,6 +140,9 @@ def get_config(db=Depends(get_db)):
         "dbSizeBytes": _get_db_size_bytes(db_path),
         "dbBreakdown": _get_db_breakdown(db_path),
     }
+    if frontend_version is not None:
+        payload["version"] = frontend_version
+    return payload
 
 
 @router.get("/version")

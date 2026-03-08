@@ -243,6 +243,7 @@ NODE_SPECS: dict[str, dict[str, Any]] = {
     },
     "ImageScaleBy": {
         "fixedInputs": {
+            "upscale_method": {"type": "select", "label": "Upscale method", "optionSource": "upscale_methods"},
             "scale_by": {"type": "number", "label": "Scale by", "min": 0.01, "max": 4, "step": 0.01, "slider": True},
         },
     },
@@ -425,7 +426,7 @@ NODE_SPECS: dict[str, dict[str, Any]] = {
     },
     "ImageScaleToTotalPixels": {
         "fixedInputs": {
-            "upscale_method": {"type": "select", "label": "Upscale method", "options": ["nearest-exact", "bilinear", "area", "bicubic", "lanczos"]},
+            "upscale_method": {"type": "select", "label": "Upscale method", "optionSource": "upscale_methods"},
             "megapixels": {"type": "number", "label": "Megapixels", "min": 0.1, "max": 100, "step": 0.1},
             "resolution_steps": {"type": "number", "label": "Resolution steps", "min": 1, "max": 16},
             "image": {"type": "image", "label": "Image"},
@@ -459,7 +460,7 @@ NODE_SPECS: dict[str, dict[str, Any]] = {
     },
     "ImageScale": {
         "fixedInputs": {
-            "upscale_method": {"type": "select", "label": "Upscale method", "options": ["nearest-exact", "bilinear", "area", "bicubic", "lanczos"]},
+            "upscale_method": {"type": "select", "label": "Upscale method", "optionSource": "upscale_methods"},
             "width": {"type": "number", "label": "Width", "min": 64, "max": 8192, "step": 8},
             "height": {"type": "number", "label": "Height", "min": 64, "max": 8192, "step": 8},
             "crop": {"type": "select", "label": "Crop", "options": ["disabled", "center", "top", "bottom", "left", "right"]},
@@ -503,7 +504,7 @@ NODE_SPECS: dict[str, dict[str, Any]] = {
     },
     "LatentUpscaleBy": {
         "fixedInputs": {
-            "upscale_method": {"type": "select", "label": "Upscale method", "options": ["nearest-exact", "bilinear", "area", "bicubic", "lanczos"]},
+            "upscale_method": {"type": "select", "label": "Upscale method", "optionSource": "upscale_methods"},
             "scale_by": {"type": "number", "label": "Scale by", "min": 0.25, "max": 4, "step": 0.25, "slider": True},
         },
     },
@@ -594,7 +595,7 @@ NODE_SPECS: dict[str, dict[str, Any]] = {
         "fixedInputs": {
             "width": {"type": "number", "label": "Width", "min": 64, "max": 8192, "step": 8},
             "height": {"type": "number", "label": "Height", "min": 64, "max": 8192, "step": 8},
-            "upscale_method": {"type": "select", "label": "Upscale method", "options": ["nearest-exact", "bilinear", "area", "bicubic", "lanczos"]},
+            "upscale_method": {"type": "select", "label": "Upscale method", "optionSource": "upscale_methods"},
             "keep_proportion": {"type": "select", "label": "Keep proportion", "options": ["resize", "crop", "pad"]},
             "pad_color": {"type": "text", "label": "Pad color"},
             "crop_position": {"type": "select", "label": "Crop position", "options": ["center", "top", "bottom", "left", "right"]},

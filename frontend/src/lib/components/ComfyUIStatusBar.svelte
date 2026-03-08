@@ -22,6 +22,8 @@
 	let dbSizeBytes = $state<number | null>(null);
 	let dbBreakdown = $state<Record<string, number> | null>(null);
 	let workflowuiPluginMinVersion = $state<string | null>(null);
+	/** Version from GET /config (frontend package.json); status bar uses this over build-time appConfig.version */
+	let configVersion = $state<string | null>(null);
 
 	const POLL_INTERVAL_MS = 4000;
 	const POLL_INTERVAL_HIDDEN_MS = 12000;
@@ -43,12 +45,15 @@
 				typeof data.workflowuiPluginMinVersion === 'string' && data.workflowuiPluginMinVersion
 					? data.workflowuiPluginMinVersion
 					: null;
+			configVersion =
+				typeof data.version === 'string' && data.version ? data.version : null;
 		} catch {
 			workflowuiPluginAvailable = null;
 			workflowuiPluginIncompatible = false;
 			dbSizeBytes = null;
 			dbBreakdown = null;
 			workflowuiPluginMinVersion = null;
+			configVersion = null;
 		}
 	}
 
@@ -107,7 +112,7 @@
 </script>
 
 <div class="status-bar" role="status" aria-label="ComfyUI queue and system status">
-	<span class="status-item app-info">{appConfig.appName} v{appConfig.version}</span>
+	<span class="status-item app-info">{appConfig.appName} v{configVersion ?? appConfig.version}</span>
 	{#if appConfig.githubRepoUrl}
 		<span class="status-sep" aria-hidden="true">|</span>
 		<a

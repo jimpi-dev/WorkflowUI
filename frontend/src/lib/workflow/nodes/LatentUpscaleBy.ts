@@ -6,7 +6,7 @@ export const LatentUpscaleBySpec: NodeSpec = {
         upscale_method: {
             type: 'select',
             label: 'Upscale method',
-            options: ['nearest-exact', 'bilinear', 'area', 'bicubic', 'lanczos']
+            optionSource: 'upscale_methods'
         },
         scale_by: {
             type: 'number',
