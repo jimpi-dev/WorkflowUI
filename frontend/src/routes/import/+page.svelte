@@ -1,8 +1,11 @@
 <script lang="ts">
+	import { tick, onDestroy } from 'svelte';
 	import { getApiBase } from '$lib/config';
+	import { waitForAppToBeAvailable } from '$lib/api';
 	import { goto } from '$app/navigation';
+	import { createWorkflowDropdownBody } from '$lib/components/loraDropdownBody';
 
-	let { data }: { data: { embedWorkflowuiMetadataOnDownload?: boolean; embedWorkflowuiMetadataOnSave?: boolean } } = $props();
+	let { data }: { data: { embedWorkflowuiMetadataOnDownload?: boolean; embedWorkflowuiMetadataOnSave?: boolean; comfyuiWorkflows?: { id: string; label: string }[]; comfyuiWorkflowsError?: string | null } } = $props();
 
 	type ImportState = 'idle' | 'parsing' | 'analyzing' | 'preview-ready' | 'error';
 
@@ -19,17 +22,107 @@
 		is_new_version: boolean;
 		existing_workflow_id: string | null;
 		existing_version: number | null;
+		has_workflow_ui_link?: boolean;
+		workflow_ui_link_node_id?: string;
 	} | null>(null);
 	let creating = $state(false);
 
 	let forceNewVersion = $state(false);
+	let useWorkflowUILink = $state(true);
 
 
 	let imageImporting = $state(false);
 	let imageImportMessage = $state('');
 	let imageDropZoneDragOver = $state(false);
 
+	let comfyuiSelectedId = $state<string>('');
+	let comfyuiImporting = $state(false);
+	let comfyuiImportError = $state('');
+	let comfyuiWorkflowsList = $state<{ id: string; label: string }[]>([]);
+	let comfyuiWorkflowsError = $state<string | null>(null);
+	let comfyuiWorkflowsLoading = $state(false);
+	let comfyuiFilter = $state('');
+	let comfyuiComboOpen = $state(false);
+	let comfyuiComboEl: HTMLDivElement;
+	let comfyuiFilterInputEl: HTMLInputElement;
+
 	const apiBase = getApiBase() || '';
+	const comfyuiWorkflows = $derived(
+		comfyuiWorkflowsList.length > 0 ? comfyuiWorkflowsList : (data?.comfyuiWorkflows ?? [])
+	);
+	const comfyuiErrorToShow = $derived(comfyuiWorkflowsError ?? data?.comfyuiWorkflowsError ?? null);
+	const comfyuiWorkflowsFiltered = $derived.by(() => {
+		const q = (comfyuiFilter || '').trim().toLowerCase();
+		if (!q) return comfyuiWorkflows;
+		return comfyuiWorkflows.filter(
+			(w) =>
+				(w.id || '').toLowerCase().includes(q) || (w.label || '').toLowerCase().includes(q)
+		);
+	});
+
+	const comfyuiSelectedLabel = $derived(
+		comfyuiSelectedId
+			? (comfyuiWorkflows.find((w) => w.id === comfyuiSelectedId)?.label ?? comfyuiSelectedId)
+			: '— Select workflow from ComfyUI —'
+	);
+
+	const getWorkflowLabel = (id: string) =>
+		comfyuiWorkflows.find((w) => w.id === id)?.label ?? id;
+	const comfyuiDropdownBody = createWorkflowDropdownBody(getWorkflowLabel);
+	onDestroy(() => comfyuiDropdownBody.unmount());
+
+	function openComfyuiCombo() {
+		comfyuiComboOpen = true;
+		comfyuiFilter = '';
+		tick().then(() => {
+			comfyuiFilterInputEl?.focus();
+			if (!comfyuiComboEl) return;
+			const rect = comfyuiComboEl.getBoundingClientRect();
+			const listHeight = 280;
+			const gap = 4;
+			const spaceBelow = window.innerHeight - (rect.bottom + gap);
+			const spaceAbove = rect.top - gap;
+			const showAbove = spaceBelow < listHeight && spaceAbove > spaceBelow;
+			const left = rect.left;
+			const top = showAbove ? Math.max(0, rect.top - listHeight - gap) : rect.bottom + gap;
+			const maxH = showAbove ? Math.min(listHeight, spaceAbove) : Math.min(listHeight, spaceBelow);
+			const width = Math.max(rect.width, 280);
+			comfyuiDropdownBody.mount({
+				left,
+				top,
+				width,
+				maxHeight: maxH,
+				items: comfyuiWorkflowsFiltered.map((w) => w.id),
+				onSelect: selectWorkflow,
+				onClose: closeComfyuiCombo
+			});
+		});
+	}
+
+	function closeComfyuiCombo() {
+		comfyuiDropdownBody.unmount();
+		comfyuiComboOpen = false;
+		comfyuiFilter = '';
+	}
+
+	function selectWorkflow(id: string) {
+		comfyuiSelectedId = id;
+		closeComfyuiCombo();
+	}
+
+	function handleComfyuiComboKeydown(e: KeyboardEvent) {
+		if (e.key === 'Escape') {
+			e.preventDefault();
+			closeComfyuiCombo();
+			comfyuiFilterInputEl?.blur();
+		}
+	}
+
+	$effect(() => {
+		if (comfyuiComboOpen && comfyuiWorkflowsFiltered.length >= 0) {
+			comfyuiDropdownBody.update(comfyuiWorkflowsFiltered.map((w) => w.id));
+		}
+	});
 
 	function setState(s: ImportState, err = '') {
 		importState = s;
@@ -65,7 +158,7 @@
 			const res = await fetch(`${apiBase}/import/preview`, {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ name: trimmedName, graph: parsed.graph })
+				body: JSON.stringify({ name: trimmedName, graph: parsed.graph, use_workflow_ui_link: useWorkflowUILink })
 			});
 			if (!res.ok) {
 				const d = await res.json().catch(() => ({}));
@@ -76,6 +169,21 @@
 			setState('preview-ready');
 		} catch (e) {
 			setState('error', e instanceof Error ? e.message : String(e));
+		}
+	}
+
+	async function refetchPreviewWithSchema() {
+		const trimmedName = name.trim();
+		const parsed = parseGraph();
+		if (!trimmedName || !parsed) return;
+		try {
+			const res = await fetch(`${apiBase}/import/preview`, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ name: trimmedName, graph: parsed.graph, use_workflow_ui_link: useWorkflowUILink })
+			});
+			if (res.ok) preview = await res.json();
+		} catch {
 		}
 	}
 
@@ -92,7 +200,8 @@
 				body: JSON.stringify({
 					name: trimmedName,
 					graph: parsed.graph,
-					force_new_version: forceNewVersion
+					force_new_version: forceNewVersion,
+					use_workflow_ui_link: useWorkflowUILink && preview?.has_workflow_ui_link === true
 				})
 			});
 			if (!res.ok) {
@@ -107,6 +216,12 @@
 				return;
 			}
 			const data = await res.json();
+			if (data.warning && typeof data.warning === 'string') {
+				try {
+					sessionStorage.setItem('workflowui_import_warning', data.warning);
+				} catch {
+				}
+			}
 			await goto(`/workflows/${data.workflow_id}`);
 		} catch (e) {
 			setState('error', e instanceof Error ? e.message : String(e));
@@ -150,6 +265,29 @@
 		if (jsonFileInputRef) jsonFileInputRef.click();
 	}
 
+	function isJsonFile(file: File): boolean {
+		const n = file.name.toLowerCase();
+		return n.endsWith('.json') || file.type === 'application/json';
+	}
+
+	function handleJsonDrop(e: DragEvent) {
+		e.preventDefault();
+		jsonDropZoneDragOver = false;
+		const file = e.dataTransfer?.files?.[0];
+		if (!file || !isJsonFile(file)) return;
+		selectedFileName = file.name;
+		const nameWithoutExt = file.name.replace(/\.json$/i, '');
+		if (nameWithoutExt) name = nameWithoutExt;
+		const reader = new FileReader();
+		reader.onload = () => {
+			jsonInput = String(reader.result ?? '');
+			setState('idle');
+		};
+		reader.readAsText(file);
+	}
+
+	let jsonDropZoneDragOver = $state(false);
+
 	async function handleImageFile(files: FileList | null) {
 		const file = files?.[0];
 		if (!file || !isWorkflowuiFile(file)) return;
@@ -168,6 +306,7 @@
 					} catch {
 					}
 				}
+				await waitForAppToBeAvailable(slug);
 				await goto(`/app/${slug}`);
 				return;
 			}
@@ -179,6 +318,7 @@
 					} catch {
 					}
 				}
+				await waitForAppToBeAvailable(slug);
 				await goto(`/app/${slug}`);
 				return;
 			}
@@ -195,69 +335,196 @@
 			imageImporting = false;
 		}
 	}
+
+	$effect(() => {
+		const list = data?.comfyuiWorkflows;
+		const err = data?.comfyuiWorkflowsError;
+		if (list && list.length > 0) {
+			comfyuiWorkflowsList = list;
+			comfyuiWorkflowsError = null;
+		} else if (err) {
+			comfyuiWorkflowsError = err;
+		}
+	});
+
+	async function refreshComfyuiWorkflows() {
+		comfyuiWorkflowsError = null;
+		comfyuiWorkflowsLoading = true;
+		try {
+			const res = await fetch(`${apiBase}/comfyui/workflows`);
+			const body = await res.json().catch(() => ({}));
+			const list = Array.isArray(body) ? body : body?.workflows;
+			if (Array.isArray(list)) {
+				comfyuiWorkflowsList = list.map((w: { id?: string; label?: string }) => ({
+					id: typeof w.id === 'string' ? w.id : String(w.id ?? ''),
+					label: typeof w.label === 'string' ? w.label : (w.id != null ? String(w.id) : '')
+				})).filter((w: { id: string }) => w.id);
+			} else {
+				comfyuiWorkflowsList = [];
+			}
+			if (comfyuiWorkflowsList.length === 0 && typeof body?.error === 'string' && body.error) {
+				comfyuiWorkflowsError = body.error;
+			}
+		} catch (e) {
+			comfyuiWorkflowsError = e instanceof Error ? e.message : 'Failed to load workflow list';
+			comfyuiWorkflowsList = [];
+		} finally {
+			comfyuiWorkflowsLoading = false;
+		}
+	}
+
+	async function handleLoadWorkflowFromComfyui() {
+		const id = comfyuiSelectedId?.trim();
+		if (!id) {
+			comfyuiImportError = 'Select a workflow first.';
+			return;
+		}
+		comfyuiImportError = '';
+		comfyuiImporting = true;
+		setState('idle', '');
+		try {
+			const res = await fetch(`${apiBase}/comfyui/workflows/${encodeURIComponent(id)}`);
+			if (!res.ok) {
+				const d = await res.json().catch(() => ({}));
+				comfyuiImportError = (d.detail ?? res.statusText) || 'Failed to load workflow';
+				return;
+			}
+			const { name: wfName, graph } = await res.json();
+			if (!graph || typeof graph !== 'object') {
+				comfyuiImportError = 'Invalid workflow response';
+				return;
+			}
+			const workflowName = (typeof wfName === 'string' && wfName.trim()) ? wfName.trim() : id;
+			name = workflowName;
+			jsonInput = JSON.stringify(graph, null, 2);
+			selectedFileName = null;
+			setState('analyzing', '');
+			const previewRes = await fetch(`${apiBase}/import/preview`, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ name: workflowName, graph, use_workflow_ui_link: useWorkflowUILink })
+			});
+			if (!previewRes.ok) {
+				const d = await previewRes.json().catch(() => ({}));
+				setState('error', (d.detail as string) || previewRes.statusText);
+				return;
+			}
+			preview = await previewRes.json();
+			setState('preview-ready', '');
+		} catch (e) {
+			comfyuiImportError = e instanceof Error ? e.message : 'Failed to load workflow';
+		} finally {
+			comfyuiImporting = false;
+		}
+	}
 </script>
 
 <div class="two-col-page page">
 	<aside class="panel-left panel-scroll card">
-		<h1>Import Workflow</h1>
-		<p class="muted">Engine-level graph ingestion. No app creation here.</p>
+		<h1>Import workflow</h1>
+		<p class="page-subline muted">Add a ComfyUI workflow from its JSON.</p>
 
-		<section
-			class="section import-from-image-section"
-			class:drag-over={imageDropZoneDragOver}
-			role="button"
-			tabindex="0"
-			ondragover={(e) => { e.preventDefault(); imageDropZoneDragOver = true; }}
-			ondragleave={() => { imageDropZoneDragOver = false; }}
-			ondrop={(e) => {
-				e.preventDefault();
-				imageDropZoneDragOver = false;
-				handleImageFile(e.dataTransfer?.files ?? null);
-			}}
-		>
-			<label for="import-workflow-file">Import from workflow file</label>
-			<p class="hint">Drop or select a PNG or MP3 saved from WorkflowUI (with metadata) to open or restore that workflow and app.</p>
-			<p class="metadata-status" role="status">
-				Metadata appended on download: <strong>{data?.embedWorkflowuiMetadataOnDownload ? 'Yes' : 'No'}</strong>
-				· on save to local storage: <strong>{data?.embedWorkflowuiMetadataOnSave ? 'Yes' : 'No'}</strong>
-				{#if data?.embedWorkflowuiMetadataOnDownload || data?.embedWorkflowuiMetadataOnSave}
-					— drop those files here to restore.
+		<!-- Import from ComfyUI: browse workflows on ComfyUI and import as app (top) -->
+		<details class="section comfyui-import-section" open={comfyuiWorkflows.length > 0}>
+			<summary class="media-restore-summary">Import from ComfyUI</summary>
+			<div class="comfyui-import-inner">
+				<p class="media-restore-hint comfyui-hint">Load a workflow from the ComfyUI WorkflowUI plugin. The workflow will appear in the preview below so you can review detected nodes, then save it with <strong>Create workflow</strong>. The plugin must expose <code>GET /workflowui/workflows</code> and <code>GET /workflowui/workflows/:id</code>.</p>
+				{#if comfyuiWorkflows.length === 0}
+					<div class="comfyui-empty-state">
+						<button
+							type="button"
+							class="choose-file-btn comfyui-refresh-btn"
+							disabled={comfyuiWorkflowsLoading}
+							onclick={refreshComfyuiWorkflows}
+							aria-label="Refresh workflow list from ComfyUI"
+						>
+							{comfyuiWorkflowsLoading ? 'Loading…' : 'Refresh list'}
+						</button>
+						{#if comfyuiErrorToShow}
+							<p class="error-text comfyui-error-msg">{comfyuiErrorToShow}</p>
+							<p class="muted comfyui-tips">Check: (1) Backend .env has <code>COMFYUI_URL</code> pointing at ComfyUI (e.g. http://localhost:8188). (2) ComfyUI is running and WorkflowUIPlugin is loaded. (3) Plugin workflows folder exists (default: ComfyUI <code>user/default/workflows/</code>) or <code>WORKFLOWUI_WORKFLOWS_DIR</code> is set, with .json files inside.</p>
+						{:else}
+							<p class="muted">No workflows from ComfyUI. Add .json workflow files to the plugin's workflows folder (default: ComfyUI <code>user/default/workflows/</code> or set <code>WORKFLOWUI_WORKFLOWS_DIR</code>), then click <strong>Refresh list</strong>.</p>
+						{/if}
+					</div>
 				{:else}
-					— enable in backend .env (<code>WORKFLOWUI_EMBED_METADATA_ON_DOWNLOAD</code> / <code>WORKFLOWUI_EMBED_METADATA_ON_SAVE</code>) to attach metadata.
-				{/if}
-			</p>
-			<div class="import-json-options">
-				<input
-					id="import-workflow-file"
-					type="file"
-					accept="image/*,.png,audio/mpeg,.mp3"
-					class="file-input file-input-hidden"
-					bind:this={imageFileInputRef}
-					disabled={imageImporting}
-					onchange={(e) => handleImageFile((e.target as HTMLInputElement).files)}
-					aria-label="Choose workflow file (PNG or MP3)"
-				/>
-				<button type="button" class="choose-file-btn" disabled={imageImporting} onclick={chooseImageFile} aria-label="Choose workflow file">
-					Choose file
-				</button>
-				{#if imageImporting}
-					<span class="selected-file">Importing…</span>
-				{:else if imageImportMessage}
-					<span class="error-text">{imageImportMessage}</span>
-				{:else}
-					<span class="no-file">No file chosen</span>
+					<div class="comfyui-flow">
+						<div class="comfyui-combo-wrap" bind:this={comfyuiComboEl}>
+							{#if comfyuiComboOpen}
+								<div
+									class="comfyui-combo"
+									role="combobox"
+									aria-expanded="true"
+									aria-haspopup="listbox"
+									aria-controls="workflow-combo-listbox"
+									aria-label="Select workflow from ComfyUI"
+								>
+									<input
+										bind:this={comfyuiFilterInputEl}
+										type="text"
+										class="comfyui-combo-input"
+										placeholder="Filter workflows…"
+										bind:value={comfyuiFilter}
+										onkeydown={handleComfyuiComboKeydown}
+										aria-label="Filter workflow list"
+									/>
+								</div>
+							{:else}
+								<button
+									type="button"
+									class="comfyui-combo-trigger"
+									title={comfyuiSelectedLabel}
+									onclick={openComfyuiCombo}
+									disabled={comfyuiImporting}
+									aria-label="Select workflow from ComfyUI"
+								>
+									{comfyuiSelectedLabel}
+								</button>
+							{/if}
+						</div>
+						<div class="comfyui-actions">
+							<button
+								type="button"
+								class="choose-file-btn primary comfyui-load-btn"
+								disabled={comfyuiImporting || !comfyuiSelectedId}
+								onclick={handleLoadWorkflowFromComfyui}
+								aria-label="Load selected workflow into form and show preview"
+							>
+								{comfyuiImporting ? 'Loading…' : 'Load workflow'}
+							</button>
+							<button
+								type="button"
+								class="choose-file-btn"
+								disabled={comfyuiWorkflowsLoading}
+								onclick={refreshComfyuiWorkflows}
+								aria-label="Refresh workflow list from ComfyUI"
+							>
+								{comfyuiWorkflowsLoading ? 'Loading…' : 'Refresh list'}
+							</button>
+						</div>
+					</div>
+					{#if comfyuiImportError}
+						<p class="error-text comfyui-error-msg">{comfyuiImportError}</p>
+					{/if}
 				{/if}
 			</div>
-		</section>
+		</details>
 
+		<!-- Drop workflow JSON or paste -->
 		<section class="section">
-			<label for="import-name">Workflow name</label>
-			<input id="import-name" type="text" bind:value={name} placeholder="My Workflow" />
-		</section>
-
-		<section class="section">
-			<label for="import-graph-json">Graph JSON</label>
-			<div class="import-json-options">
+			<label for="import-graph-json" class="section-label">Workflow JSON</label>
+			<div
+				class="json-drop-zone"
+				class:drag-over={jsonDropZoneDragOver}
+				role="button"
+				tabindex="0"
+				aria-label="Drop workflow JSON file here or click to browse"
+				ondragover={(e) => { e.preventDefault(); jsonDropZoneDragOver = true; }}
+				ondragleave={() => { jsonDropZoneDragOver = false; }}
+				ondrop={handleJsonDrop}
+				onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); chooseJsonFile(); } }}
+				onclick={() => chooseJsonFile()}
+			>
 				<input
 					id="import-graph-json"
 					type="file"
@@ -267,22 +534,24 @@
 					bind:this={jsonFileInputRef}
 					aria-label="Choose JSON file"
 				/>
-				<button type="button" class="choose-file-btn" onclick={chooseJsonFile} aria-label="Choose JSON file">
-					Choose file
-				</button>
-				{#if selectedFileName}
-					<span class="selected-file" title={selectedFileName}>{selectedFileName}</span>
-				{:else}
-					<span class="no-file">No file chosen</span>
-					<span class="muted">· or paste below</span>
-				{/if}
+				<span class="json-drop-zone-label">
+					{selectedFileName ? selectedFileName : 'Drop workflow JSON here or click to browse'}
+				</span>
+				<span class="json-drop-zone-hint">.json file or paste below</span>
 			</div>
+			<p class="paste-label">Or paste JSON</p>
 			<textarea
 				class="import-textarea"
 				placeholder={'{ "3": { "class_type": "KSampler" }, ... }'}
 				bind:value={jsonInput}
-				rows="12"
+				rows="10"
+				aria-label="Paste workflow JSON"
 			></textarea>
+		</section>
+
+		<section class="section">
+			<label for="import-name">Workflow name</label>
+			<input id="import-name" type="text" bind:value={name} placeholder="My Workflow" />
 		</section>
 
 		<section class="section">
@@ -306,26 +575,72 @@
 			{/if}
 		</section>
 
-		{#if importState === 'preview-ready' && preview}
-			<section class="section sticky-save">
-				{#if !preview.is_new_workflow && !preview.is_new_version}
-					<label class="force-version-wrap">
-						<input type="checkbox" bind:checked={forceNewVersion} />
-						<span>Create new version anyway</span>
-					</label>
-					<p class="hint">Same graph as latest; import would normally be skipped. Check to create v2 (e.g. to refresh detected inputs).</p>
-				{/if}
-				<button type="button" onclick={handleCreateWorkflow} disabled={creating} class="primary">
-					{creating ? 'Creating…' : (preview.is_new_workflow ? 'Create Workflow' : 'Import')}
+		<!-- Secondary: Restore from image or audio -->
+		<details class="section media-restore-section">
+			<summary class="media-restore-summary">Or restore from image or audio</summary>
+			<div
+				class="media-restore-inner"
+				class:drag-over={imageDropZoneDragOver}
+				ondragover={(e) => { e.preventDefault(); imageDropZoneDragOver = true; }}
+				ondragleave={() => { imageDropZoneDragOver = false; }}
+				ondrop={(e) => {
+					e.preventDefault();
+					imageDropZoneDragOver = false;
+					handleImageFile(e.dataTransfer?.files ?? null);
+				}}
+			>
+				<input
+					id="import-workflow-file"
+					type="file"
+					accept="image/*,.png,audio/mpeg,.mp3"
+					class="file-input file-input-hidden"
+					bind:this={imageFileInputRef}
+					disabled={imageImporting}
+					onchange={(e) => handleImageFile((e.target as HTMLInputElement).files)}
+					aria-label="Choose image or audio file (PNG or MP3)"
+				/>
+				<p class="media-restore-hint">PNG or MP3 saved from WorkflowUI with embedded metadata can reopen or restore that app.</p>
+				<p class="metadata-status" role="status">
+					Metadata on download: <strong>{data?.embedWorkflowuiMetadataOnDownload ? 'Yes' : 'No'}</strong>
+					· on save: <strong>{data?.embedWorkflowuiMetadataOnSave ? 'Yes' : 'No'}</strong>
+					{#if data?.embedWorkflowuiMetadataOnDownload || data?.embedWorkflowuiMetadataOnSave}
+						— drop those files here to restore.
+					{:else}
+						— enable in backend .env to attach metadata.
+					{/if}
+				</p>
+				<button type="button" class="choose-file-btn" disabled={imageImporting} onclick={(e) => { e.stopPropagation(); chooseImageFile(); }} aria-label="Choose image or audio file">
+					Choose file
 				</button>
-				<p class="hint">Redirects to workflow detail. No app creation.</p>
-			</section>
-		{/if}
+				{#if imageImporting}
+					<span class="selected-file">Importing…</span>
+				{:else if imageImportMessage}
+					<span class="error-text">{imageImportMessage}</span>
+				{:else}
+					<span class="no-file">No file chosen</span>
+				{/if}
+			</div>
+		</details>
 	</aside>
 
 	<div class="panel-right panel-scroll card">
 		{#if importState !== 'preview-ready' || !preview}
-			<p class="muted">Analyze a workflow to see metadata and detected inputs/outputs.</p>
+			<div class="empty-state">
+				<div class="empty-state-icon" aria-hidden="true">
+					<svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+						<path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z" />
+						<polyline points="14 2 14 8 20 8" />
+						<path d="M12 18v-6" />
+						<path d="M9 15l3 3 3-3" />
+					</svg>
+				</div>
+				<h2>Preview your workflow</h2>
+				<ol class="empty-state-steps">
+					<li>Drop a workflow JSON file or paste it on the left.</li>
+					<li>Enter a name and click <strong>Analyze</strong>.</li>
+					<li>Review metadata and detected inputs/outputs here, then <strong>Create workflow</strong>.</li>
+				</ol>
+			</div>
 		{:else}
 			<h2>Graph metadata</h2>
 			<dl class="meta-dl">
@@ -392,22 +707,126 @@
 					</tbody>
 				</table>
 			</div>
+
+			<!-- Actions: schema choice, force version, Create (moved from left) -->
+			<div class="sticky-actions">
+				{#if preview.has_workflow_ui_link}
+					<div class="schema-choice-section">
+						<div class="schema-choice-banner">
+							<p class="schema-choice-banner-headline">WorkflowUI Link node detected</p>
+							<p class="schema-choice-banner-subtext">This workflow contains a WorkflowUI Link node. You can use it as a shorthand for app creation—it exposes only the fields you defined in ComfyUI.</p>
+						</div>
+						<div
+							class="schema-segmented-control"
+							role="tablist"
+							aria-label="Schema source"
+							onkeydown={(e) => {
+								if (e.key === 'ArrowLeft' && !useWorkflowUILink) {
+									e.preventDefault();
+									useWorkflowUILink = true;
+									refetchPreviewWithSchema();
+								} else if (e.key === 'ArrowRight' && useWorkflowUILink) {
+									e.preventDefault();
+									useWorkflowUILink = false;
+									refetchPreviewWithSchema();
+								}
+							}}
+						>
+							<button
+								type="button"
+								role="tab"
+								class="schema-option"
+								class:active={useWorkflowUILink}
+								aria-pressed={useWorkflowUILink}
+								aria-selected={useWorkflowUILink}
+								tabindex={useWorkflowUILink ? 0 : -1}
+								onclick={() => { useWorkflowUILink = true; void refetchPreviewWithSchema(); }}
+							>
+								<span class="schema-option-label">WorkflowUI Link schema</span>
+								<span class="schema-option-desc">Exposes only the fields you defined in the WorkflowUI Link node. Best for workflows designed for app creation.</span>
+							</button>
+							<button
+								type="button"
+								role="tab"
+								class="schema-option"
+								class:active={!useWorkflowUILink}
+								aria-pressed={!useWorkflowUILink}
+								aria-selected={!useWorkflowUILink}
+								tabindex={!useWorkflowUILink ? 0 : -1}
+								onclick={() => { useWorkflowUILink = false; void refetchPreviewWithSchema(); }}
+							>
+								<span class="schema-option-label">Full workflow (all nodes)</span>
+								<span class="schema-option-desc">Uses every detected input from the entire workflow—KSampler, CLIPTextEncode, LoadImage, and more.</span>
+							</button>
+						</div>
+						<p class="schema-cross-hint">You can import the same workflow again later with the other option to switch schema source.</p>
+					</div>
+				{/if}
+				{#if !preview.is_new_workflow && !preview.is_new_version}
+					<label class="force-version-wrap">
+						<input type="checkbox" bind:checked={forceNewVersion} />
+						<span>Create new version anyway</span>
+					</label>
+					<p class="hint">Same graph as latest; import would normally be skipped. Check to create v2 (e.g. to refresh detected inputs).</p>
+				{/if}
+				<button type="button" onclick={handleCreateWorkflow} disabled={creating} class="primary">
+					{creating ? 'Creating…' : 'Complete import and create App'}
+				</button>
+				<p class="hint">Redirects to workflow detail. No app creation.</p>
+			</div>
 		{/if}
 	</div>
 </div>
 
 <style>
+	.page-subline {
+		margin-bottom: 1.25rem;
+	}
 	.section {
 		margin-bottom: 1.25rem;
 	}
-	.import-from-image-section {
-		border-radius: 8px;
-		padding: 0.5rem 0;
+	.section-label {
+		display: block;
+		margin-bottom: 0.5rem;
+		font-weight: 600;
 	}
-	.import-from-image-section.drag-over {
+	.json-drop-zone {
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		justify-content: center;
+		min-height: 140px;
+		padding: 1.25rem;
+		margin-bottom: 0.75rem;
+		border: 2px dashed var(--border);
+		border-radius: var(--radius-lg);
+		background: var(--surface);
+		cursor: pointer;
+		transition: border-color 0.2s ease, background 0.2s ease;
+	}
+	.json-drop-zone:hover {
+		border-color: var(--muted);
+		background: color-mix(in srgb, var(--surface) 95%, var(--accent-soft));
+	}
+	.json-drop-zone.drag-over {
+		border-color: var(--accent);
 		background: var(--accent-soft);
-		outline: 2px dashed var(--accent);
-		outline-offset: 2px;
+		outline: none;
+	}
+	.json-drop-zone-label {
+		font-weight: 500;
+		color: var(--text);
+		text-align: center;
+	}
+	.json-drop-zone-hint {
+		font-size: 0.85rem;
+		color: var(--muted);
+		margin-top: 0.25rem;
+	}
+	.paste-label {
+		font-size: 0.9rem;
+		color: var(--muted);
+		margin-bottom: 0.35rem;
 	}
 	.metadata-status {
 		font-size: 0.85rem;
@@ -415,7 +834,7 @@
 		margin: 0.5rem 0;
 		line-height: 1.4;
 	}
-	.metadata-status code {
+	:global(.metadata-status code) {
 		font-size: 0.75rem;
 		background: var(--surface);
 		padding: 0.1rem 0.3rem;
@@ -425,13 +844,6 @@
 		color: var(--muted);
 		font-size: 0.9rem;
 		margin-bottom: 1rem;
-	}
-	.import-json-options {
-		display: flex;
-		align-items: center;
-		gap: 0.5rem;
-		margin-bottom: 0.5rem;
-		flex-wrap: wrap;
 	}
 	.file-input-hidden {
 		position: absolute;
@@ -474,9 +886,211 @@
 	}
 	.import-textarea {
 		width: 100%;
-		min-height: 180px;
+		min-height: 160px;
 		font-family: ui-monospace, monospace;
 		font-size: 0.85rem;
+	}
+
+	.media-restore-section {
+		border: 1px solid var(--border);
+		border-radius: 8px;
+		background: var(--surface);
+		padding: 0 0.75rem;
+	}
+	.media-restore-summary {
+		list-style: none;
+		cursor: pointer;
+		font-weight: 500;
+		color: var(--muted);
+		font-size: 0.9rem;
+		padding: 0.75rem 0;
+	}
+	.media-restore-summary::-webkit-details-marker {
+		display: none;
+	}
+	.media-restore-summary::before {
+		content: '▸ ';
+		display: inline-block;
+		transition: transform 0.2s ease;
+	}
+	.media-restore-section[open] .media-restore-summary::before {
+		transform: rotate(90deg);
+	}
+	.media-restore-inner {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: 0.5rem;
+		padding-bottom: 0.75rem;
+		border-radius: 6px;
+	}
+	.media-restore-inner.drag-over {
+		background: var(--accent-soft);
+		outline: 2px dashed var(--accent);
+		outline-offset: 2px;
+	}
+	.comfyui-import-section {
+		margin-top: 1rem;
+	}
+	.comfyui-import-inner {
+		display: flex;
+		flex-direction: column;
+		gap: 0.75rem;
+		padding-bottom: 0.75rem;
+		min-width: 0;
+	}
+	.comfyui-hint {
+		margin: 0;
+		word-wrap: break-word;
+		overflow-wrap: break-word;
+	}
+	.comfyui-empty-state {
+		display: flex;
+		flex-direction: column;
+		gap: 0.5rem;
+		min-width: 0;
+	}
+	.comfyui-refresh-btn {
+		align-self: flex-start;
+	}
+	.comfyui-flow {
+		display: flex;
+		flex-direction: column;
+		gap: 0.5rem;
+		min-width: 0;
+		max-width: 100%;
+	}
+	.comfyui-actions {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: 0.5rem;
+		min-width: 0;
+	}
+	.comfyui-load-btn {
+		flex-shrink: 0;
+	}
+	.comfyui-error-msg {
+		margin-bottom: 0.5rem;
+		overflow-wrap: break-word;
+		word-wrap: break-word;
+	}
+	.comfyui-tips {
+		font-size: 0.85rem;
+		margin-top: 0.5rem;
+		line-height: 1.4;
+		overflow-wrap: break-word;
+		word-wrap: break-word;
+	}
+	.comfyui-tips code {
+		font-size: 0.8rem;
+		background: var(--surface);
+		padding: 0.1rem 0.25rem;
+		border-radius: 4px;
+	}
+	.comfyui-combo-wrap {
+		min-width: 0;
+		position: relative;
+		max-width: 100%;
+		width: 100%;
+	}
+	.comfyui-combo {
+		position: relative;
+		width: 100%;
+		min-width: 0;
+	}
+	.comfyui-combo-input {
+		width: 100%;
+		padding: 0.35rem 0.5rem;
+		font-size: 0.85rem;
+		color: var(--text);
+		background: var(--accent-soft);
+		border: 1px solid var(--accent);
+		border-radius: 6px;
+		outline: none;
+		box-sizing: border-box;
+	}
+	.comfyui-combo-input:focus {
+		border-color: var(--accent);
+		box-shadow: 0 0 0 2px var(--accent-soft);
+	}
+	.comfyui-combo-trigger {
+		display: block;
+		width: 100%;
+		box-sizing: border-box;
+		text-align: left;
+		padding: 0.4rem 0.6rem;
+		font: inherit;
+		font-weight: 500;
+		font-size: 0.9rem;
+		color: inherit;
+		background: var(--accent-soft);
+		border: 1px solid var(--border);
+		border-radius: 6px;
+		cursor: pointer;
+		border-bottom: 1px dotted transparent;
+		transition: background 0.15s, border-color 0.15s;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+		min-width: 0;
+	}
+	.comfyui-combo-trigger:hover:not(:disabled) {
+		background: var(--accent-soft);
+		border-color: var(--accent);
+		border-bottom-color: var(--accent);
+	}
+	.comfyui-combo-trigger:disabled {
+		opacity: 0.6;
+		cursor: not-allowed;
+	}
+	.media-restore-hint {
+		width: 100%;
+		font-size: 0.85rem;
+		color: var(--muted);
+		margin: 0 0 0.25rem 0;
+	}
+
+	.empty-state {
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		text-align: center;
+		padding: 2rem 1rem;
+	}
+	.empty-state-icon {
+		color: var(--muted);
+		margin-bottom: 1rem;
+	}
+	.empty-state h2 {
+		font-size: 1.1rem;
+		margin: 0 0 1rem 0;
+	}
+	.empty-state-steps {
+		text-align: left;
+		margin: 0;
+		padding-left: 1.25rem;
+		font-size: 0.95rem;
+		color: var(--muted);
+		line-height: 1.6;
+	}
+	.empty-state-steps li {
+		margin-bottom: 0.5rem;
+	}
+
+	.sticky-actions {
+		margin-top: 1.5rem;
+		padding-top: 1rem;
+		padding-bottom: 0.5rem;
+		border-top: 1px solid var(--border);
+		position: sticky;
+		bottom: 0;
+		background: var(--card);
+	}
+	.sticky-actions .hint {
+		font-size: 0.8rem;
+		color: var(--muted);
+		margin-top: 0.5rem;
 	}
 	.status-section {
 		padding: 0.75rem;
@@ -499,6 +1113,74 @@
 		margin-top: 0.5rem;
 		font-size: 0.9rem;
 	}
+	.schema-choice-section {
+		margin-bottom: 1rem;
+	}
+	.schema-choice-banner {
+		padding: 0.75rem 1rem;
+		background: var(--accent-soft);
+		border-left: 4px solid var(--accent);
+		border-radius: 0 8px 8px 0;
+		margin-bottom: 1rem;
+	}
+	.schema-choice-banner-headline {
+		font-weight: 600;
+		margin: 0 0 0.25rem 0;
+		font-size: 0.95rem;
+	}
+	.schema-choice-banner-subtext {
+		margin: 0;
+		font-size: 0.85rem;
+		color: var(--muted);
+		line-height: 1.4;
+	}
+	.schema-segmented-control {
+		display: flex;
+		gap: 0;
+		border: 1px solid var(--border);
+		border-radius: 8px;
+		overflow: hidden;
+	}
+	.schema-option {
+		flex: 1;
+		display: flex;
+		flex-direction: column;
+		align-items: flex-start;
+		gap: 0.25rem;
+		padding: 0.75rem 1rem;
+		background: var(--surface);
+		border: none;
+		border-right: 1px solid var(--border);
+		cursor: pointer;
+		text-align: left;
+		color: var(--text);
+		font-size: 0.9rem;
+		transition: background 0.2s ease;
+	}
+	.schema-option:last-child {
+		border-right: none;
+	}
+	.schema-option:hover {
+		background: color-mix(in srgb, var(--surface) 90%, var(--accent-soft));
+	}
+	.schema-option.active {
+		background: var(--accent-soft);
+		box-shadow: inset 0 -2px 0 0 var(--accent);
+	}
+	.schema-option-label {
+		font-weight: 600;
+	}
+	.schema-option-desc {
+		font-size: 0.8rem;
+		color: var(--muted);
+		line-height: 1.35;
+	}
+	.schema-cross-hint {
+		margin: 0.5rem 0 0;
+		font-size: 0.8rem;
+		color: var(--muted);
+		font-style: italic;
+	}
 	.force-version-wrap {
 		display: flex;
 		align-items: center;
@@ -507,15 +1189,6 @@
 	}
 	.force-version-wrap input {
 		width: auto;
-	}
-	.sticky-save {
-		margin-top: auto;
-		padding-top: 1rem;
-	}
-	.sticky-save .hint {
-		font-size: 0.8rem;
-		color: var(--muted);
-		margin-top: 0.5rem;
 	}
 	button.primary {
 		background: var(--accent);

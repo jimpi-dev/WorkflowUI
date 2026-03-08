@@ -26,3 +26,15 @@ export const api = {
         return fetch(url(path), { ...init, method: 'DELETE' });
     }
 };
+
+const APP_READY_POLL_MS = 350;
+const APP_READY_MAX_WAIT_MS = 4000;
+
+export async function waitForAppToBeAvailable(slug: string): Promise<void> {
+    const start = Date.now();
+    while (Date.now() - start < APP_READY_MAX_WAIT_MS) {
+        const res = await api.get(`app/${slug}`);
+        if (res.ok) return;
+        await new Promise((r) => setTimeout(r, APP_READY_POLL_MS));
+    }
+}

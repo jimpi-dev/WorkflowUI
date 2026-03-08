@@ -1,6 +1,7 @@
 import type { WorkflowModel, WorkflowInput, WorkflowOutput } from './types';
 import { NODE_SPECS } from './nodes';
 
+const WORKFLOW_UI_LINK_CLASS = 'WorkflowUILink';
 const OUTPUT_TYPES = ['image', 'video', 'audio'] as const;
 type OutputType = (typeof OUTPUT_TYPES)[number];
 
@@ -8,9 +9,113 @@ function isOutputType(t: string | undefined): t is OutputType {
     return t !== undefined && (OUTPUT_TYPES as readonly string[]).includes(t);
 }
 
+function parseWorkflowUILinkDefs(raw: unknown): Array<Record<string, unknown>> {
+    if (Array.isArray(raw)) return raw;
+    if (typeof raw === 'string' && raw.trim()) {
+        try {
+            const p = JSON.parse(raw);
+            return Array.isArray(p) ? p : [];
+        } catch {
+            return [];
+        }
+    }
+    return [];
+}
+
+function workflowUILinkField(slot: number, typ: string): string {
+    if (typ === 'image') return `input_image_${slot}`;
+    if (typ === 'video') return `input_video_${slot}`;
+    if (typ === 'audio') return `input_audio_${slot}`;
+    if (typ === 'boolean') return `input_boolean_${slot}`;
+    if (typ === 'number' || typ === 'seed') return `input_number_${slot}`;
+    return `input_text_${slot}`;
+}
+
+function inputDefsFromTypeWidgets(nodeInputs: Record<string, unknown>): Array<{ name: string; type: string }> {
+    const result: Array<{ name: string; type: string }> = [];
+    for (let i = 0; i < 8; i++) {
+        const typ = (nodeInputs[`type_${i}`] ?? '').toString().trim().toLowerCase();
+        if (!typ) continue;
+        const name = (nodeInputs[`name_${i}`] ?? '').toString().trim();
+        result.push({ name: name || `field_${i}`, type: typ });
+    }
+    return result;
+}
+
+function analyzeWorkflowUILinkNode(nodeId: string, node: Record<string, any>, workflow: Record<string, any>): WorkflowModel {
+    const inputs: WorkflowInput[] = [];
+    const bindings: { key: string; nodeId: string; field: string }[] = [];
+    const nodeInputs = node.inputs ?? {};
+    let inputDefs = inputDefsFromTypeWidgets(nodeInputs);
+    if (inputDefs.length === 0) {
+        inputDefs = parseWorkflowUILinkDefs(nodeInputs.input_definitions);
+    }
+    const nodeTitle = (node._meta?.title ?? 'WorkflowUILink').replaceAll('_', ' ');
+    const metaTitle = node._meta?.title?.replaceAll('_', ' ') ?? undefined;
+
+    for (let i = 0; i < inputDefs.length; i++) {
+        const item = inputDefs[i];
+        if (!item || typeof item !== 'object') continue;
+        const name = item.name;
+        if (!name || typeof name !== 'string') continue;
+        const typ = String(item.type ?? 'text').toLowerCase();
+        const field = workflowUILinkField(i, typ);
+        const key = `${nodeId}.${field}`;
+        const label = (item.label ?? name).replaceAll('_', ' ');
+        const isSeed = typ === 'seed';
+        inputs.push({
+            key,
+            label,
+            role: isSeed ? 'seed' : 'parameter',
+            parent: nodeTitle,
+            type: ['text', 'number', 'seed', 'image', 'video', 'audio', 'select', 'boolean'].includes(typ)
+                ? (typ as 'text' | 'number' | 'seed' | 'image' | 'video' | 'audio' | 'select' | 'boolean')
+                : 'text',
+            default: nodeInputs[field] ?? item.default,
+            nodeId,
+            field,
+            classType: WORKFLOW_UI_LINK_CLASS,
+            metaTitle,
+            ...(name ? { name } : {}),
+            ...(item.min != null && { min: Number(item.min) }),
+            ...(item.max != null && { max: Number(item.max) }),
+            ...(item.step != null && { step: Number(item.step) }),
+            ...(item.slider != null && { slider: Boolean(item.slider) }),
+            ...(Array.isArray(item.options) && { options: item.options as string[] }),
+            ...(item.optionSource != null && { optionSource: String(item.optionSource) }),
+        });
+        bindings.push({ key, nodeId, field });
+    }
+
+    const outputs: WorkflowOutput[] = [];
+    for (const [nid, n] of Object.entries(workflow)) {
+        if (nid === nodeId || !n || typeof n !== 'object') continue;
+        const spec = NODE_SPECS[n.class_type];
+        if (!spec?.outputs?.type) continue;
+        const typ = spec.outputs.type as 'image' | 'video' | 'audio';
+        const label = (n._meta?.title ?? n.class_type ?? nid).replaceAll('_', ' ');
+        const outMetaTitle = n._meta?.title?.replaceAll('_', ' ') ?? undefined;
+        outputs.push({ nodeId: nid, type: typ, label, metaTitle: outMetaTitle });
+    }
+
+    const formLabel = (nodeInputs.form_label ?? '').toString().trim() || undefined;
+    return { inputs, outputs, bindings, ...(formLabel ? { form_label: formLabel } : {}) };
+}
+
 export function analyzeWorkflow(
-    workflow: Record<string, any>
+    workflow: Record<string, any>,
+    options?: { useWorkflowUILink?: boolean }
 ): WorkflowModel {
+    const useWorkflowUILink = options?.useWorkflowUILink === true;
+
+    if (useWorkflowUILink) {
+        const entry = Object.entries(workflow).find(([, n]) => n && typeof n === 'object' && n.class_type === WORKFLOW_UI_LINK_CLASS);
+        if (entry) {
+            const [nodeId, node] = entry;
+            return analyzeWorkflowUILinkNode(nodeId, node as Record<string, any>, workflow);
+        }
+    }
+
     const inputs: WorkflowInput[] = [];
     const bindings: { key: string; nodeId: string; field: string }[] = [];
     const outputs: WorkflowOutput[] = [];

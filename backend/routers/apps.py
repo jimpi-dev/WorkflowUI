@@ -1,4 +1,5 @@
 import json
+import logging
 import time
 import uuid
 from typing import Any
@@ -6,13 +7,14 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Depends, Response
 
 from config import get_workflowui_embed_config
-from services.workflow_analyzer import analyze_workflow, apply_default_inputs_to_graph
+from services.workflow_analyzer import analyze_workflow, apply_default_inputs_to_graph, extract_form_label_from_graph
 from services.workflow_analyzer import _normalize_to_api_format as normalize_workflow_to_api_format
 
 from dependencies import get_db
 from routers.import_ import _find_available_slug
 
 MEDIA_INPUT_TYPES = frozenset({"image", "video", "audio"})
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -310,9 +312,11 @@ def get_app_by_slug(slug: str, db=Depends(get_db)):
     _, workflow_repo, app_repo, _, _, _, _ = db
     app = app_repo.get_app_by_slug(slug)
     if not app:
+        logger.info("GET /app/%s: app not found in DB", slug)
         raise HTTPException(status_code=404, detail="App not found")
     version = workflow_repo.get_workflow_version(app.workflow_version_id)
     if not version:
+        logger.warning("GET /app/%s: app found but workflow_version_id=%s not found", slug, app.workflow_version_id)
         raise HTTPException(status_code=404, detail="Workflow version not found")
     detected_inputs = json.loads(version.detected_inputs_json)
     supported = json.loads(app.supported_input_kinds_json) if app.supported_input_kinds_json else None
@@ -321,13 +325,17 @@ def get_app_by_slug(slug: str, db=Depends(get_db)):
     graph = json.loads(version.original_graph_json)
     analyzed = analyze_workflow(graph)
     internal_nodes = analyzed.get("internal_nodes") or []
+    form_label = extract_form_label_from_graph(graph)
+    wv_payload: dict[str, Any] = {
+        "graph_hash": version.graph_hash,
+        "detected_inputs": detected_inputs,
+        "detected_outputs": json.loads(version.detected_outputs_json),
+        "internal_nodes": internal_nodes,
+    }
+    if form_label:
+        wv_payload["form_label"] = form_label
     return {
-        "workflow_version": {
-            "graph_hash": version.graph_hash,
-            "detected_inputs": detected_inputs,
-            "detected_outputs": json.loads(version.detected_outputs_json),
-            "internal_nodes": internal_nodes,
-        },
+        "workflow_version": wv_payload,
         "app": {
             "id": app.id,
             "slug": app.slug,

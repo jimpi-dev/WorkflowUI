@@ -1,6 +1,8 @@
 <script lang="ts">
 	import { getApiBase, appConfig } from '$lib/config';
 	import { onMount, onDestroy } from 'svelte';
+	import DbSizeBar from '$lib/components/DbSizeBar.svelte';
+	import { consolePanelOpen } from '$lib/stores/consolePanelOpen';
 
 	interface Status {
 		queue: { running: number; pending: number };
@@ -17,6 +19,11 @@
 	let error = $state<string | null>(null);
 	let workflowuiPluginAvailable = $state<boolean | null>(null);
 	let workflowuiPluginIncompatible = $state(false);
+	let dbSizeBytes = $state<number | null>(null);
+	let dbBreakdown = $state<Record<string, number> | null>(null);
+	let workflowuiPluginMinVersion = $state<string | null>(null);
+	/** Version from GET /config (frontend package.json); status bar uses this over build-time appConfig.version */
+	let configVersion = $state<string | null>(null);
 
 	const POLL_INTERVAL_MS = 4000;
 	const POLL_INTERVAL_HIDDEN_MS = 12000;
@@ -32,9 +39,21 @@
 			const data = await res.json();
 			workflowuiPluginAvailable = data.workflowuiPluginAvailable === true;
 			workflowuiPluginIncompatible = data.workflowuiPluginIncompatible === true;
+			dbSizeBytes = typeof data.dbSizeBytes === 'number' ? data.dbSizeBytes : null;
+			dbBreakdown = data.dbBreakdown && typeof data.dbBreakdown === 'object' ? data.dbBreakdown : null;
+			workflowuiPluginMinVersion =
+				typeof data.workflowuiPluginMinVersion === 'string' && data.workflowuiPluginMinVersion
+					? data.workflowuiPluginMinVersion
+					: null;
+			configVersion =
+				typeof data.version === 'string' && data.version ? data.version : null;
 		} catch {
 			workflowuiPluginAvailable = null;
 			workflowuiPluginIncompatible = false;
+			dbSizeBytes = null;
+			dbBreakdown = null;
+			workflowuiPluginMinVersion = null;
+			configVersion = null;
 		}
 	}
 
@@ -93,7 +112,7 @@
 </script>
 
 <div class="status-bar" role="status" aria-label="ComfyUI queue and system status">
-	<span class="status-item app-info">{appConfig.appName} v{appConfig.version}</span>
+	<span class="status-item app-info">{appConfig.appName} v{configVersion ?? appConfig.version}</span>
 	{#if appConfig.githubRepoUrl}
 		<span class="status-sep" aria-hidden="true">|</span>
 		<a
@@ -121,9 +140,17 @@
 	{#if workflowuiPluginAvailable === false}
 		<span class="status-sep" aria-hidden="true">|</span>
 		{#if workflowuiPluginIncompatible}
-			<span class="status-item status-warning plugin-state" role="status" title="Update the WorkflowUI plugin on ComfyUI to the required version for full compatibility.">
+			<span
+				class="status-item status-warning plugin-state"
+				role="status"
+				title={workflowuiPluginMinVersion
+					? `Update the WorkflowUI plugin on ComfyUI to at least version ${workflowuiPluginMinVersion} for full compatibility.`
+					: 'Update the WorkflowUI plugin on ComfyUI to the required version for full compatibility.'}
+			>
 				<span class="plugin-state-dot plugin-state-incompatible" aria-hidden="true"></span>
-				<span class="plugin-state-text">WorkflowUI plugin version incompatible — update the ComfyUI addon for full compatibility.</span>
+				<span class="plugin-state-text">
+					WorkflowUI plugin version incompatible — update the ComfyUI addon to ≥{workflowuiPluginMinVersion ?? 'required version'} for full compatibility.
+				</span>
 			</span>
 		{:else}
 			<span class="status-item status-warning plugin-state" role="status" title="Install or update the WorkflowUI plugin on ComfyUI for more features (e.g. delete on server, media browse).">
@@ -160,6 +187,30 @@
 	{:else}
 		<span class="status-item status-loading">Queue: —</span>
 	{/if}
+	<span class="status-sep" aria-hidden="true">|</span>
+	<button
+		type="button"
+		class="status-item status-console-btn"
+		class:active={$consolePanelOpen}
+		onclick={() => consolePanelOpen.update((v) => !v)}
+		title={$consolePanelOpen ? 'Close ComfyUI console' : 'Open ComfyUI console'}
+		aria-label={$consolePanelOpen ? 'Close console' : 'Open console'}
+		aria-pressed={$consolePanelOpen}
+	>
+		<svg class="console-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+			<polyline points="4 17 10 11 4 5"></polyline>
+			<line x1="12" y1="19" x2="20" y2="19"></line>
+		</svg>
+		<span class="console-btn-text">Console</span>
+	</button>
+	<span class="status-sep" aria-hidden="true">|</span>
+	<span class="status-item db-size">
+		<DbSizeBar
+			sizeBytes={dbSizeBytes}
+			breakdown={dbBreakdown}
+			onVacuumComplete={(bytes) => { dbSizeBytes = bytes; fetchConfig(); }}
+		/>
+	</span>
 </div>
 
 <style>
@@ -240,6 +291,33 @@
 		opacity: 0.85;
 	}
 
+	.status-console-btn {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.25rem;
+		padding: 0.2rem 0.4rem;
+		border: none;
+		border-radius: 6px;
+		background: transparent;
+		color: inherit;
+		font-size: inherit;
+		cursor: pointer;
+		opacity: 0.85;
+	}
+	.status-console-btn:hover {
+		opacity: 1;
+		background: color-mix(in srgb, var(--accent) 15%, transparent);
+	}
+	.status-console-btn.active {
+		color: var(--accent);
+		opacity: 1;
+	}
+	.console-icon {
+		width: 14px;
+		height: 14px;
+		flex-shrink: 0;
+	}
+
 	@media (max-width: 639px) {
 		.status-bar {
 			flex-wrap: wrap;
@@ -264,6 +342,9 @@
 		.plugin-state-dot {
 			width: 10px;
 			height: 10px;
+		}
+		.console-btn-text {
+			display: none;
 		}
 	}
 </style>

@@ -12,6 +12,7 @@
     import SelectInput from './inputs/SelectInput.svelte';
     import BoolInputNew from './inputs/BoolInputNew.svelte';
     import ImageInput from './inputs/ImageInput.svelte';
+    import MediaInput from './inputs/MediaInput.svelte';
     import PresetIcon from './PresetIcon.svelte';
 import LoRASection from './LoRASection.svelte';
 import LatentResolutionSection from './LatentResolutionSection.svelte';
@@ -36,6 +37,7 @@ import VaeCombo from './VaeCombo.svelte';
     export let prefillImageType = 'image';
     export let onResolutionChange: (() => void) | undefined = undefined;
     export let masterSeedInputKey: string | undefined = undefined;
+    export let form_label: string | undefined = undefined;
     export let presetCreationOn = false;
     export let presetKeysToSave: Set<string> | string[] = [];
     export let onPresetKeyToggle: ((key: string, included: boolean) => void) | undefined = undefined;
@@ -61,9 +63,14 @@ import VaeCombo from './VaeCombo.svelte';
         ([parentName, nodeInputs]) => {
             const classType = nodeInputs[0]?.classType;
             const spec = classType ? NODE_SPECS[classType] : undefined;
+            const isWorkflowUILink = classType === 'WorkflowUILink';
+            const displayName = isWorkflowUILink && form_label && form_label.trim()
+                ? form_label.trim()
+                : parentName;
 
             return {
                 parentName,
+                displayName,
                 nodeInputs,
                 template: spec?.template ?? 'default',
                 headerBadge: spec?.headerBadge,
@@ -231,12 +238,13 @@ import VaeCombo from './VaeCombo.svelte';
     }
 
     function groupMatchesQuery(
-        group: { parentName: string; nodeInputs: WorkflowInput[]; template: string },
+        group: { parentName: string; displayName: string; nodeInputs: WorkflowInput[]; template: string },
         q: string
     ): boolean {
         if (!q || !q.trim()) return true;
         const lower = q.trim().toLowerCase();
         if ((group.parentName ?? '').toLowerCase().includes(lower)) return true;
+        if ((group.displayName ?? '').toLowerCase().includes(lower)) return true;
         return group.nodeInputs.some((i) => inputMatchesQuery(i, q));
     }
 
@@ -409,6 +417,16 @@ import VaeCombo from './VaeCombo.svelte';
             .catch(() => { availableUpscaleModels = []; });
     }
 
+    let availableUpscaleMethods: string[] = [];
+    let upscaleMethodsFetchRequested = false;
+    $: hasUpscaleMethodsInput = inputs.some((i) => i.optionSource === 'upscale_methods');
+    $: if (hasUpscaleMethodsInput && !upscaleMethodsFetchRequested) {
+        upscaleMethodsFetchRequested = true;
+        fetchOptionList('/upscale_methods')
+            .then((list) => { availableUpscaleMethods = list; })
+            .catch(() => { availableUpscaleMethods = []; });
+    }
+
     let stableCascadeModels: { stage_b: string[]; stage_c: string[] } = { stage_b: [], stage_c: [] };
     let stableCascadeFetchRequested = false;
     $: hasStableCascadeInput = inputs.some(
@@ -496,7 +514,7 @@ import VaeCombo from './VaeCombo.svelte';
                             <polyline points="6 9 12 15 18 9"/>
                         </svg>
                         <span class="lora-stack-title">
-                            {group.parentName}
+                            {group.displayName}
                             {#if group.headerBadge}
                                 <span class="header-badge">{group.headerBadge}</span>
                             {/if}
@@ -578,7 +596,7 @@ import VaeCombo from './VaeCombo.svelte';
                     <svg class="collapse-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                         <polyline points="6 9 12 15 18 9"/>
                     </svg>
-                    {group.parentName}
+                    {group.displayName}
                     {#if group.headerBadge}
                         <span class="header-badge">{group.headerBadge}</span>
                     {/if}
@@ -609,7 +627,7 @@ import VaeCombo from './VaeCombo.svelte';
                     <svg class="collapse-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                         <polyline points="6 9 12 15 18 9"/>
                     </svg>
-                    {group.parentName}
+                    {group.displayName}
                     {#if group.headerBadge}
                         <span class="header-badge">{group.headerBadge}</span>
                     {/if}
@@ -706,6 +724,11 @@ import VaeCombo from './VaeCombo.svelte';
                                                     input={{ ...input, options: [...new Set([...(input.options || []), ...availableUpscaleModels])].sort() }}
                                                     bind:value={values[input.key]}
                                                 />
+                                            {:else if input.optionSource === 'upscale_methods'}
+                                                <SelectInput
+                                                    input={{ ...input, options: [...new Set([...(input.options || []), ...availableUpscaleMethods])].sort() }}
+                                                    bind:value={values[input.key]}
+                                                />
                                             {:else if input.optionSource === 'stable_cascade_stage_b'}
                                                 <SelectInput
                                                     input={{
@@ -748,6 +771,22 @@ import VaeCombo from './VaeCombo.svelte';
                                                 prefillSubfolder={input.key === prefillImageInputKey ? prefillImageSubfolder : ''}
                                                 prefillType={input.key === prefillImageInputKey ? prefillImageType : 'image'}
                                                 overrideDisplayValue={input.key === prefillImageInputKey && prefillImageFilename ? prefillImageFilename : undefined}
+                                            />
+
+                                        {:else if input.type === 'video'}
+                                            <MediaInput
+                                                {input}
+                                                bind:value={values[input.key]}
+                                                mediaType="video"
+                                                {appId}
+                                            />
+
+                                        {:else if input.type === 'audio'}
+                                            <MediaInput
+                                                {input}
+                                                bind:value={values[input.key]}
+                                                mediaType="audio"
+                                                {appId}
                                             />
 
                                         {:else if input.type === 'string' && input.readonly}
@@ -984,7 +1023,7 @@ import VaeCombo from './VaeCombo.svelte';
 
     .form-row > * {
         flex: 1;
-        min-width: 0; /* verhindert overflow bugs */
+        min-width: 0;
     }
 
     .lora-stack-wrapper {
