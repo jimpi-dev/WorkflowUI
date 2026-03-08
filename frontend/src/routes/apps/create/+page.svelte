@@ -54,6 +54,35 @@
 	let availableDevices = $state<string[]>([]);
 	let availableRifeModels = $state<string[]>([]);
 	let availableUnetGgufModels = $state<string[]>([]);
+	let availableUpscaleModels = $state<string[]>([]);
+	let availableUpscaleMethods = $state<string[]>([]);
+	let collapsedInputNodes = $state<Set<string>>(new Set());
+	let collapsedOutputNodes = $state<Set<string>>(new Set());
+
+	function toggleInputNode(nodeId: string) {
+		collapsedInputNodes = new Set(collapsedInputNodes);
+		if (collapsedInputNodes.has(nodeId)) collapsedInputNodes.delete(nodeId);
+		else collapsedInputNodes.add(nodeId);
+	}
+	function toggleOutputNode(nodeId: string) {
+		collapsedOutputNodes = new Set(collapsedOutputNodes);
+		if (collapsedOutputNodes.has(nodeId)) collapsedOutputNodes.delete(nodeId);
+		else collapsedOutputNodes.add(nodeId);
+	}
+	function expandAllInputs() {
+		collapsedInputNodes = new Set();
+	}
+	function collapseAllInputs() {
+		if (!appDraft) return;
+		collapsedInputNodes = new Set(inputGroups.map((g: { nodeId: string }) => g.nodeId));
+	}
+	function expandAllOutputs() {
+		collapsedOutputNodes = new Set();
+	}
+	function collapseAllOutputs() {
+		if (!appDraft) return;
+		collapsedOutputNodes = new Set(sortedOutputs.map((o: { nodeId: string }) => o.nodeId));
+	}
 
 	function matchesFilter(item: { key?: string; label?: string; metaTitle?: string | null; nodeId?: string }, q: string): boolean {
 		if (!q.trim()) return true;
@@ -170,7 +199,9 @@
 			fetch(`${base}/vae_models`).then((r) => (r.ok ? r.json() : { vae_models: [] })).then((d: { vae_models?: string[] }) => { availableVaeModels = d.vae_models ?? []; }).catch(() => { availableVaeModels = []; }),
 			fetch(`${base}/devices`).then((r) => (r.ok ? r.json() : { devices: [] })).then((d: { devices?: string[] }) => { availableDevices = d.devices ?? []; }).catch(() => { availableDevices = []; }),
 			fetch(`${base}/rife_models`).then((r) => (r.ok ? r.json() : { rife_models: [] })).then((d: { rife_models?: string[] }) => { availableRifeModels = d.rife_models ?? []; }).catch(() => { availableRifeModels = []; }),
-			fetch(`${base}/unet_gguf_models`).then((r) => (r.ok ? r.json() : { unet_gguf_models: [] })).then((d: { unet_gguf_models?: string[] }) => { availableUnetGgufModels = d.unet_gguf_models ?? []; }).catch(() => { availableUnetGgufModels = []; })
+			fetch(`${base}/unet_gguf_models`).then((r) => (r.ok ? r.json() : { unet_gguf_models: [] })).then((d: { unet_gguf_models?: string[] }) => { availableUnetGgufModels = d.unet_gguf_models ?? []; }).catch(() => { availableUnetGgufModels = []; }),
+			fetch(`${base}/upscale_models`).then((r) => (r.ok ? r.json() : { upscale_models: [] })).then((d: { upscale_models?: string[] }) => { availableUpscaleModels = d.upscale_models ?? []; }).catch(() => { availableUpscaleModels = []; }),
+			fetch(`${base}/upscale_methods`).then((r) => (r.ok ? r.json() : { upscale_methods: [] })).then((d: { upscale_methods?: string[] }) => { availableUpscaleMethods = d.upscale_methods ?? []; }).catch(() => { availableUpscaleMethods = []; })
 		]);
 	});
 
@@ -411,20 +442,27 @@
 						title="Show only hidden elements"
 					>Hidden</button>
 				</div>
-				<input
-					type="search"
-					class="filter-input"
-					placeholder="Filter by key, label, ComfyUI title…"
-					bind:value={filterQuery}
-					aria-label="Filter inputs and outputs"
-				/>
+				<div class="filter-input-wrap">
+					<input
+						type="search"
+						class="filter-input"
+						placeholder="Filter by key, label, ComfyUI title…"
+						bind:value={filterQuery}
+						aria-label="Filter inputs and outputs"
+					/>
+				</div>
 			</div>
 			{#if activeTab === 'inputs' && appDraft}
+				<div class="expand-collapse-row">
+					<button type="button" class="expand-collapse-btn" onclick={expandAllInputs} title="Expand all node segments">Expand all</button>
+					<button type="button" class="expand-collapse-btn" onclick={collapseAllInputs} title="Collapse all node segments">Collapse all</button>
+				</div>
 				<div class="tab-content">
 					{#each inputGroups as group (group.nodeId)}
 						{@const nodeLabel = group.metaTitle ?? group.parent ?? group.classType ?? group.nodeId}
 						{@const nodeInputKeys = group.inputs.map((i: { key?: string }) => i.key).filter(Boolean) as string[]}
-						<div class="node-group" data-node-id={group.nodeId}>
+						{@const inputExpanded = !collapsedInputNodes.has(group.nodeId)}
+						<div class="node-group" class:collapsed={!inputExpanded} data-node-id={group.nodeId}>
 							<div class="node-group-header">
 								<span class="node-group-title" title="Node {group.nodeId}">
 									<span class="node-group-badge">Node {group.nodeId}</span>
@@ -433,6 +471,15 @@
 									{/if}
 								</span>
 								<div class="node-group-actions">
+									<button
+										type="button"
+										class="order-btn expand-collapse-segment-btn"
+										title={inputExpanded ? 'Collapse segment' : 'Expand segment'}
+										onclick={() => toggleInputNode(group.nodeId)}
+										aria-expanded={inputExpanded}
+									>
+										{inputExpanded ? 'Collapse' : 'Expand'}
+									</button>
 									{#if nodeInputKeys.length > 0}
 										<button
 											type="button"
@@ -467,7 +514,7 @@
 									>↓</button>
 								</div>
 							</div>
-							<div class="node-group-fields">
+							<div class="node-group-fields" role="region" aria-label="Fields for node {group.nodeId}">
 								{#each group.inputs as input (input.key)}
 									{#if input.key}
 										<FieldCard
@@ -489,6 +536,8 @@
 											availableClipTypes={availableClipTypes}
 											availableVaeModels={availableVaeModels}
 											availableDevices={availableDevices}
+											availableUpscaleModels={availableUpscaleModels}
+											availableUpscaleMethods={availableUpscaleMethods}
 											optionSource={input.optionSource ?? ''}
 											onVisibleChange={(v) => setInputVisible(appDraft!, input.key, v)}
 											onDefaultOverrideChange={(v) => {
@@ -504,13 +553,29 @@
 					{/each}
 				</div>
 			{:else if activeTab === 'outputs' && appDraft}
+				<div class="expand-collapse-row">
+					<button type="button" class="expand-collapse-btn" onclick={expandAllOutputs} title="Expand all output segments">Expand all</button>
+					<button type="button" class="expand-collapse-btn" onclick={collapseAllOutputs} title="Collapse all output segments">Collapse all</button>
+				</div>
 				<div class="tab-content">
 					{#each sortedOutputs as output (output.nodeId)}
 						{#if output.nodeId}
-							<div class="output-node-wrap" data-node-id={output.nodeId}>
+							{@const outputExpanded = !collapsedOutputNodes.has(output.nodeId)}
+							<div class="output-node-wrap" class:collapsed={!outputExpanded} data-node-id={output.nodeId}>
 								<div class="output-node-header">
-									<span class="node-group-badge">Node {output.nodeId}</span>
+									<span class="output-node-title">
+										<span class="node-group-badge">Node {output.nodeId}</span>
+									</span>
 									<div class="output-node-actions">
+										<button
+											type="button"
+											class="order-btn expand-collapse-segment-btn"
+											title={outputExpanded ? 'Collapse segment' : 'Expand segment'}
+											onclick={() => toggleOutputNode(output.nodeId)}
+											aria-expanded={outputExpanded}
+										>
+											{outputExpanded ? 'Collapse' : 'Expand'}
+										</button>
 										<button
 											type="button"
 											class="order-btn"
@@ -531,6 +596,8 @@
 										>↓</button>
 									</div>
 								</div>
+								{#if outputExpanded}
+								<div class="output-node-body">
 								<OutputCard
 									outputId={output.nodeId}
 									label={output.label}
@@ -544,6 +611,8 @@
 									onPrimaryChange={() => setPrimaryOutput(appDraft!, output.nodeId)}
 									onCustomNameChange={(name) => setOutputLabel(appDraft!, output.nodeId, name)}
 								/>
+								</div>
+								{/if}
 							</div>
 						{/if}
 					{/each}
@@ -699,22 +768,32 @@
 		display: flex;
 		gap: 0.25rem;
 	}
-	.filter-input {
+	.filter-input-wrap {
 		flex: 1;
-		min-width: 180px;
-		padding: 0.4rem 0.6rem;
-		font-size: 0.9rem;
-		border: 1px solid var(--border);
-		border-radius: 6px;
+		min-width: 200px;
+	}
+	.filter-input {
+		width: 100%;
+		box-sizing: border-box;
+		padding: 0.55rem 0.85rem;
+		font-size: 0.95rem;
+		border: 2px solid var(--accent);
+		border-radius: 8px;
 		background: var(--surface);
 		color: var(--text);
+		transition: border-color 0.2s, box-shadow 0.2s;
+		box-shadow: 0 0 18px rgba(109, 93, 252, 0.25);
 	}
 	.filter-input::placeholder {
 		color: var(--muted);
 	}
+	.filter-input:hover {
+		box-shadow: 0 0 22px rgba(109, 93, 252, 0.35);
+	}
 	.filter-input:focus {
 		outline: none;
 		border-color: var(--accent);
+		box-shadow: 0 0 0 3px var(--accent-soft), 0 0 24px rgba(109, 93, 252, 0.4);
 	}
 	.visibility-filter {
 		display: flex;
@@ -738,6 +817,24 @@
 		color: var(--accent);
 		border-color: var(--accent);
 	}
+	.expand-collapse-row {
+		display: flex;
+		gap: 0.5rem;
+		margin-bottom: 0.75rem;
+	}
+	.expand-collapse-btn {
+		padding: 0.35rem 0.6rem;
+		font-size: 0.8rem;
+		background: var(--surface);
+		border: 1px solid var(--border);
+		border-radius: 6px;
+		color: var(--muted);
+		cursor: pointer;
+	}
+	.expand-collapse-btn:hover {
+		color: var(--text);
+		border-color: var(--accent);
+	}
 	.node-group {
 		margin-bottom: 1.25rem;
 		border: 1px solid var(--border);
@@ -754,11 +851,17 @@
 		background: var(--card);
 		border-bottom: 1px solid var(--border);
 	}
+	.node-group.collapsed .node-group-fields {
+		display: none;
+	}
+	.node-group.collapsed .node-group-header {
+		border-bottom: none;
+	}
 	.node-group-title {
 		display: flex;
 		align-items: center;
 		gap: 0.5rem;
-		font-size: 0.85rem;
+		font-size: 0.9rem;
 		min-width: 0;
 	}
 	.node-group-badge {
@@ -775,6 +878,9 @@
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
+	}
+	.expand-collapse-segment-btn {
+		flex-shrink: 0;
 	}
 	.node-group-actions {
 		display: flex;
@@ -813,9 +919,20 @@
 		align-items: center;
 		justify-content: space-between;
 		gap: 0.5rem;
-		padding: 0.35rem 0.75rem;
+		padding: 0.5rem 0.75rem;
 		background: var(--card);
 		border-bottom: 1px solid var(--border);
+	}
+	.output-node-title {
+		font-size: 0.9rem;
+		min-width: 0;
+	}
+	.output-node-wrap.collapsed .output-node-header {
+		border-bottom: none;
+	}
+	.output-node-body {
+		padding: 0;
+		border-top: 1px solid var(--border);
 	}
 	.output-node-actions {
 		display: flex;

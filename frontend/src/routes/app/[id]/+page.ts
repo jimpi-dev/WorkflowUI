@@ -175,7 +175,7 @@ export const load = async ({ params, fetch, url }) => {
 				...(masterSeedInputKey ? { masterSeedInputKey } : {}),
 				...(formLabel ? { form_label: formLabel } : {})
 			};
-			const [listRes, objectInfoRes, lorasRes, lycorisTypesRes, checkpointsRes, devicesRes, rifeModelsRes, unetGgufModelsRes, stableCascadeModelsRes, upscaleModelsRes] = await Promise.all([
+			const [listRes, objectInfoRes, lorasRes, lycorisTypesRes, checkpointsRes, devicesRes, rifeModelsRes, unetGgufModelsRes, stableCascadeModelsRes, upscaleModelsRes, upscaleMethodsRes] = await Promise.all([
 				fetch(`${apiBase}/workflows`),
 				fetch(`${apiBase}/object_info`).catch(() => null),
 				fetch(`${apiBase}/loras`).catch(() => null),
@@ -185,7 +185,8 @@ export const load = async ({ params, fetch, url }) => {
 				fetch(`${apiBase}/rife_models`).catch(() => null),
 				fetch(`${apiBase}/unet_gguf_models`).catch(() => null),
 				fetch(`${apiBase}/stable_cascade_models`).catch(() => null),
-				fetch(`${apiBase}/upscale_models`).catch(() => null)
+				fetch(`${apiBase}/upscale_models`).catch(() => null),
+				fetch(`${apiBase}/upscale_methods`).catch(() => null)
 			]);
 			const objectInfo = objectInfoRes?.ok ? await objectInfoRes.json() : { samplers: [], schedulers: [] };
 			const { samplers = [], schedulers = [] } = objectInfo;
@@ -199,6 +200,7 @@ export const load = async ({ params, fetch, url }) => {
 			const stableCascadeStageB = Array.isArray(stableCascadeModels.stage_b) ? stableCascadeModels.stage_b : [];
 			const stableCascadeStageC = Array.isArray(stableCascadeModels.stage_c) ? stableCascadeModels.stage_c : [];
 			const upscaleModels = upscaleModelsRes?.ok ? (await upscaleModelsRes.json())?.upscale_models ?? [] : [];
+			const upscaleMethods = upscaleMethodsRes?.ok ? (await upscaleMethodsRes.json())?.upscale_methods ?? [] : [];
 			for (const input of workflowModel.inputs) {
 				if (input.optionSource === 'samplers' && samplers.length) input.options = samplers;
 				if (input.optionSource === 'schedulers' && schedulers.length) input.options = schedulers;
@@ -211,6 +213,7 @@ export const load = async ({ params, fetch, url }) => {
 				if (input.optionSource === 'stable_cascade_stage_b' && stableCascadeStageB.length) input.options = stableCascadeStageB;
 				if (input.optionSource === 'stable_cascade_stage_c' && stableCascadeStageC.length) input.options = stableCascadeStageC;
 				if (input.optionSource === 'upscale_models' && Array.isArray(upscaleModels) && upscaleModels.length) input.options = upscaleModels;
+				if (input.optionSource === 'upscale_methods' && Array.isArray(upscaleMethods) && upscaleMethods.length) input.options = upscaleMethods;
 			}
 			let workflows: unknown[] = [];
 			if (listRes.ok) {
