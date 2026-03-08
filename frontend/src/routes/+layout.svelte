@@ -7,6 +7,7 @@
 	import AppHeader from '$lib/components/AppHeader.svelte';
 	import ComfyUIStatusBar from '$lib/components/ComfyUIStatusBar.svelte';
 	import ComfyUIConsole from '$lib/components/ComfyUIConsole.svelte';
+	import PluginWelcomeModal from '$lib/components/PluginWelcomeModal.svelte';
 	import { consolePanelOpen } from '$lib/stores/consolePanelOpen';
 	import { onMount } from 'svelte';
 	let { children } = $props();
@@ -43,6 +44,7 @@
 </svelte:head>
 
 <div class="app-layout has-status-bar" bind:this={layoutEl}>
+	<PluginWelcomeModal />
 	<AppHeader />
 
 	<main class="app-viewport">
