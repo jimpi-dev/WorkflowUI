@@ -373,6 +373,24 @@ describe('analyzeWorkflow', () => {
 		expect(swinInp?.optionSource).toBe('upscale_models');
 	});
 
+	it('includes ImageScale, ImageScaleBy and LatentUpscaleBy upscale_method with optionSource upscale_methods', () => {
+		const workflow = {
+			'40': { class_type: 'ImageScale', inputs: { upscale_method: 'lanczos', width: 512, height: 512 } },
+			'42': { class_type: 'ImageScaleBy', inputs: { upscale_method: 'bicubic', scale_by: 2 } },
+			'41': { class_type: 'LatentUpscaleBy', inputs: { upscale_method: 'bilinear', scale_by: 2 } }
+		};
+		const result = analyzeWorkflow(workflow);
+		const imageScaleInp = result.inputs.find((i) => i.key === '40.upscale_method');
+		const imageScaleByInp = result.inputs.find((i) => i.key === '42.upscale_method');
+		const latentInp = result.inputs.find((i) => i.key === '41.upscale_method');
+		expect(imageScaleInp).toBeDefined();
+		expect(imageScaleInp?.optionSource).toBe('upscale_methods');
+		expect(imageScaleByInp).toBeDefined();
+		expect(imageScaleByInp?.optionSource).toBe('upscale_methods');
+		expect(latentInp).toBeDefined();
+		expect(latentInp?.optionSource).toBe('upscale_methods');
+	});
+
 	it('includes DualCLIPLoader clip_name1, clip_name2, type, device with correct optionSources', () => {
 		const workflow = {
 			'9': {

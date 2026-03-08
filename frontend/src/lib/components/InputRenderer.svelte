@@ -417,6 +417,16 @@ import VaeCombo from './VaeCombo.svelte';
             .catch(() => { availableUpscaleModels = []; });
     }
 
+    let availableUpscaleMethods: string[] = [];
+    let upscaleMethodsFetchRequested = false;
+    $: hasUpscaleMethodsInput = inputs.some((i) => i.optionSource === 'upscale_methods');
+    $: if (hasUpscaleMethodsInput && !upscaleMethodsFetchRequested) {
+        upscaleMethodsFetchRequested = true;
+        fetchOptionList('/upscale_methods')
+            .then((list) => { availableUpscaleMethods = list; })
+            .catch(() => { availableUpscaleMethods = []; });
+    }
+
     let stableCascadeModels: { stage_b: string[]; stage_c: string[] } = { stage_b: [], stage_c: [] };
     let stableCascadeFetchRequested = false;
     $: hasStableCascadeInput = inputs.some(
@@ -712,6 +722,11 @@ import VaeCombo from './VaeCombo.svelte';
                                             {:else if input.optionSource === 'upscale_models'}
                                                 <SelectInput
                                                     input={{ ...input, options: [...new Set([...(input.options || []), ...availableUpscaleModels])].sort() }}
+                                                    bind:value={values[input.key]}
+                                                />
+                                            {:else if input.optionSource === 'upscale_methods'}
+                                                <SelectInput
+                                                    input={{ ...input, options: [...new Set([...(input.options || []), ...availableUpscaleMethods])].sort() }}
                                                     bind:value={values[input.key]}
                                                 />
                                             {:else if input.optionSource === 'stable_cascade_stage_b'}

@@ -8,7 +8,7 @@ The **WorkflowUI Plugin** adds ComfyUI integration for WorkflowUI: HTTP APIs for
 
 The node is a pass-through: you set a **form label** (section title in the app) and up to 8 slots. For each slot you choose a **type** (text, number, seed, image, video, audio, boolean, select) and a **name** (label in the app; use `seed` for master seed). The node’s outputs connect into the rest of your graph. In ComfyUI you only configure types and labels; the app form is driven by that.
 
-![WorkflowUI Link node in the ComfyUI graph](assets/workflowui-plugin-custom-node-screenshot.png)
+![WorkflowUI Link node in the ComfyUI graph](assets/2025-03-05_workflowui-plugin-comfyui-custom-node_1.jpg)
 
 ![Alt text](assets/2025-03-05_workflowui-plugin-comfyui-custom-node_1.jpg)
 
