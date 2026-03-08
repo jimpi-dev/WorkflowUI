@@ -834,7 +834,7 @@
 		margin: 0.5rem 0;
 		line-height: 1.4;
 	}
-	.metadata-status code {
+	:global(.metadata-status code) {
 		font-size: 0.75rem;
 		background: var(--surface);
 		padding: 0.1rem 0.3rem;
@@ -1189,15 +1189,6 @@
 	}
 	.force-version-wrap input {
 		width: auto;
-	}
-	.sticky-save {
-		margin-top: auto;
-		padding-top: 1rem;
-	}
-	.sticky-save .hint {
-		font-size: 0.8rem;
-		color: var(--muted);
-		margin-top: 0.5rem;
 	}
 	button.primary {
 		background: var(--accent);
