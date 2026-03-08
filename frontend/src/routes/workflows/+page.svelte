@@ -176,7 +176,13 @@
 		{:else if isMobile}
 			<div class="workflow-cards">
 				{#each sorted as wf}
-					<div class="workflow-card">
+					<div
+						class="workflow-card"
+						role="button"
+						tabindex="0"
+						onclick={() => goto('/workflows/' + wf.id)}
+						onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); goto('/workflows/' + wf.id); } }}
+					>
 						<div class="workflow-card-header">
 							<a class="table-link" href="/workflows/{wf.id}">{wf.name}</a>
 							{#if wf.created_from_image_import}
@@ -189,7 +195,7 @@
 							<span>Versions: {wf.version_count ?? 0}</span>
 							<span>Apps: {wf.app_count ?? 0}</span>
 						</div>
-						<div class="workflow-card-actions">
+						<div class="workflow-card-actions" role="presentation" onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.stopPropagation()}>
 							<a class="btn-open" href="/workflows/{wf.id}">Open</a>
 							{#if wf.latest_version_id}
 								<a class="btn-download" href={downloadUrl(wf.id)} download>Download</a>
@@ -234,7 +240,12 @@
 					</thead>
 					<tbody>
 						{#each sorted as wf}
-							<tr>
+							<tr
+								role="button"
+								tabindex="0"
+								onclick={() => goto('/workflows/' + wf.id)}
+								onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); goto('/workflows/' + wf.id); } }}
+							>
 								<td>
 									<a class="table-link" href="/workflows/{wf.id}">{wf.name}</a>
 									{#if wf.created_from_image_import}
@@ -245,7 +256,7 @@
 								<td class="date">{formatImportDate(wf.created_at)}</td>
 								<td class="num">{wf.version_count ?? 0}</td>
 								<td class="num">{wf.app_count ?? 0}</td>
-								<td class="actions">
+								<td class="actions" role="presentation" onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.stopPropagation()}>
 									<a class="btn-open" href="/workflows/{wf.id}">Open</a>
 									{#if wf.latest_version_id}
 										<a class="btn-download" href={downloadUrl(wf.id)} download>Download JSON</a>
@@ -485,6 +496,9 @@
 		letter-spacing: 0.03em;
 		font-size: 0.75rem;
 	}
+	.admin-table tbody tr {
+		cursor: pointer;
+	}
 	.admin-table tbody tr:hover {
 		background: rgba(255, 255, 255, 0.02);
 	}
@@ -584,6 +598,7 @@
 		gap: 0.75rem;
 	}
 	.workflow-card {
+		cursor: pointer;
 		background: var(--surface);
 		border: 1px solid var(--border);
 		border-radius: var(--radius-lg);
