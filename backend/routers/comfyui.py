@@ -61,6 +61,40 @@ def get_object_info():
     return {"samplers": samplers, "schedulers": schedulers}
 
 
+DEFAULT_UPSCALE_METHODS = ["nearest-exact", "bilinear", "area", "bicubic", "lanczos"]
+
+
+@router.get("/upscale_methods")
+def get_upscale_methods():
+    try:
+        res = requests.get(f"{COMFY_URL}/object_info", timeout=10)
+        res.raise_for_status()
+        obj = res.json()
+    except Exception as e:
+        print("[upscale_methods] object_info fetch failed:", e)
+        return {"upscale_methods": DEFAULT_UPSCALE_METHODS}
+    upscale_methods = []
+    seen = set()
+    for node_name, node_info in obj.items():
+        if not isinstance(node_info, dict):
+            continue
+        inputs = node_info.get("input") or node_info.get("Input") or {}
+        required = inputs.get("required") or {}
+        optional = inputs.get("optional") or {}
+        for name, spec in {**required, **optional}.items():
+            if name != "upscale_method" or not isinstance(spec, list) or len(spec) < 1:
+                continue
+            options = spec[0]
+            if not isinstance(options, list):
+                continue
+            for o in options:
+                if isinstance(o, str) and o.strip() and o not in seen:
+                    seen.add(o)
+                    upscale_methods.append(o)
+    result = sorted(upscale_methods) if upscale_methods else DEFAULT_UPSCALE_METHODS
+    return {"upscale_methods": result}
+
+
 @router.get("/checkpoints")
 def get_checkpoints():
     try:

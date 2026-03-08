@@ -23,6 +23,8 @@
 		availableDevices?: string[];
 		availableRifeModels?: string[];
 		availableUnetGgufModels?: string[];
+		availableUpscaleModels?: string[];
+		availableUpscaleMethods?: string[];
 		optionSource?: string;
 		onVisibleChange: (visible: boolean) => void;
 		onDefaultOverrideChange: (value: unknown) => void;
@@ -47,6 +49,8 @@
 		availableDevices = [],
 		availableRifeModels = [],
 		availableUnetGgufModels = [],
+		availableUpscaleModels = [],
+		availableUpscaleMethods = [],
 		optionSource = '',
 		onVisibleChange,
 		onDefaultOverrideChange,
@@ -62,6 +66,8 @@
 	const isDeviceField = $derived(field === 'device' || optionSource === 'devices');
 	const isRifeModelsField = $derived(field === 'ckpt_name' && optionSource === 'rife_models');
 	const isUnetGgufModelsField = $derived(optionSource === 'unet_gguf_models');
+	const isUpscaleModelsField = $derived(optionSource === 'upscale_models');
+	const isUpscaleMethodsField = $derived(optionSource === 'upscale_methods');
 
 	let expanded = $state(false);
 	let localDefaultDisplay = $state('');
@@ -653,6 +659,50 @@
 						>
 							<option value="">Default (optional)</option>
 							{#each unetOpts as opt}
+								<option value={opt}>{opt}</option>
+							{/each}
+						</select>
+					{:else}
+						<input
+							type="text"
+							class="default-input"
+							placeholder="Default (optional)"
+							value={displayDefault}
+							oninput={(e) => onDefaultOverrideChange((e.target as HTMLInputElement).value || undefined)}
+						/>
+					{/if}
+				{:else if isUpscaleModelsField}
+					{#if availableUpscaleModels.length > 0}
+						{@const upscaleModelOpts = displayDefault && !availableUpscaleModels.includes(displayDefault) ? [displayDefault, ...availableUpscaleModels] : availableUpscaleModels}
+						<select
+							class="default-input"
+							value={displayDefault}
+							onchange={(e) => onDefaultOverrideChange((e.target as HTMLSelectElement).value || undefined)}
+						>
+							<option value="">Default (optional)</option>
+							{#each upscaleModelOpts as opt}
+								<option value={opt}>{opt}</option>
+							{/each}
+						</select>
+					{:else}
+						<input
+							type="text"
+							class="default-input"
+							placeholder="Default (optional)"
+							value={displayDefault}
+							oninput={(e) => onDefaultOverrideChange((e.target as HTMLInputElement).value || undefined)}
+						/>
+					{/if}
+				{:else if isUpscaleMethodsField}
+					{#if availableUpscaleMethods.length > 0}
+						{@const upscaleMethodOpts = displayDefault && !availableUpscaleMethods.includes(displayDefault) ? [displayDefault, ...availableUpscaleMethods] : availableUpscaleMethods}
+						<select
+							class="default-input"
+							value={displayDefault}
+							onchange={(e) => onDefaultOverrideChange((e.target as HTMLSelectElement).value || undefined)}
+						>
+							<option value="">Default (optional)</option>
+							{#each upscaleMethodOpts as opt}
 								<option value={opt}>{opt}</option>
 							{/each}
 						</select>
