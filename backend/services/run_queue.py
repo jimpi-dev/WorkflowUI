@@ -17,6 +17,48 @@ from services.run_executor import (
 logger = logging.getLogger(__name__)
 
 
+def build_job_from_run(run_entity: Any, get_db: Callable[[], Any]) -> dict | None:
+    """Build a queue job dict from a run entity for resume. Returns None if run has no app/workflow."""
+    db = get_db()
+    if not db or len(db) < 5:
+        return None
+    _, workflow_repo, app_repo, run_repo, _ = db[0], db[1], db[2], db[3], db[4]
+    if not run_entity.app_id:
+        return None
+    version = workflow_repo.get_workflow_version(run_entity.workflow_version_id) if workflow_repo else None
+    app = app_repo.get_app_by_id(run_entity.app_id) if app_repo else None
+    if not version or not app:
+        return None
+    graph = json.loads(version.original_graph_json)
+    default_inputs = json.loads(app.default_inputs_json) if app.default_inputs_json else None
+    snap = {}
+    if run_entity.input_snapshot_json:
+        try:
+            snap = json.loads(run_entity.input_snapshot_json) or {}
+        except (json.JSONDecodeError, TypeError):
+            pass
+    values = snap.get("values") if isinstance(snap.get("values"), dict) else {}
+    bindings = snap.get("bindings") if isinstance(snap.get("bindings"), list) else []
+    payload = {
+        "project_id": run_entity.project_id,
+        "app_id": run_entity.app_id,
+        "workflow_version_id": run_entity.workflow_version_id,
+        "run_id": run_entity.id,
+        "values": values,
+        "bindings": bindings,
+    }
+    comfy_url = run_entity.comfyui_url or app.comfyui_url
+    if not comfy_url:
+        comfy_url = "http://localhost:8188/"
+    return {
+        "run_id": run_entity.id,
+        "payload": payload,
+        "prompt": graph,
+        "default_inputs": default_inputs,
+        "comfyui_url": comfy_url,
+    }
+
+
 def queue_run(
     run_queue: list,
     runs: dict,
@@ -27,6 +69,8 @@ def queue_run(
     executor: RunExecutor,
     get_db: Callable[[], Any],
     get_media_service: Callable[[], Any],
+    processing_halted: list[bool] | None = None,
+    auto_start: bool = True,
 ) -> dict:
     run_id = job.get("run_id") or str(uuid.uuid4())
     job["run_id"] = run_id
@@ -48,8 +92,75 @@ def queue_run(
             "queue_position": queue_position,
             "comfyui_url": job.get("comfyui_url") or default_comfy_url,
         }
-    start_worker(run_queue, runs, queue_lock, worker_busy, executor, get_db, get_media_service)
+    if auto_start:
+        do_start = processing_halted is None or not processing_halted[0]
+        if do_start:
+            start_worker(
+                run_queue, runs, queue_lock, worker_busy, processing_halted,
+                executor, get_db, get_media_service,
+            )
     return {"run_id": run_id, "queue_position": queue_position}
+
+
+def reorder_run(
+    run_queue: list,
+    runs: dict,
+    queue_lock: threading.Lock,
+    run_id: str,
+    direction: str,
+) -> int | None:
+    """Move run_id up or down in queue. Returns new 1-based queue_position or None if not found/invalid."""
+    with queue_lock:
+        idx = None
+        for i, job in enumerate(run_queue):
+            if job.get("run_id") == run_id:
+                idx = i
+                break
+        if idx is None:
+            return None
+        if direction == "up" and idx > 0:
+            run_queue[idx], run_queue[idx - 1] = run_queue[idx - 1], run_queue[idx]
+        elif direction == "down" and idx < len(run_queue) - 1:
+            run_queue[idx], run_queue[idx + 1] = run_queue[idx + 1], run_queue[idx]
+        else:
+            return runs.get(run_id, {}).get("queue_position")
+        for i, q in enumerate(run_queue):
+            rid = q.get("run_id")
+            if rid and rid in runs:
+                runs[rid]["queue_position"] = i + 1
+        return runs.get(run_id, {}).get("queue_position")
+
+
+def move_run_to_position(
+    run_queue: list,
+    runs: dict,
+    queue_lock: threading.Lock,
+    run_id: str,
+    new_position: int,
+) -> int | None:
+    """Move run_id to 1-based new_position in queue. Returns new queue_position or None."""
+    with queue_lock:
+        idx = None
+        for i, job in enumerate(run_queue):
+            if job.get("run_id") == run_id:
+                idx = i
+                break
+        if idx is None:
+            return None
+        if new_position < 1:
+            new_position = 1
+        if new_position > len(run_queue):
+            new_position = len(run_queue)
+        target_idx = new_position - 1
+        if idx == target_idx:
+            return runs.get(run_id, {}).get("queue_position")
+        job = run_queue.pop(idx)
+        run_queue.insert(target_idx, job)
+        for i, q in enumerate(run_queue):
+            rid = q.get("run_id")
+            if rid and rid in runs:
+                runs[rid]["queue_position"] = i + 1
+        return runs.get(run_id, {}).get("queue_position")
 
 
 def start_worker(
@@ -57,17 +168,20 @@ def start_worker(
     runs: dict,
     queue_lock: threading.Lock,
     worker_busy: list[bool],
+    processing_halted: list[bool] | None,
     executor: RunExecutor | None,
     get_db: Callable[[], Any] | None,
     get_media_service: Callable[[], Any] | None,
 ) -> None:
     with queue_lock:
+        if processing_halted is not None and processing_halted[0]:
+            return
         if worker_busy[0]:
             return
         worker_busy[0] = True
     t = threading.Thread(
         target=_worker_loop,
-        args=(run_queue, runs, queue_lock, worker_busy, executor, get_db, get_media_service),
+        args=(run_queue, runs, queue_lock, worker_busy, processing_halted, executor, get_db, get_media_service),
         daemon=True,
     )
     t.start()
@@ -78,6 +192,7 @@ def _worker_loop(
     runs: dict,
     queue_lock: threading.Lock,
     worker_busy: list[bool],
+    processing_halted: list[bool] | None,
     executor: RunExecutor | None,
     get_db: Callable[[], Any] | None,
     get_media_service: Callable[[], Any] | None,
@@ -92,8 +207,13 @@ def _worker_loop(
 
     while True:
         with queue_lock:
+            if processing_halted is not None and processing_halted[0]:
+                worker_busy[0] = False
+                return
             if not run_queue:
                 worker_busy[0] = False
+                if processing_halted is not None:
+                    processing_halted[0] = False
                 return
             job = run_queue.pop(0)
             run_id = job["run_id"]
@@ -168,7 +288,10 @@ def _worker_loop(
                             if rid in runs:
                                 runs[rid]["queue_position"] = i + 1
                 time.sleep(3)
-                start_worker(run_queue, runs, queue_lock, worker_busy, executor, get_db, get_media_service)
+                start_worker(
+                    run_queue, runs, queue_lock, worker_busy, processing_halted,
+                    executor, get_db, get_media_service,
+                )
                 continue
             with queue_lock:
                 if runs.get(run_id, {}).get("status") != "cancelled":
@@ -187,4 +310,6 @@ def _worker_loop(
         with queue_lock:
             if not run_queue:
                 worker_busy[0] = False
+                if processing_halted is not None:
+                    processing_halted[0] = False
                 return

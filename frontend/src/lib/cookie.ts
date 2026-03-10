@@ -69,3 +69,31 @@ export function getSkipDeleteConfirmCookie(action: DeleteConfirmKey): boolean {
 export function setSkipDeleteConfirmCookie(action: DeleteConfirmKey, skip: boolean): void {
     setCookie(DELETE_CONFIRM_KEYS[action], skip ? '1' : '0');
 }
+
+export const QUEUE_GROUPS_COLLAPSED_COOKIE = 'workflowui_queue_groups_collapsed';
+
+export function getQueueGroupsCollapsedCookie(): boolean {
+    const raw = getCookie(QUEUE_GROUPS_COLLAPSED_COOKIE);
+    return raw === '1' || raw === 'true';
+}
+
+export function setQueueGroupsCollapsedCookie(collapsed: boolean): void {
+    setCookie(QUEUE_GROUPS_COLLAPSED_COOKIE, collapsed ? '1' : '0');
+}
+
+const QUEUE_PANEL_WIDTH_COOKIE = 'workflowui_queue_panel_width';
+const QUEUE_PANEL_WIDTH_DEFAULT = 380;
+const QUEUE_PANEL_WIDTH_MIN = 280;
+
+export function getQueuePanelWidthCookie(): number {
+    const raw = getCookie(QUEUE_PANEL_WIDTH_COOKIE);
+    if (raw === null || raw === '') return QUEUE_PANEL_WIDTH_DEFAULT;
+    const n = parseInt(raw, 10);
+    if (!Number.isFinite(n) || n < QUEUE_PANEL_WIDTH_MIN) return QUEUE_PANEL_WIDTH_DEFAULT;
+    return n;
+}
+
+export function setQueuePanelWidthCookie(width: number): void {
+    const w = Math.max(QUEUE_PANEL_WIDTH_MIN, Math.round(width));
+    setCookie(QUEUE_PANEL_WIDTH_COOKIE, String(w));
+}
