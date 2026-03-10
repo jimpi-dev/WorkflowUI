@@ -1,10 +1,11 @@
 <script lang="ts">
     import { browser } from '$app/environment';
-    import { onMount, onDestroy, tick } from 'svelte';
+    import { tick } from 'svelte';
     import { getThumbSizeCookie, setThumbSizeCookie, type ThumbSize } from '$lib/cookie';
     import ThumbnailOverlay from '$lib/components/ThumbnailOverlay.svelte';
     import RunHeaderActions from '$lib/components/RunHeaderActions.svelte';
     import RunAppBadge from '$lib/components/RunAppBadge.svelte';
+    import LightboxViewer, { type LightboxItem } from '$lib/components/LightboxViewer.svelte';
 
     export type GalleryImage = {
         id: string;
@@ -128,39 +129,6 @@
 
     let lightboxOpen = $state(false);
     let lightboxIndex = $state(0);
-    let fitToScreen = $state(true);
-    let zoomMode = $state(false);
-
-    let zoom = $state(1);
-    const ZOOM_MIN = 0.1;
-    const ZOOM_MAX = 6;
-
-    let baseWidth = $state(0);
-    let imgEl = $state<HTMLImageElement | null>(null);
-    let lightboxVideoEl = $state<HTMLVideoElement | null>(null);
-    let lightboxScrollEl = $state<HTMLDivElement | null>(null);
-    let carouselTrackEl = $state<HTMLDivElement | null>(null);
-
-    let isPanning = $state(false);
-
-    let lightboxZoomHintVisible = $state(false);
-    let lightboxZoomHintTimeoutId: ReturnType<typeof setTimeout> | undefined;
-    function dismissLightboxZoomHint() {
-        lightboxZoomHintVisible = false;
-        if (lightboxZoomHintTimeoutId != null) {
-            clearTimeout(lightboxZoomHintTimeoutId);
-            lightboxZoomHintTimeoutId = undefined;
-        }
-        if (browser) sessionStorage.setItem('workflowui_lightbox_zoom_hint_seen', '1');
-    }
-
-    let panStartX = 0;
-    let panStartY = 0;
-    let panStartScrollLeft = 0;
-    let panStartScrollTop = 0;
-
-    let touchStartX = 0;
-    let touchSwipeHandled = false;
 
     let playingAudioThumbKey = $state<string | null>(null);
 
@@ -194,33 +162,6 @@
 
     let lightboxRun = $derived(lightboxRunId ? runs.find((r) => r.id === lightboxRunId) ?? null : null);
 
-    function handleKey(e: KeyboardEvent) {
-        if (!lightboxOpen || !lightboxImages.length) return;
-        dismissLightboxZoomHint();
-        if (e.key === 'Escape') closeLightbox();
-        if (e.key === 'ArrowRight')
-            lightboxIndex = (lightboxIndex + 1) % lightboxImages.length;
-        if (e.key === 'ArrowLeft')
-            lightboxIndex =
-                (lightboxIndex - 1 + lightboxImages.length) % lightboxImages.length;
-        if (e.key === ' ' && lightboxRun) {
-            const img = lightboxImages[lightboxIndex];
-            if (img) {
-                e.preventDefault();
-                toggleSelection(lightboxRun.id, img.id);
-            }
-        }
-    }
-
-    onMount(() => {
-        if (!browser) return;
-        window.addEventListener('keydown', handleKey);
-    });
-
-    onDestroy(() => {
-        if (!browser) return;
-        window.removeEventListener('keydown', handleKey);
-    });
 
     function groupByOutputIndex(images: GalleryImage[]): [string, GalleryImage[]][] {
         const groups: Record<string, GalleryImage[]> = {};
@@ -348,184 +289,22 @@
         const idx = list.findIndex((img) => img.id === image.id);
         if (idx === -1) return;
 
+        document.querySelectorAll('audio').forEach((a) => a.pause());
+        document.querySelectorAll('video').forEach((v) => v.pause());
+        playingAudioThumbKey = null;
+
         markThumbLoaded(run.id, image.id);
 
         lightboxRunId = run.id;
         lightboxSeedFilter = seedFilterByRun[run.id]?.length ? seedFilterByRun[run.id] : null;
         lightboxIndex = idx;
-        zoom = 1;
-        fitToScreen = true;
-        zoomMode = false;
         lightboxOpen = true;
-
-        tick().then(() => {
-            const cur = lightboxImages[lightboxIndex];
-            if (cur?.mediaType === 'video' && lightboxVideoEl) baseWidth = lightboxVideoEl.videoWidth || 640;
-            else if (imgEl) baseWidth = imgEl.naturalWidth;
-            if (cur && cur.mediaType !== 'video' && cur.mediaType !== 'audio' && browser && !sessionStorage.getItem('workflowui_lightbox_zoom_hint_seen')) {
-                lightboxZoomHintVisible = true;
-                lightboxZoomHintTimeoutId = setTimeout(() => dismissLightboxZoomHint(), 5000);
-            }
-        });
     }
 
     function closeLightbox() {
         lightboxOpen = false;
         lightboxRunId = null;
         lightboxSeedFilter = null;
-        lightboxDownloading = false;
-        zoomMode = false;
-        isPanning = false;
-        if (lightboxZoomHintTimeoutId != null) {
-            clearTimeout(lightboxZoomHintTimeoutId);
-            lightboxZoomHintTimeoutId = undefined;
-        }
-        lightboxZoomHintVisible = false;
-    }
-
-    function nextImage() {
-        if (!lightboxImages.length) return;
-        lightboxIndex = (lightboxIndex + 1) % lightboxImages.length;
-        zoom = 1;
-        resetLightboxScroll();
-    }
-
-    function prevImage() {
-        if (!lightboxImages.length) return;
-        lightboxIndex =
-            (lightboxIndex - 1 + lightboxImages.length) % lightboxImages.length;
-        zoom = 1;
-        resetLightboxScroll();
-    }
-
-    function goToImage(index: number) {
-        if (index === lightboxIndex || index < 0 || index >= lightboxImages.length) return;
-        lightboxIndex = index;
-        zoom = 1;
-        resetLightboxScroll();
-    }
-
-    function resetLightboxScroll() {
-        if (lightboxScrollEl) {
-            lightboxScrollEl.scrollLeft = 0;
-            lightboxScrollEl.scrollTop = 0;
-        }
-    }
-
-    $effect(() => {
-        if (lightboxOpen && lightboxImages.length && carouselTrackEl) {
-            const idx = lightboxIndex;
-            tick().then(() => {
-                const active = carouselTrackEl?.querySelector(`[data-carousel-index="${idx}"]`);
-                active?.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
-                const cur = lightboxImages[idx];
-                if (cur?.mediaType === 'video' && lightboxVideoEl) baseWidth = lightboxVideoEl.videoWidth || 640;
-                else if (imgEl) baseWidth = imgEl.naturalWidth;
-            });
-        }
-    });
-
-    function zoomIn() {
-        fitToScreen = false;
-        zoom = Math.min(zoom + 0.2, ZOOM_MAX);
-    }
-
-    function zoomOut() {
-        fitToScreen = false;
-        zoom = Math.max(zoom - 0.2, ZOOM_MIN);
-    }
-
-    function resetZoom() {
-        zoom = 1;
-    }
-
-    function toggleZoomMode() {
-        dismissLightboxZoomHint();
-        zoomMode = !zoomMode;
-        if (!zoomMode) {
-            zoom = 1;
-            fitToScreen = true;
-            isPanning = false;
-        } else {
-            fitToScreen = false;
-            zoom = Math.max(zoom, 1.2);
-        }
-    }
-
-    function onLightboxWheel(e: WheelEvent) {
-        dismissLightboxZoomHint();
-        e.preventDefault();
-        if (zoomMode) {
-            fitToScreen = false;
-            zoom = Math.min(
-                ZOOM_MAX,
-                Math.max(ZOOM_MIN, zoom + (e.deltaY > 0 ? -0.1 : 0.1))
-            );
-        } else {
-            if (e.deltaY > 0) nextImage();
-            else prevImage();
-        }
-    }
-
-    function onLightboxMouseDown(e: MouseEvent) {
-        if (!zoomMode || !lightboxScrollEl) return;
-        const t = e.target as HTMLElement;
-        if (t.closest('button')) return;
-        e.preventDefault();
-        isPanning = true;
-        panStartX = e.clientX;
-        panStartY = e.clientY;
-        panStartScrollLeft = lightboxScrollEl.scrollLeft;
-        panStartScrollTop = lightboxScrollEl.scrollTop;
-    }
-
-    function onLightboxMouseMove(e: MouseEvent) {
-        if (!isPanning || !lightboxScrollEl) return;
-        e.preventDefault();
-        lightboxScrollEl.scrollLeft = panStartScrollLeft + (panStartX - e.clientX);
-        lightboxScrollEl.scrollTop = panStartScrollTop + (panStartY - e.clientY);
-    }
-
-    function onLightboxMouseUp() {
-        isPanning = false;
-    }
-
-    $effect(() => {
-        if (!browser) return;
-        window.removeEventListener('mousemove', onLightboxMouseMove);
-        window.removeEventListener('mouseup', onLightboxMouseUp);
-        if (lightboxOpen && isPanning) {
-            window.addEventListener('mousemove', onLightboxMouseMove);
-            window.addEventListener('mouseup', onLightboxMouseUp);
-        }
-        return () => {
-            window.removeEventListener('mousemove', onLightboxMouseMove);
-            window.removeEventListener('mouseup', onLightboxMouseUp);
-        };
-    });
-
-    function lightboxWheelAction(node: HTMLDivElement) {
-        const handler = (e: WheelEvent) => onLightboxWheel(e);
-        node.addEventListener('wheel', handler, { passive: false });
-        return {
-            destroy() {
-                node.removeEventListener('wheel', handler);
-            },
-        };
-    }
-
-    const SWIPE_THRESHOLD_PX = 50;
-    function onLightboxTouchStart(e: TouchEvent) {
-        if (e.touches.length === 1) touchStartX = e.touches[0].clientX;
-    }
-    function onLightboxTouchEnd(e: TouchEvent) {
-        if (e.changedTouches.length !== 1 || zoomMode || !lightboxImages.length) return;
-        const deltaX = e.changedTouches[0].clientX - touchStartX;
-        if (Math.abs(deltaX) < SWIPE_THRESHOLD_PX) return;
-        touchSwipeHandled = true;
-        if (deltaX > 0) prevImage();
-        else nextImage();
-        setTimeout(() => { touchSwipeHandled = false; }, 300);
     }
     
     function copySeed(seed: number) {
@@ -605,24 +384,17 @@
         };
     }
 
-    let lightboxDownloading = $state(false);
-    async function downloadImage(img: GalleryImage) {
-        if (lightboxDownloading) return;
-        lightboxDownloading = true;
-        try {
-            const res = await fetch(img.url);
-            const blob = await res.blob();
-            const blobUrl = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = blobUrl;
-            a.download = img.filename ?? (img.mediaType === 'video' ? 'video.mp4' : img.mediaType === 'audio' ? 'audio.mp3' : 'image.png');
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-            URL.revokeObjectURL(blobUrl);
-        } finally {
-            lightboxDownloading = false;
-        }
+    async function downloadImage(img: { url: string; filename?: string; mediaType?: string }) {
+        const res = await fetch(img.url);
+        const blob = await res.blob();
+        const blobUrl = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = blobUrl;
+        a.download = img.filename ?? (img.mediaType === 'video' ? 'video.mp4' : img.mediaType === 'audio' ? 'audio.mp3' : 'image.png');
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(blobUrl);
     }
 </script>
 
@@ -1042,283 +814,22 @@
 {/each}
 {/if}
 
-{#if lightboxOpen}
-    <div class="lightbox" role="dialog" aria-modal="true" aria-label="Media viewer">
-        <div
-                class="lightbox-backdrop"
-                role="button"
-                tabindex="-1"
-                aria-label="Close viewer"
-                onclick={closeLightbox}
-                onkeydown={(e) => e.key === 'Enter' && closeLightbox()}
-        ></div>
-        <div
-                class="lightbox-controls"
-                role="group"
-                aria-label="Lightbox controls"
-        >
-            <button
-                    type="button"
-                    class="lightbox-zoom-mode"
-                    class:active={zoomMode}
-                    onclick={(e) => { e.stopPropagation(); toggleZoomMode(); }}
-                    title={zoomMode ? 'Exit zoom mode (wheel will change image)' : 'Enter zoom mode (wheel zooms, drag to pan)'}
-                    aria-label={zoomMode ? 'Exit zoom mode' : 'Enter zoom mode'}
-            >
-                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                    <circle cx="11" cy="11" r="8"/>
-                    <line x1="21" y1="21" x2="16.65" y2="16.65"/>
-                    <line x1="11" y1="8" x2="11" y2="14"/>
-                    <line x1="8" y1="11" x2="14" y2="11"/>
-                </svg>
-            </button>
-            <button type="button" onclick={zoomOut} disabled={!zoomMode}>−</button>
-            <button type="button" onclick={resetZoom}>
-                {Math.round(zoom * 100)}%
-            </button>
-            <button type="button" onclick={zoomIn} disabled={!zoomMode}>+</button>
-            <button type="button" class="close" onclick={closeLightbox} title="Close (Esc)" aria-label="Close viewer">✕ Close</button>
-        </div>
-
-        <div
-                class="lightbox-scroll"
-                class:zoom-mode={zoomMode}
-                class:panning={isPanning}
-                bind:this={lightboxScrollEl}
-                use:lightboxWheelAction
-                role="presentation"
-                ondblclick={(e) => {
-                    const t = e.target as HTMLElement;
-                    if (t.tagName === 'IMG') { e.preventDefault(); toggleZoomMode(); }
-                }}
-                onmousedown={onLightboxMouseDown}
-                ontouchstart={onLightboxTouchStart}
-                ontouchend={onLightboxTouchEnd}
-                onclick={(e) => {
-                    if (touchSwipeHandled) {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        return;
-                    }
-                    const t = e.target as HTMLElement;
-                    if (t.tagName === 'IMG' || t.tagName === 'VIDEO' || t.tagName === 'AUDIO') dismissLightboxZoomHint();
-                    if (t.tagName !== 'IMG' && t.tagName !== 'VIDEO' && t.tagName !== 'AUDIO' && !t.closest('button') && !t.closest('audio')) closeLightbox();
-                }}
-                onkeydown={(e) => { if (e.key === 'Escape') closeLightbox(); }}
-        >
-            {#if lightboxOpen && lightboxZoomHintVisible && lightboxImages[lightboxIndex]?.mediaType !== 'video' && lightboxImages[lightboxIndex]?.mediaType !== 'audio'}
-                <p class="lightbox-zoom-hint visible" role="status" aria-live="polite">Double-click to zoom · drag to pan</p>
-            {/if}
-            <div class="lightbox-inner">
-                <button
-                        type="button"
-                        class="lightbox-nav lightbox-prev"
-                        onclick={(e) => { e.stopPropagation(); prevImage(); }}
-                        ondblclick={(e) => { e.preventDefault(); e.stopPropagation(); }}
-                        aria-label="Previous image"
-                >
-                    <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                        <path d="M19 12H5M12 19l-7-7 7-7"/>
-                    </svg>
-                </button>
-                {#if lightboxImages[lightboxIndex]?.mediaType === 'video'}
-                    <video
-                            bind:this={lightboxVideoEl}
-                            class="lightbox-media"
-                            src={lightboxImages[lightboxIndex]?.url}
-                            controls
-                            autoplay
-                            playsinline
-                            loop
-                            style={
-                                fitToScreen
-                                    ? 'max-width: 100%; max-height: 100%; width: auto; height: auto;'
-                                    : `width: ${baseWidth * zoom}px;`
-                            }
-                    ><track kind="captions" /></video>
-                {:else if lightboxImages[lightboxIndex]?.mediaType === 'audio'}
-                    <div class="lightbox-audio-wrap">
-                        <audio
-                                class="lightbox-media lightbox-audio"
-                                src={lightboxImages[lightboxIndex]?.url}
-                                controls
-                                autoplay
-                        ></audio>
-                    </div>
-                {:else}
-                    <img
-                            bind:this={imgEl}
-                            src={lightboxImages[lightboxIndex]?.url}
-                            alt=""
-                            draggable="false"
-                            style={
-                                fitToScreen
-                                    ? 'max-width: 100%; max-height: 100%; width: auto; height: auto;'
-                                    : `width: ${baseWidth * zoom}px;`
-                            }
-                    />
-                {/if}
-                <button
-                        type="button"
-                        class="lightbox-nav lightbox-next"
-                        onclick={(e) => { e.stopPropagation(); nextImage(); }}
-                        ondblclick={(e) => { e.preventDefault(); e.stopPropagation(); }}
-                        aria-label="Next image"
-                >
-                    <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                        <path d="M5 12h14M12 5l7 7-7 7"/>
-                    </svg>
-                </button>
-            </div>
-        </div>
-
-        {#if lightboxRun && lightboxImages[lightboxIndex]}
-            {@const img = lightboxImages[lightboxIndex]}
-            {@const hasSeed = img.seed !== undefined && img.seed !== null && String(img.seed).trim() !== ''}
-            {@const hasTime = img.executionTimeSec != null}
-            {@const showMeta = lightboxRun && onMetadataClick}
-            {@const showFav = !!onToggleFavorite}
-            {@const showSel = !!lightboxRun}
-            {@const showSend = !!onSendToApp && !img.remote_deleted}
-            <div class="lightbox-media-actions" role="toolbar" aria-label="Media actions">
-                <div class="lightbox-media-actions-left">
-                    {#if showMeta}
-                        <button
-                                type="button"
-                                class="lightbox-media-btn"
-                                title="View generation metadata"
-                                aria-label="View generation metadata"
-                                onclick={(e) => { e.stopPropagation(); closeLightbox(); onMetadataClick(lightboxRun!, img); }}
-                        >
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                                <circle cx="12" cy="12" r="10"/>
-                                <path d="M12 16v-4"/>
-                                <path d="M12 8h.01"/>
-                            </svg>
-                        </button>
-                    {/if}
-                    {#if hasSeed || hasTime}
-                        <span class="lightbox-media-seed" title={[hasSeed ? 'Seed value' : '', hasTime ? 'Generation time' : ''].filter(Boolean).join(' · ') || undefined}>
-                            {#if hasSeed}
-                                <span class="seed-value">{img.seed}</span>
-                            {/if}
-                            {#if hasTime}
-                                {#if hasSeed}
-                                    <span class="lightbox-media-sep" aria-hidden="true"> · </span>
-                                {/if}
-                                <span class="lightbox-media-time">{Math.round(Number(img.executionTimeSec))} sec</span>
-                            {/if}
-                        </span>
-                    {/if}
-                </div>
-                <div class="lightbox-media-actions-right">
-                    {#if showFav}
-                        <button
-                                type="button"
-                                class="lightbox-media-btn lightbox-media-favorite"
-                                class:is-favorite={favoriteRunIds.has(img.backendRunId)}
-                                title={favoriteRunIds.has(img.backendRunId) ? 'Remove from favorites' : 'Add to favorites'}
-                                aria-label={favoriteRunIds.has(img.backendRunId) ? 'Remove from favorites' : 'Add to favorites'}
-                                onclick={(e) => { e.stopPropagation(); onToggleFavorite?.(img.backendRunId); }}
-                        >
-                            <span class="lightbox-fav-outline" aria-hidden="true">
-                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round">
-                                    <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/>
-                                </svg>
-                            </span>
-                            <span class="lightbox-fav-fill" aria-hidden="true">
-                                <svg viewBox="0 0 24 24" fill="currentColor">
-                                    <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/>
-                                </svg>
-                            </span>
-                        </button>
-                    {/if}
-                    {#if showSel && lightboxRun}
-                        <button
-                                type="button"
-                                class="lightbox-media-btn lightbox-media-select"
-                                class:active={isImageSelected(lightboxRun.id, img.id)}
-                                title={isImageSelected(lightboxRun.id, img.id) ? 'Remove from selection (Space)' : 'Add to selection (Space)'}
-                                aria-label={isImageSelected(lightboxRun.id, img.id) ? 'Remove from selection (Space)' : 'Add to selection (Space)'}
-                                onclick={(e) => { e.stopPropagation(); toggleSelection(lightboxRun.id, img.id); }}
-                        >
-                            {#if isImageSelected(lightboxRun.id, img.id)}
-                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6L9 17l-5-5"/></svg>
-                            {:else}
-                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/></svg>
-                            {/if}
-                        </button>
-                    {/if}
-                    <button
-                            type="button"
-                            class="lightbox-media-btn"
-                            disabled={lightboxDownloading}
-                            title={lightboxDownloading ? 'Downloading…' : 'Download file'}
-                            aria-label={lightboxDownloading ? 'Downloading…' : 'Download file'}
-                            onclick={(e) => { e.stopPropagation(); downloadImage(img); }}
-                    >
-                        {#if lightboxDownloading}
-                            <span class="lightbox-download-spinner" aria-hidden="true"></span>
-                        {:else}
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
-                                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-                                <path d="M7 10l5 5 5-5"/>
-                                <path d="M12 15V3"/>
-                            </svg>
-                        {/if}
-                    </button>
-                    {#if showSend}
-                        <button
-                                type="button"
-                                class="lightbox-media-btn"
-                                title="Send this output to app"
-                                aria-label="Send this output to app"
-                                onclick={(e) => { e.stopPropagation(); closeLightbox(); onSendToApp?.(img.backendRunId, img.outputIndex ?? 0); }}
-                        >
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
-                                <path d="M5 12h14M12 5l7 7-7 7"/>
-                            </svg>
-                        </button>
-                    {/if}
-                </div>
-            </div>
-        {/if}
-
-        <div
-                class="lightbox-carousel"
-                role="tablist"
-                aria-label="Image strip"
-                tabindex="0"
-        >
-            <div class="lightbox-carousel-track" bind:this={carouselTrackEl}>
-                {#each lightboxImages as img, i (img.id)}
-                    <button
-                            type="button"
-                            class="lightbox-carousel-thumb"
-                            class:active={i === lightboxIndex}
-                            data-carousel-index={i}
-                            onclick={() => goToImage(i)}
-                            aria-label={img.mediaType === 'video' ? `Video ${i + 1}` : img.mediaType === 'audio' ? `Audio ${i + 1}` : `Image ${i + 1}`}
-                            aria-selected={i === lightboxIndex}
-                            role="tab"
-                    >
-                        {#if img.mediaType === 'video'}
-                            <video src={img.url} preload="metadata" muted playsinline aria-hidden="true"></video>
-                            <span class="lightbox-carousel-play" aria-hidden="true"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg></span>
-                        {:else if img.mediaType === 'audio'}
-                            <span class="lightbox-carousel-audio" aria-hidden="true">
-                                <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 3v9.28c-.47-.17-.97-.28-1.5-.28C8.01 12 6 14.01 6 16.5S8.01 21 10.5 21c2.31 0 4.2-1.75 4.45-4H15V6h4V3h-7z"/></svg>
-                                <span>Audio</span>
-                            </span>
-                        {:else}
-                            <img src={img.url} alt="" draggable="false" />
-                        {/if}
-                    </button>
-                {/each}
-            </div>
-        </div>
-    </div>
-{/if}
+<LightboxViewer
+    open={lightboxOpen}
+    items={lightboxImages as LightboxItem[]}
+    index={lightboxIndex}
+    onIndexChange={(i) => { lightboxIndex = i; }}
+    onClose={closeLightbox}
+    onDownload={downloadImage}
+    onMetadata={lightboxRun ? (item) => { const run = lightboxRun; closeLightbox(); onMetadataClick(run, item as GalleryImage); } : undefined}
+    onToggleFavorite={onToggleFavorite ? (item) => onToggleFavorite(item.backendRunId!) : undefined}
+    isFavorite={onToggleFavorite ? (item) => favoriteRunIds.has(item.backendRunId!) : undefined}
+    onToggleSelection={lightboxRunId ? (item) => toggleSelection(lightboxRunId, item.id) : undefined}
+    isSelected={lightboxRunId ? (item) => isImageSelected(lightboxRunId, item.id) : undefined}
+    onSendToApp={onSendToApp ? (item) => { const backendRunId = item.backendRunId!; const outputIndex = item.outputIndex ?? 0; closeLightbox(); onSendToApp(backendRunId, outputIndex); } : undefined}
+    showCloseLabel={true}
+    ariaTitle="Media viewer"
+/>
 
 <style>
     .progress {
