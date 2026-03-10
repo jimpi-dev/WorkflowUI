@@ -177,6 +177,16 @@ def migrate(db_path: Path | str) -> None:
         run_cols = _run_columns(conn, "run")
         if "comfyui_version_id" not in run_cols:
             conn.execute("ALTER TABLE run ADD COLUMN comfyui_version_id TEXT REFERENCES comfyui_version(id)")
+        if not conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='saved_queue'"
+        ).fetchone():
+            conn.execute("""
+                CREATE TABLE saved_queue (
+                    id TEXT PRIMARY KEY,
+                    run_ids TEXT NOT NULL,
+                    updated_at INTEGER NOT NULL
+                )
+            """)
         try:
             mode = conn.execute("PRAGMA auto_vacuum").fetchone()
             if mode and mode[0] == 0:
