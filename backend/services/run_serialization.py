@@ -11,6 +11,61 @@ def safe_json_loads(s: str | None, default: Any = None) -> Any:
         return default
 
 
+def queue_item_summary_from_run(run_entity, input_snapshot_json: str | None) -> dict:
+    """Build summary for a queue item: seed, latent_resolution, runs, key_inputs."""
+    summary = {}
+    if not input_snapshot_json:
+        return summary
+    try:
+        snap = json.loads(input_snapshot_json)
+        if not isinstance(snap, dict):
+            return summary
+        values = snap.get("values") or {}
+        bindings = snap.get("bindings") or []
+        if not isinstance(values, dict):
+            values = {}
+        seed = run_entity.seed if getattr(run_entity, "seed", None) is not None else None
+        for b in bindings:
+            if isinstance(b, dict) and b.get("field") in ("seed", "noise_seed"):
+                key = b.get("key")
+                if key and key in values:
+                    try:
+                        seed = int(values[key])
+                    except (TypeError, ValueError):
+                        pass
+                break
+        if seed is not None:
+            summary["seed"] = seed
+        latent = latent_resolution_from_input_snapshot(input_snapshot_json)
+        if latent:
+            summary["latent_resolution"] = latent
+        runs_val = 1
+        for k, v in values.items():
+            if isinstance(k, str) and (".runs" in k or k == "runs") and isinstance(v, (int, float)):
+                runs_val = int(v) if v else 1
+                break
+        summary["runs"] = max(1, runs_val)
+        key_inputs = []
+        known_labels = {"steps": "Steps", "cfg": "CFG", "denoising_strength": "Denoise"}
+        for b in bindings[:10]:
+            if not isinstance(b, dict):
+                continue
+            key = b.get("key")
+            field = b.get("field") or key
+            if not key or key not in values:
+                continue
+            val = values[key]
+            if field and ("seed" in str(field).lower() or "noise" in str(field).lower()):
+                continue
+            label = known_labels.get(field) or (field[:20] + "…" if len(str(field)) > 20 else field)
+            key_inputs.append({"label": label, "value": val})
+        if key_inputs:
+            summary["key_inputs"] = key_inputs[:5]
+    except (json.JSONDecodeError, TypeError):
+        pass
+    return summary
+
+
 def latent_resolution_from_input_snapshot(input_snapshot_json: str | None) -> str | None:
     if not input_snapshot_json:
         return None
