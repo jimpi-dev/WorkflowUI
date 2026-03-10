@@ -3,6 +3,8 @@
 	import { onMount, onDestroy } from 'svelte';
 	import DbSizeBar from '$lib/components/DbSizeBar.svelte';
 	import { consolePanelOpen } from '$lib/stores/consolePanelOpen';
+	import { queuePanelOpen } from '$lib/stores/queuePanelOpen';
+	import { getQueue } from '$lib/queueApi';
 
 	interface Status {
 		queue: { running: number; pending: number };
@@ -16,6 +18,7 @@
 	}
 
 	let status = $state<Status | null>(null);
+	let queueSummary = $state<{ running: number; queued: number; total: number } | null>(null);
 	let error = $state<string | null>(null);
 	let workflowuiPluginAvailable = $state<boolean | null>(null);
 	let workflowuiPluginIncompatible = $state(false);
@@ -71,13 +74,28 @@
 		}
 	}
 
+	async function fetchQueueSummary() {
+		try {
+			const data = await getQueue();
+			const running = data.running ? 1 : 0;
+			const queued = data.queued?.length ?? 0;
+			queueSummary = { running, queued, total: running + queued };
+		} catch {
+			queueSummary = null;
+		}
+	}
+
 	function startPolling() {
 		if (typeof document === 'undefined') return;
 		const isHidden = () => document.visibilityState === 'hidden';
 		const ms = () => (isHidden() ? POLL_INTERVAL_HIDDEN_MS : POLL_INTERVAL_MS);
 		fetchConfig();
 		fetchStatus();
-		intervalId = setInterval(fetchStatus, ms());
+		fetchQueueSummary();
+		intervalId = setInterval(() => {
+			fetchStatus();
+			fetchQueueSummary();
+		}, ms());
 		configIntervalId = setInterval(fetchConfig, CONFIG_POLL_INTERVAL_MS);
 		document.addEventListener('visibilitychange', onVisibilityChange);
 	}
@@ -163,9 +181,24 @@
 	{#if error && !status}
 		<span class="status-item status-error">ComfyUI status unavailable</span>
 	{:else if status}
-		<span class="status-item queue" class:active={status.queue.running > 0 || status.queue.pending > 0}>
-			Queue: {status.queue.running} running, {status.queue.pending} pending
-		</span>
+		<button
+			type="button"
+			class="status-item status-queue-btn queue-trigger"
+			class:active={(queueSummary?.total ?? 0) > 0}
+			class:has-queue={(queueSummary?.total ?? 0) > 0}
+			onclick={() => queuePanelOpen.update((v) => !v)}
+			title={(queueSummary?.total ?? 0) > 0 && queueSummary
+				? `${queueSummary.running} running, ${queueSummary.queued} queued (${queueSummary.total} total) · Toggle queue panel`
+				: 'Toggle queue panel'}
+			aria-label="Open run queue"
+		>
+			<svg class="queue-btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+				<rect x="2" y="5" width="20" height="14" rx="2"/>
+				<path d="M2 10h20"/>
+			</svg>
+			<span class="queue-btn-text">Queue</span>
+			<span class="queue-btn-count" aria-label="total items">{queueSummary != null ? queueSummary.total : (status?.queue ? status.queue.running + status.queue.pending : 0)}</span>
+		</button>
 		{#if status.system_stats && (status.system_stats.vram_used_gb != null || status.system_stats.vram_total_gb != null)}
 			<span class="status-sep" aria-hidden="true">|</span>
 			<span class="status-item vram">
@@ -229,8 +262,42 @@
 	.status-item {
 		white-space: nowrap;
 	}
-	.status-item.queue.active {
+	.status-queue-btn {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.35rem;
+		padding: 0.25rem 0.55rem;
+		border: 1px solid var(--border);
+		border-radius: 6px;
+		background: var(--bg);
+		color: inherit;
+		font-size: inherit;
+		cursor: pointer;
+		opacity: 0.9;
+		transition: border-color 0.15s, background 0.15s, box-shadow 0.15s, color 0.15s;
+	}
+	.status-queue-btn:hover {
+		opacity: 1;
+		background: color-mix(in srgb, var(--accent) 12%, var(--bg));
+		border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+	}
+	.status-queue-btn.has-queue {
 		color: var(--accent);
+		border-color: color-mix(in srgb, var(--accent) 50%, var(--border));
+	}
+	.status-queue-btn.has-queue:hover {
+		background: color-mix(in srgb, var(--accent) 18%, var(--bg));
+		box-shadow: 0 0 10px color-mix(in srgb, var(--accent) 25%, transparent);
+	}
+	.queue-btn-icon {
+		width: 14px;
+		height: 14px;
+		flex-shrink: 0;
+	}
+	.queue-btn-count {
+		font-weight: 600;
+		min-width: 1.1em;
+		text-align: center;
 	}
 	.status-item.status-error {
 		color: var(--warning);
@@ -344,6 +411,9 @@
 			height: 10px;
 		}
 		.console-btn-text {
+			display: none;
+		}
+		.queue-btn-text {
 			display: none;
 		}
 	}

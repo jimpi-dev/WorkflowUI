@@ -7,6 +7,7 @@
 	import AppHeader from '$lib/components/AppHeader.svelte';
 	import ComfyUIStatusBar from '$lib/components/ComfyUIStatusBar.svelte';
 	import ComfyUIConsole from '$lib/components/ComfyUIConsole.svelte';
+	import ComfyUIQueueWidget from '$lib/components/QueueWidget.svelte';
 	import PluginWelcomeModal from '$lib/components/PluginWelcomeModal.svelte';
 	import { consolePanelOpen } from '$lib/stores/consolePanelOpen';
 	import { onMount } from 'svelte';
@@ -58,6 +59,7 @@
 		<footer class="app-footer" bind:this={footerEl}>
 			<ComfyUIStatusBar />
 		</footer>
+		<ComfyUIQueueWidget />
 	</div>
 
 	{#if $appBooting}

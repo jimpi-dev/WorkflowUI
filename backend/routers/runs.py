@@ -8,7 +8,13 @@ from fastapi import APIRouter, HTTPException, Depends, Request
 
 from db.migrate import QUICK_RUNS_PROJECT_ID
 from services.comfyui_info import normalize_comfy_url as _normalize_comfy_url
-from services.run_queue import queue_run as run_queue_queue_run, start_worker as run_queue_start_worker
+from services.run_queue import (
+    queue_run as run_queue_queue_run,
+    start_worker as run_queue_start_worker,
+    reorder_run as run_queue_reorder_run,
+    move_run_to_position as run_queue_move_run_to_position,
+    build_job_from_run,
+)
 from services.media_storage_service import MediaStorageService
 from version import ENGINE_VERSION, MANIFEST_SCHEMA_VERSION
 
@@ -20,11 +26,15 @@ from dependencies import (
     get_executor,
     get_run_queue_state,
 )
-from services.run_serialization import build_updated_runs_response
+from services.run_serialization import (
+    build_updated_runs_response,
+    queue_item_summary_from_run,
+    safe_json_loads,
+)
 
 router = APIRouter()
 
-def _queue_run(job: dict, state, get_db_fn, get_media_fn):
+def _queue_run(job: dict, state, get_db_fn, get_media_fn, auto_start: bool = True):
     executor = get_executor()
     return run_queue_queue_run(
         state.run_queue,
@@ -36,6 +46,8 @@ def _queue_run(job: dict, state, get_db_fn, get_media_fn):
         executor,
         get_db_fn,
         get_media_fn,
+        processing_halted=state.processing_halted,
+        auto_start=auto_start,
     )
 
 @router.post("/run")
@@ -176,7 +188,9 @@ def run_workflow_versioned(
     }
     if input_from_run and parent_run_id:
         job["input_from_run"] = input_from_run
-    return _queue_run(job, state, get_db, get_media_storage_service)
+    result = _queue_run(job, state, get_db, get_media_storage_service)
+    _persist_queue(state, db[3])
+    return result
 
 
 @router.post("/run/{workflow_id}")
@@ -195,7 +209,9 @@ def run_workflow(
             "payload": payload,
             "comfyui_url": COMFY_URL,
         }
-        return _queue_run(job, state, get_db, get_media_storage_service)
+        result = _queue_run(job, state, get_db, get_media_storage_service)
+        _persist_queue(state, db[3])
+        return result
     _, workflow_repo, app_repo, run_repo, project_repo, _, _ = db
     app = app_repo.get_app_by_slug(workflow_id)
     if app:
@@ -222,7 +238,9 @@ def run_workflow(
                 "default_inputs": default_inputs,
                 "comfyui_url": run_comfy_url,
             }
-            return _queue_run(job, state, get_db, get_media_storage_service)
+            result = _queue_run(job, state, get_db, get_media_storage_service)
+            _persist_queue(state, db[3])
+            return result
     raise HTTPException(status_code=404, detail="Workflow not found")
 
 
@@ -302,6 +320,7 @@ def cancel_run(run_id: str, db=Depends(get_db), state=Depends(get_run_queue_stat
             print("ComfyUI interrupt request failed:", e)
     if run_repo and run_repo.get_run(run_id):
         run_repo.update_run(run_id, status="cancelled", error="Cancelled")
+    _persist_queue(state, run_repo)
     return {"ok": True, "status": "cancelled"}
 
 
@@ -328,8 +347,195 @@ def retry_run(run_id: str, state=Depends(get_run_queue_state)):
             if rid in state.runs:
                 state.runs[rid]["queue_position"] = i + 1
     executor = get_executor()
-    run_queue_start_worker(state.run_queue, state.runs, state.queue_lock, state.worker_busy, executor, get_db, get_media_storage_service)
+    run_queue_start_worker(
+        state.run_queue, state.runs, state.queue_lock, state.worker_busy,
+        state.processing_halted, executor, get_db, get_media_storage_service,
+    )
     return {"ok": True, "status": "queued", "queue_position": 1}
+
+
+@router.post("/runs/{run_id}/reorder")
+def reorder_run(run_id: str, body: dict, db=Depends(get_db), state=Depends(get_run_queue_state)):
+    direction = body.get("direction")
+    if direction not in ("up", "down"):
+        raise HTTPException(status_code=400, detail="direction must be 'up' or 'down'")
+    with state.queue_lock:
+        r = state.runs.get(run_id)
+        if not r or r.get("status") != "queued":
+            raise HTTPException(status_code=400, detail="Run is not queued")
+    new_pos = run_queue_reorder_run(
+        state.run_queue, state.runs, state.queue_lock, run_id, direction,
+    )
+    if new_pos is None:
+        raise HTTPException(status_code=400, detail="Could not reorder")
+    _persist_queue(state, db[3])
+    return {"ok": True, "queue_position": new_pos}
+
+
+@router.post("/runs/{run_id}/move")
+def move_run(run_id: str, body: dict, db=Depends(get_db), state=Depends(get_run_queue_state)):
+    position = body.get("position")
+    if position is None or not isinstance(position, (int, float)):
+        raise HTTPException(status_code=400, detail="position (1-based) required")
+    pos = int(position)
+    with state.queue_lock:
+        r = state.runs.get(run_id)
+        if not r or r.get("status") != "queued":
+            raise HTTPException(status_code=400, detail="Run is not queued")
+    new_pos = run_queue_move_run_to_position(
+        state.run_queue, state.runs, state.queue_lock, run_id, pos,
+    )
+    if new_pos is None:
+        raise HTTPException(status_code=400, detail="Could not move run")
+    _persist_queue(state, db[3])
+    return {"ok": True, "queue_position": new_pos}
+
+
+def _queue_item(run_id: str, run_entity, app_repo, project_repo, mem_run: dict | None) -> dict:
+    app_title = app_slug = app_header_color = None
+    if run_entity and run_entity.app_id and app_repo:
+        app = app_repo.get_app_by_id(run_entity.app_id)
+        if app:
+            app_title, app_slug = app.title, app.slug
+            app_header_color = getattr(app, "header_color", None)
+    project_title = None
+    if run_entity and run_entity.project_id and project_repo:
+        proj = project_repo.get_project(run_entity.project_id)
+        if proj:
+            project_title = getattr(proj, "name", None)
+    status = (mem_run or {}).get("status") or (run_entity.status if run_entity else "queued")
+    out = {
+        "run_id": run_id,
+        "run_group_id": getattr(run_entity, "run_group_id", None) if run_entity else None,
+        "status": status,
+        "queue_position": (mem_run or {}).get("queue_position"),
+        "app_title": app_title,
+        "app_slug": app_slug,
+        "app_header_color": app_header_color,
+        "project_id": run_entity.project_id if run_entity else None,
+        "project_title": project_title,
+        "created_at": run_entity.created_at if run_entity else None,
+        "comfyui_unreachable_warning": (mem_run or {}).get("comfyui_unreachable_warning"),
+    }
+    if run_entity:
+        out["summary"] = queue_item_summary_from_run(run_entity, run_entity.input_snapshot_json)
+    else:
+        out["summary"] = {}
+    return out
+
+
+def _persist_queue(state, run_repo) -> None:
+    """Write current queue (running + queued run_ids) to saved_queue so it restores on next load."""
+    if not run_repo or not hasattr(run_repo, "set_saved_queue"):
+        return
+    with state.queue_lock:
+        running_id = None
+        for rid, r in state.runs.items():
+            if r.get("status") == "running":
+                running_id = rid
+                break
+        run_ids = ([running_id] if running_id else []) + [j.get("run_id") for j in state.run_queue if j.get("run_id")]
+    try:
+        run_repo.set_saved_queue(run_ids)
+    except Exception:
+        pass
+
+
+def _restore_queue_from_saved(state, get_db_fn, run_repo) -> bool:
+    """If in-memory queue is empty and saved_queue has items, restore them. Returns True if restored."""
+    if not run_repo or not hasattr(run_repo, "get_saved_queue"):
+        return False
+    with state.queue_lock:
+        if state.run_queue or any(r.get("status") == "running" for r in state.runs.values()):
+            return False
+        sq = run_repo.get_saved_queue()
+        if not sq or not sq[0]:
+            return False
+        run_ids = sq[0]
+    state.processing_halted[0] = True
+    for run_id in run_ids:
+        run_entity = run_repo.get_run(run_id) if run_repo else None
+        if not run_entity or run_entity.status not in ("queued", "cancelled"):
+            continue
+        job = build_job_from_run(run_entity, get_db_fn)
+        if not job:
+            continue
+        run_queue_queue_run(
+            state.run_queue,
+            state.runs,
+            state.queue_lock,
+            state.worker_busy,
+            job,
+            COMFY_URL,
+            get_executor(),
+            get_db_fn,
+            get_media_storage_service,
+            processing_halted=state.processing_halted,
+            auto_start=False,
+        )
+    return True
+
+
+@router.get("/queue")
+def get_queue(db=Depends(get_db), state=Depends(get_run_queue_state)):
+    _, _, app_repo, run_repo, project_repo, _, _ = db
+    try:
+        _restore_queue_from_saved(state, get_db, run_repo)
+    except Exception:
+        pass
+    with state.queue_lock:
+        running_id = None
+        for rid, r in state.runs.items():
+            if r.get("status") == "running":
+                running_id = rid
+                break
+        queued_ids = [j.get("run_id") for j in state.run_queue if j.get("run_id")]
+        mem = {rid: state.runs.get(rid, {}) for rid in ([running_id] if running_id else []) + queued_ids}
+        processing_halted = state.processing_halted[0] if state.processing_halted else False
+    running_item = None
+    if running_id:
+        run_entity = run_repo.get_run(running_id) if run_repo else None
+        running_item = _queue_item(running_id, run_entity, app_repo, project_repo, mem.get(running_id))
+    queued = []
+    for run_id in queued_ids:
+        run_entity = run_repo.get_run(run_id) if run_repo else None
+        queued.append(_queue_item(run_id, run_entity, app_repo, project_repo, mem.get(run_id)))
+    _persist_queue(state, run_repo)
+    return {
+        "running": running_item,
+        "queued": queued,
+        "processing_halted": processing_halted,
+    }
+
+
+@router.post("/queue/pause")
+def pause_queue(state=Depends(get_run_queue_state)):
+    state.processing_halted[0] = True
+    # Interrupt the current run on ComfyUI so nothing keeps processing
+    with state.queue_lock:
+        running_id = None
+        comfy_url = None
+        for rid, r in state.runs.items():
+            if r.get("status") == "running":
+                running_id = rid
+                comfy_url = (r.get("comfyui_url") or COMFY_URL).rstrip("/")
+                break
+    if comfy_url:
+        try:
+            requests.post(f"{comfy_url}/interrupt", timeout=5)
+        except Exception as e:
+            print("ComfyUI interrupt on pause failed:", e)
+    return {"ok": True, "processing_halted": True}
+
+
+@router.post("/queue/start")
+def start_queue(state=Depends(get_run_queue_state)):
+    state.processing_halted[0] = False
+    run_queue_start_worker(
+        state.run_queue, state.runs, state.queue_lock, state.worker_busy,
+        state.processing_halted, get_executor(), get_db, get_media_storage_service,
+    )
+    return {"ok": True, "processing_halted": False}
 
 
 @router.get("/runs/{run_id}")

@@ -8,3 +8,5 @@ class RunQueueState:
     runs: dict = field(default_factory=dict)
     queue_lock: threading.Lock = field(default_factory=threading.Lock)
     worker_busy: list = field(default_factory=lambda: [False])
+    # When True, worker does not take new jobs; user must call POST /queue/start to begin processing.
+    processing_halted: list = field(default_factory=lambda: [False])
