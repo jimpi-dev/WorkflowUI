@@ -912,6 +912,46 @@ class SqliteRunRepository:
         finally:
             conn.close()
 
+    def get_saved_queue(self, queue_id: str = "default") -> tuple[list[str], int] | None:
+        """Returns (run_ids list, updated_at) or None if not found."""
+        conn = self._conn()
+        try:
+            row = conn.execute(
+                "SELECT run_ids, updated_at FROM saved_queue WHERE id = ?",
+                (queue_id,),
+            ).fetchone()
+            if not row:
+                return None
+            raw = row[0]
+            if isinstance(raw, str):
+                try:
+                    run_ids = json.loads(raw)
+                except (json.JSONDecodeError, TypeError):
+                    return None
+            else:
+                run_ids = []
+            if not isinstance(run_ids, list):
+                return None
+            return (run_ids, int(row[1]))
+        except sqlite3.OperationalError:
+            return None
+        finally:
+            conn.close()
+
+    def set_saved_queue(self, run_ids: list[str], queue_id: str = "default") -> None:
+        conn = self._conn()
+        try:
+            updated_at = int(time.time() * 1000)
+            conn.execute(
+                "INSERT INTO saved_queue (id, run_ids, updated_at) VALUES (?, ?, ?) ON CONFLICT(id) DO UPDATE SET run_ids = excluded.run_ids, updated_at = excluded.updated_at",
+                (queue_id, json.dumps(run_ids), updated_at),
+            )
+            conn.commit()
+        except sqlite3.OperationalError:
+            pass
+        finally:
+            conn.close()
+
     def get_run_by_prompt_id(self, prompt_id: str) -> Run | None:
         conn = self._conn()
         try:

@@ -7,8 +7,12 @@
 	import AppHeader from '$lib/components/AppHeader.svelte';
 	import ComfyUIStatusBar from '$lib/components/ComfyUIStatusBar.svelte';
 	import ComfyUIConsole from '$lib/components/ComfyUIConsole.svelte';
+	import QueueBadge from '$lib/components/QueueBadge.svelte';
+	import QueuePanel from '$lib/components/QueuePanel.svelte';
 	import PluginWelcomeModal from '$lib/components/PluginWelcomeModal.svelte';
 	import { consolePanelOpen } from '$lib/stores/consolePanelOpen';
+	import { queuePanelOpen } from '$lib/stores/queuePanelOpen';
+	import { queuePanelWidth } from '$lib/stores/queuePanelWidth';
 	import { onMount } from 'svelte';
 	let { children } = $props();
 
@@ -47,17 +51,34 @@
 	<PluginWelcomeModal />
 	<AppHeader />
 
-	<main class="app-viewport">
-		{@render children()}
-	</main>
+	<div class="app-content-row">
+		<div class="app-content-main">
+			<main class="app-viewport">
+				{@render children()}
+			</main>
+			{#if $consolePanelOpen}
+				<ComfyUIConsole open={$consolePanelOpen} onclose={() => consolePanelOpen.set(false)} />
+			{/if}
+		</div>
+		{#if $queuePanelOpen}
+			<aside class="queue-column" style="width: {$queuePanelWidth}px;">
+				<QueuePanel />
+			</aside>
+		{/if}
+	</div>
 
 	<div class="app-footer-area">
-		{#if $consolePanelOpen}
-			<ComfyUIConsole open={$consolePanelOpen} onclose={() => consolePanelOpen.set(false)} />
-		{/if}
-		<footer class="app-footer" bind:this={footerEl}>
-			<ComfyUIStatusBar />
-		</footer>
+		<div class="app-footer-row">
+			<div class="app-footer-main">
+				<footer class="app-footer" bind:this={footerEl}>
+					<ComfyUIStatusBar />
+				</footer>
+				<QueueBadge />
+			</div>
+			{#if $queuePanelOpen}
+				<div class="app-footer-spacer" style="width: {$queuePanelWidth}px;"></div>
+			{/if}
+		</div>
 	</div>
 
 	{#if $appBooting}
@@ -86,10 +107,36 @@
 		}
 	}
 
-	.app-viewport {
+	.app-content-row {
+		display: flex;
+		flex-direction: row;
 		flex: 1;
 		min-height: 0;
+		overflow: hidden;
+	}
+
+	.app-content-main {
+		flex: 1;
+		min-width: 0;
+		min-height: 0;
+		display: flex;
+		flex-direction: column;
+		overflow: hidden;
+	}
+
+	.app-viewport {
+		flex: 1;
+		min-width: 0;
+		min-height: 0;
 		overflow: auto;
+		display: flex;
+		flex-direction: column;
+	}
+
+	.queue-column {
+		flex-shrink: 0;
+		min-height: 0;
+		overflow: hidden;
 		display: flex;
 		flex-direction: column;
 	}
@@ -99,8 +146,26 @@
 		display: flex;
 		flex-direction: column;
 	}
-	
-    .app-footer {
+
+	.app-footer-row {
+		display: flex;
+		flex-direction: row;
+		width: 100%;
+		min-width: 0;
+	}
+
+	.app-footer-main {
+		flex: 1;
+		min-width: 0;
+		display: flex;
+		flex-direction: column;
+	}
+
+	.app-footer-spacer {
+		flex-shrink: 0;
+	}
+
+	.app-footer {
 		flex-shrink: 0;
 	}
 

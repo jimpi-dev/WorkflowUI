@@ -99,4 +99,10 @@ CREATE TABLE IF NOT EXISTS app_preset (
 CREATE INDEX IF NOT EXISTS idx_run_app_id ON run(app_id);
 CREATE INDEX IF NOT EXISTS idx_run_prompt_id ON run(prompt_id);
 CREATE INDEX IF NOT EXISTS idx_app_preset_app_id ON app_preset(app_id);
+
+CREATE TABLE IF NOT EXISTS saved_queue (
+    id TEXT PRIMARY KEY,
+    run_ids TEXT NOT NULL,
+    updated_at INTEGER NOT NULL
+);
 /* idx_run_project_id is created in migrate.py when run table is recreated */
