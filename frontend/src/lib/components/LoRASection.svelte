@@ -78,10 +78,9 @@
     let loraComboEl: HTMLDivElement;
     let loraInputEl: HTMLInputElement;
     let loraHiddenInputEl: HTMLInputElement;
-    let loraDomValueSet = false;
-    $: if (nameInput && loraHiddenInputEl && !loraDomValueSet) {
-        loraHiddenInputEl.value = (values[nameInput.key] ?? '') || '';
-        loraDomValueSet = true;
+    $: if (nameInput && loraHiddenInputEl) {
+        const v = (values[nameInput.key] ?? '') || '';
+        if (loraHiddenInputEl.value !== v) loraHiddenInputEl.value = v;
     }
     const dropdownBody = createLoraDropdownBody();
     onDestroy(() => dropdownBody.unmount());

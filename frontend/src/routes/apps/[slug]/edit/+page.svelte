@@ -500,13 +500,15 @@
 						title="Show only hidden elements"
 					>Hidden</button>
 				</div>
-				<input
-					type="search"
-					class="filter-input"
-					placeholder="Filter by key, label, ComfyUI title…"
-					bind:value={filterQuery}
-					aria-label="Filter inputs and outputs"
-				/>
+				<div class="filter-input-wrap">
+					<input
+						type="search"
+						class="filter-input"
+						placeholder="Filter by key, label, ComfyUI title…"
+						bind:value={filterQuery}
+						aria-label="Filter inputs and outputs"
+					/>
+				</div>
 			</div>
 			{#if activeTab === 'inputs' && appDraft}
 				<div class="tab-content">
@@ -832,22 +834,32 @@
 		display: flex;
 		gap: 0.25rem;
 	}
-	.filter-input {
+	.filter-input-wrap {
 		flex: 1;
-		min-width: 180px;
-		padding: 0.4rem 0.6rem;
-		font-size: 0.9rem;
-		border: 1px solid var(--border);
-		border-radius: 6px;
+		min-width: 200px;
+	}
+	.filter-input {
+		width: 100%;
+		box-sizing: border-box;
+		padding: 0.55rem 0.85rem;
+		font-size: 0.95rem;
+		border: 2px solid var(--accent);
+		border-radius: 8px;
 		background: var(--surface);
 		color: var(--text);
+		transition: border-color 0.2s, box-shadow 0.2s;
+		box-shadow: 0 0 18px rgba(109, 93, 252, 0.25);
 	}
 	.filter-input::placeholder {
 		color: var(--muted);
 	}
+	.filter-input:hover {
+		box-shadow: 0 0 22px rgba(109, 93, 252, 0.35);
+	}
 	.filter-input:focus {
 		outline: none;
 		border-color: var(--accent);
+		box-shadow: 0 0 0 3px var(--accent-soft), 0 0 24px rgba(109, 93, 252, 0.4);
 	}
 	.visibility-filter {
 		display: flex;

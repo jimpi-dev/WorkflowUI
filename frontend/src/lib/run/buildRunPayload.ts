@@ -115,8 +115,15 @@ export function buildRunValues(
     }
     for (const b of bindings) {
         if (!b.field || !b.field.endsWith('.lora')) continue;
-        const fromDom = readLoraFromForm(b.key);
-        if (fromDom !== null) out[b.key] = fromDom;
+        const fromBase = base[b.key];
+        const hasFromBase =
+            typeof fromBase === 'string' && fromBase.trim() !== '';
+        if (hasFromBase) {
+            out[b.key] = fromBase;
+        } else {
+            const fromDom = readLoraFromForm(b.key);
+            if (fromDom !== null) out[b.key] = fromDom;
+        }
     }
     return out;
 }
