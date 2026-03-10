@@ -206,10 +206,100 @@
     }
 }
 
+.lightbox-controls-sep {
+    margin: 0 4px;
+    opacity: 0.6;
+    font-size: 0.75rem;
+}
+
+.lightbox-controls-label {
+    font-size: 0.75rem;
+    opacity: 0.9;
+    margin-right: 2px;
+}
+
+.lightbox-controls-segmented {
+    padding: 2px 8px;
+    font-size: 0.7rem;
+    border-radius: 6px;
+    border: 1px solid rgba(255, 255, 255, 0.25);
+    background: transparent;
+    color: inherit;
+    cursor: pointer;
+    transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.lightbox-controls-segmented:hover {
+    background: rgba(255, 255, 255, 0.08);
+    border-color: rgba(255, 255, 255, 0.4);
+}
+
+.lightbox-controls-segmented.active {
+    background: rgba(255, 255, 255, 0.18);
+    border-color: rgba(255, 255, 255, 0.5);
+    color: #fff;
+}
+
+.lightbox-deleted-placeholder {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0.75rem;
+    min-width: 200px;
+    min-height: 200px;
+    background: var(--surface);
+    color: var(--muted);
+    font-size: 1rem;
+}
+
+.lightbox-deleted-placeholder svg {
+    width: 48px;
+    height: 48px;
+    opacity: 0.7;
+}
+
+.lightbox-carousel-thumb.deleted .lightbox-carousel-play,
+.lightbox-carousel-thumb.deleted video,
+.lightbox-carousel-thumb.deleted img {
+    display: none;
+}
+
+.lightbox-carousel-deleted {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--surface);
+    color: var(--muted);
+    font-size: 0.7rem;
+}
+
 .lightbox-controls .close {
     margin-left: 8px;
     padding-left: 8px;
     border-left: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.lightbox-playback-bar {
+    flex-shrink: 0;
+    width: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 10px 16px 8px;
+    background: rgba(0, 0, 0, 0.75);
+    color: white;
+    font-size: 0.8rem;
+    z-index: 2;
+}
+
+.lightbox-playback-bar .lightbox-controls-label,
+.lightbox-playback-bar .lightbox-controls-segmented,
+.lightbox-playback-bar .lightbox-controls-sep {
+    margin: 0;
 }
 
 .lightbox-carousel {
