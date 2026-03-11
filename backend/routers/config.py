@@ -44,11 +44,25 @@ def _get_frontend_version() -> str | None:
 
 def _get_db_size_bytes(db_path: str) -> int:
     path = Path(db_path)
-    total = path.stat().st_size if path.exists() else 0
-    for ext in ("-wal", "-shm"):
-        p = Path(str(db_path) + ext)
-        if p.exists():
-            total += p.stat().st_size
+    total = 0
+    try:
+        if path.exists():
+            try:
+                total += path.stat().st_size
+            except FileNotFoundError:
+                # DB file disappeared between exists() and stat(); treat as 0 bytes
+                pass
+        for ext in ("-wal", "-shm"):
+            p = Path(str(db_path) + ext)
+            if p.exists():
+                try:
+                    total += p.stat().st_size
+                except FileNotFoundError:
+                    # SQLite sidecar file was removed between exists() and stat(); ignore
+                    continue
+    except OSError:
+        # Any other OS-level error reading size should not break /config; size remains best-effort.
+        return total
     return total
 
 
