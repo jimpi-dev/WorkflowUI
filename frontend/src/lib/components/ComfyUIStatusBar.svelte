@@ -103,7 +103,15 @@
 	function onVisibilityChange() {
 		if (typeof document === 'undefined' || !intervalId) return;
 		clearInterval(intervalId);
-		intervalId = setInterval(fetchStatus, document.visibilityState === 'hidden' ? POLL_INTERVAL_HIDDEN_MS : POLL_INTERVAL_MS);
+		const delay =
+			document.visibilityState === 'hidden' ? POLL_INTERVAL_HIDDEN_MS : POLL_INTERVAL_MS;
+		// Immediately refresh once on visibility change, then continue polling both status and queue.
+		fetchStatus();
+		fetchQueueSummary();
+		intervalId = setInterval(() => {
+			fetchStatus();
+			fetchQueueSummary();
+		}, delay);
 	}
 
 	function stopPolling() {
