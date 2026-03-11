@@ -464,29 +464,22 @@
 					<option value={opt.value}>{opt.label}</option>
 				{/each}
 			</select>
-			<div class="color-filter" role="group" aria-label="Filter by color">
-				{#each colorFilterOptions as opt}
-					<button
-						type="button"
-						class="color-filter-btn"
-						class:active={colorFilter === opt.value}
-						class:has-swatch={!!opt.swatch}
-						onclick={() => (colorFilter = opt.value)}
-						aria-pressed={colorFilter === opt.value}
-						aria-label="{opt.swatch ? `Color ${opt.value} (${opt.count} apps)` : `${opt.label} (${opt.count} apps)`}"
-					>
-						{#if opt.swatch}
-							<span
-								class="color-filter-swatch"
-								style="background-color: {opt.swatch}"
-								aria-hidden="true"
-							></span>
-						{:else}
-							<span class="color-filter-label">{opt.label}</span>
-						{/if}
-						<span class="color-filter-count">({opt.count})</span>
-					</button>
-				{/each}
+			<div class="color-filter">
+				<label class="color-filter-label" for="color-filter-select">Color</label>
+				<select
+					id="color-filter-select"
+					class="color-filter-select"
+					bind:value={colorFilter}
+					aria-label="Filter apps by color"
+				>
+					{#each colorFilterOptions as opt}
+						<option value={opt.value}>
+							{opt.swatch
+								? `${opt.value} (${opt.count})`
+								: `${opt.label} (${opt.count})`}
+						</option>
+					{/each}
+				</select>
 			</div>
 			<div class="view-toggle" role="tablist" aria-label="View">
 				<button
@@ -1104,63 +1097,34 @@
 
 	.color-filter {
 		display: flex;
-		flex-wrap: wrap;
-		align-items: center;
-		gap: 0.35rem;
+		flex-direction: column;
+		gap: 0.25rem;
+		min-width: 160px;
 	}
 
-	.color-filter-btn {
-		display: inline-flex;
-		align-items: center;
-		gap: 0.35rem;
-		padding: 0.5rem 0.65rem;
+	.color-filter-label {
+		font-size: 0.75rem;
+		font-weight: 500;
+		color: var(--muted);
+	}
+
+	.color-filter-select {
+		padding: 0.5rem 2rem 0.5rem 0.75rem;
 		background: var(--surface);
 		border: 1px solid var(--border);
 		border-radius: 8px;
 		color: var(--text);
 		font-size: 0.875rem;
 		cursor: pointer;
-		transition: border-color 0.2s, background 0.2s, color 0.2s;
+		appearance: none;
+		background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%238f98a8' stroke-width='2'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+		background-repeat: no-repeat;
+		background-position: right 0.6rem center;
 	}
 
-	.color-filter-btn:hover {
+	.color-filter-select:focus {
+		outline: none;
 		border-color: var(--accent);
-		color: var(--accent);
-		background: var(--accent-soft);
-	}
-
-	.color-filter-btn.active {
-		border-color: var(--accent);
-		color: var(--accent);
-		background: var(--accent-soft);
-	}
-
-	.color-filter-btn .color-filter-swatch {
-		display: inline-block;
-		width: 1.1rem;
-		height: 1.1rem;
-		border-radius: 4px;
-		border: 1px solid var(--border);
-		flex-shrink: 0;
-	}
-
-	.color-filter-btn.has-swatch .color-filter-label {
-		display: none;
-	}
-
-	.color-filter-count {
-		font-variant-numeric: tabular-nums;
-		color: var(--muted);
-		font-size: 0.8rem;
-	}
-
-	.color-filter-btn.active .color-filter-count {
-		color: inherit;
-	}
-
-	.color-filter-btn:focus-visible {
-		outline: 2px solid var(--accent);
-		outline-offset: 2px;
 	}
 
 	.view-toggle {
