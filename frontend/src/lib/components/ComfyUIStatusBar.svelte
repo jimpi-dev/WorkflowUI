@@ -1,6 +1,7 @@
 <script lang="ts">
-	import { getApiBase, appConfig } from '$lib/config';
-	import { onMount, onDestroy } from 'svelte';
+import { getApiBase, appConfig } from '$lib/config';
+import { onMount, onDestroy } from 'svelte';
+import { get } from 'svelte/store';
 	import DbSizeBar from '$lib/components/DbSizeBar.svelte';
 	import { consolePanelOpen } from '$lib/stores/consolePanelOpen';
 	import { queuePanelOpen } from '$lib/stores/queuePanelOpen';
@@ -75,6 +76,9 @@
 	}
 
 	async function fetchQueueSummary() {
+		if (get(queuePanelOpen)) {
+			return;
+		}
 		try {
 			const data = await getQueue();
 			const running = data.running ? 1 : 0;
