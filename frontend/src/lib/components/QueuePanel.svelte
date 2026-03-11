@@ -87,7 +87,7 @@
 
 	$effect(() => {
 		if ($queuePanelOpen) {
-			loading = true;
+			if (!queue) loading = true;
 			fetchQueue();
 			startPolling();
 		} else {
@@ -503,7 +503,7 @@
 							{/if}
 							<button
 								type="button"
-								class="queue-item-btn"
+								class="queue-item-btn queue-item-btn-cancel"
 								onclick={() => onCancel(queue.running!.run_id)}
 								disabled={actionLoading.has(queue.running!.run_id)}
 								title="Cancel"
@@ -546,6 +546,7 @@
 										>
 											<span class="queue-group-pos">#{group.items[0]?.queue_position ?? 0}</span>
 											<span class="queue-group-badge">{group.appTitle}</span>
+											<span class="queue-group-count" title="{group.items.length} generation{group.items.length === 1 ? '' : 's'}">{group.items.length}×</span>
 											{#if group.projectId && group.projectTitle}
 												<a href="/projects/{group.projectId}" class="queue-group-project-link" title="Open project" onclick={(e) => e.stopPropagation()}>{group.projectTitle}</a>
 											{/if}
@@ -896,6 +897,13 @@
 	.queue-group-badge {
 		flex-shrink: 0;
 	}
+	.queue-group-count {
+		font-size: 0.75rem;
+		font-weight: 600;
+		color: color-mix(in srgb, var(--text) 60%, transparent);
+		margin-left: 0.25rem;
+		flex-shrink: 0;
+	}
 	.queue-group-chevron {
 		font-size: 0.65rem;
 		color: color-mix(in srgb, var(--text) 55%, transparent);
@@ -1037,8 +1045,20 @@
 		font-size: 0.75rem;
 		border-radius: 4px;
 		border: 1px solid var(--border);
-		background: var(--card);
+		background: var(--card) !important;
+		color: var(--text) !important;
+		box-shadow: none !important;
+		transform: none !important;
 		cursor: pointer;
+	}
+	.queue-item-btn-cancel {
+		border-color: var(--warning) !important;
+		color: var(--warning) !important;
+		background: color-mix(in srgb, var(--warning) 14%, var(--card)) !important;
+	}
+	.queue-item-btn-cancel:hover:not(:disabled) {
+		background: color-mix(in srgb, var(--warning) 24%, var(--card)) !important;
+		color: var(--warning) !important;
 	}
 	.queue-item-btn-icon {
 		display: inline-flex;
@@ -1053,20 +1073,19 @@
 		height: 14px;
 	}
 	.queue-item-btn:hover:not(:disabled) {
-		background: color-mix(in srgb, var(--accent) 15%, var(--card));
+		background: color-mix(in srgb, var(--accent) 15%, var(--card)) !important;
+		transform: none !important;
 	}
 	.queue-item-btn-danger:hover:not(:disabled) {
 		background: color-mix(in srgb, var(--warning) 20%, var(--card));
 	}
 	.queue-item-btn-remove,
 	.queue-item-btn-remove .queue-item-remove-icon {
-		color: color-mix(in srgb, var(--text) 55%, transparent);
+		color: color-mix(in srgb, var(--text) 55%, transparent) !important;
 	}
-	.queue-item-btn-remove:hover:not(:disabled) {
-		color: var(--warning);
-	}
+	.queue-item-btn-remove:hover:not(:disabled),
 	.queue-item-btn-remove:hover:not(:disabled) .queue-item-remove-icon {
-		color: var(--warning);
+		color: var(--warning) !important;
 	}
 	.queue-badge {
 		font-size: 0.7rem;
