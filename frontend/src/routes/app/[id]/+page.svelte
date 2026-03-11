@@ -15,6 +15,7 @@
     import { page } from '$app/stores';
     import { goto } from '$app/navigation';
     import { appConfig, getApiBase } from '$lib/config';
+    import { startQueue } from '$lib/queueApi';
 
     let { data } = $props();
     let currentProject = $state<{ id: string; name: string } | null>(null);
@@ -565,6 +566,9 @@
                 }
                 : r
         );
+        if (queuePosition === 1) {
+            startQueue().catch(() => {});
+        }
     }
 
     function onRunRunning(runId: string) {
