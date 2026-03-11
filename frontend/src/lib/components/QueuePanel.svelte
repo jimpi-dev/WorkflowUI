@@ -574,7 +574,7 @@
 											ondragover={(e) => { if (draggedGroupKey) { e.preventDefault(); e.dataTransfer && (e.dataTransfer.dropEffect = 'none'); } }}
 											ondrop={(e) => { if (draggedGroupKey) e.preventDefault(); }}
 										>
-											{#each group.items as item, i (item.run_id)}
+											{#each group.items as item, i (`${item.run_id}-${i}`)}
 												<li
 													class="queue-item queue-item-queued"
 													class:selected={selectedRunId === item.run_id}
