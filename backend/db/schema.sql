@@ -34,7 +34,8 @@ CREATE TABLE IF NOT EXISTS workflow_app (
     created_at INTEGER NOT NULL,
     app_version TEXT NOT NULL DEFAULT '1.0.0',
     comfyui_url TEXT,
-    header_color TEXT
+    header_color TEXT,
+    tags_json TEXT
 );
 
 CREATE TABLE IF NOT EXISTS project (

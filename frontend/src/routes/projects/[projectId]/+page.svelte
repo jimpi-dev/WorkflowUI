@@ -587,6 +587,58 @@
 		}
 	}
 
+	let projectTags = $state<string[]>([]);
+	let projectTagInput = $state('');
+	let tagsSaving = $state(false);
+	$effect(() => {
+		const raw = project?.tags ?? [];
+		projectTags = Array.isArray(raw)
+			? Array.from(
+					new Set(
+						raw
+							.map((t) => (t ?? '').trim().toLowerCase())
+							.filter(Boolean)
+					)
+			  )
+			: [];
+	});
+
+	async function saveProjectTags() {
+		if (!project) return;
+		tagsSaving = true;
+		try {
+			const res = await fetch(`${apiBase}/projects/${project.id}`, {
+				method: 'PATCH',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ tags: projectTags }),
+			});
+			if (res.ok) {
+				data.project.tags = [...projectTags];
+			}
+		} finally {
+			tagsSaving = false;
+		}
+	}
+
+	function addProjectTagFromInput() {
+		const raw = projectTagInput.trim();
+		if (!raw) return;
+		const parts = raw
+			.split(/[;,]/)
+			.map((p) => p.trim().toLowerCase())
+			.filter(Boolean);
+		const next = new Set(projectTags);
+		for (const p of parts) next.add(p);
+		projectTags = Array.from(next);
+		projectTagInput = '';
+		saveProjectTags();
+	}
+
+	function removeProjectTag(tag: string) {
+		projectTags = projectTags.filter((t) => t !== tag);
+		saveProjectTags();
+	}
+
 	let projectHeaderColor = $state<string | null>(null);
 	let headerColorSaving = $state(false);
 	$effect(() => {
@@ -1595,6 +1647,43 @@
 						<span class="save-hint">Saving…</span>
 					{/if}
 				</label>
+				<div class="project-tags-section">
+					<div class="tags-input-wrap">
+						<div class="tags-chips">
+							{#if projectTags.length === 0}
+								<span class="tags-placeholder">Add tags like “client”, “internal”, “image”, “video”…</span>
+							{/if}
+							{#each projectTags as tag (tag)}
+								<button
+									type="button"
+									class="tag-chip tag-chip-editable"
+									onclick={() => removeProjectTag(tag)}
+									title="Remove tag"
+								>
+									<span class="tag-chip-label">{tag}</span>
+									<span class="tag-chip-remove">×</span>
+								</button>
+							{/each}
+						</div>
+						<input
+							type="text"
+							class="tags-text-input"
+							placeholder="Type tags, separate with “;”, then press Enter"
+							bind:value={projectTagInput}
+							onkeydown={(e) => {
+								if (e.key === 'Enter' || e.key === ',') {
+									e.preventDefault();
+									addProjectTagFromInput();
+								}
+							}}
+							disabled={tagsSaving}
+						/>
+						<p class="tags-input-hint">You can enter multiple tags at once by separating them with “;” and then pressing Enter.</p>
+					</div>
+					{#if tagsSaving}
+						<span class="save-hint">Saving…</span>
+					{/if}
+				</div>
 				<div class="header-color-section">
 					<span class="filter-label">Header color</span>
 					<p class="header-color-help">Optional. Colors the project card and name in the header when viewing an app.</p>
@@ -1626,13 +1715,6 @@
 						>
 							Delete / Archive project
 						</button>
-					</div>
-				{/if}
-				{#if data.project.tags?.length}
-					<div class="tags">
-						{#each data.project.tags as tag (tag)}
-							<span class="tag">{tag}</span>
-						{/each}
 					</div>
 				{/if}
 			</div>
@@ -2712,6 +2794,75 @@
 	.description-label {
 		display: block;
 		margin-bottom: 0.5rem;
+	}
+
+	.project-tags-section {
+		margin-top: 0.4rem;
+		margin-bottom: 0.9rem;
+	}
+
+	.tags-input-wrap {
+		display: flex;
+		flex-direction: column;
+		gap: 0.5rem;
+	}
+
+	.tags-chips {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.2rem;
+	}
+
+	.tags-placeholder {
+		font-size: 0.8rem;
+		color: var(--muted);
+	}
+
+	.tags-text-input {
+		width: 100%;
+		padding: 0.4rem 0.65rem;
+		border-radius: 999px;
+		border: 1px solid var(--border);
+		background: var(--surface);
+		color: var(--text);
+		font-size: 0.82rem;
+	}
+
+	.tags-text-input:focus {
+		outline: none;
+		border-color: var(--accent);
+		box-shadow: 0 0 0 1px var(--accent-soft);
+	}
+	.tags-input-hint {
+		margin: 0.1rem 0 0 0.2rem;
+		font-size: 0.76rem;
+		color: var(--muted);
+	}
+	.project-tags-section .tag-chip {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.15rem;
+		padding: 0.05rem 0.4rem;
+		border-radius: 999px;
+		font-size: 0.68rem;
+		font-weight: 500;
+		color: var(--muted);
+		background: color-mix(in srgb, var(--accent) 10%, var(--surface));
+		border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--border));
+		box-shadow:
+			0 0 0 1px color-mix(in srgb, var(--accent) 30%, transparent),
+			0 0 8px color-mix(in srgb, var(--accent) 30%, transparent);
+		cursor: pointer;
+	}
+	.project-tags-section .tag-chip-label {
+		max-width: 110px;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+	.project-tags-section .tag-chip-remove {
+		font-size: 0.7rem;
+		line-height: 1;
 	}
 	.description-textarea {
 		width: 100%;

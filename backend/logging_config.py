@@ -39,6 +39,33 @@ def get_effective_log_level() -> str:
     return _get_default_log_level(env)
 
 
+class ColorFormatter(logging.Formatter):
+    """
+    Simple ANSI color formatter for console output.
+    Colors the log level name to make log lines easier to scan.
+    """
+
+    COLORS = {
+        "DEBUG": "\x1b[36m",  # Cyan
+        "INFO": "\x1b[32m",  # Green
+        "WARNING": "\x1b[33m",  # Yellow
+        "ERROR": "\x1b[31m",  # Red
+        "CRITICAL": "\x1b[41m",  # Red background
+    }
+    RESET = "\x1b[0m"
+
+    def format(self, record: logging.LogRecord) -> str:
+        original_levelname = record.levelname
+        color = self.COLORS.get(original_levelname, "")
+        if color:
+            record.levelname = f"{color}{original_levelname}{self.RESET}"
+        try:
+            return super().format(record)
+        finally:
+            # Restore original value so other handlers/formatters are not affected
+            record.levelname = original_levelname
+
+
 def setup_logging() -> None:
     """
     Configure application-wide logging.
@@ -48,6 +75,7 @@ def setup_logging() -> None:
     existing handlers based on the dictionary configuration.
     """
     level = get_effective_log_level()
+    env = _get_env()
 
     log_config = {
         "version": 1,
@@ -59,12 +87,16 @@ def setup_logging() -> None:
             "simple": {
                 "format": "%(levelname)s: %(message)s",
             },
+            "color": {
+                "()": "logging_config.ColorFormatter",
+                "format": "%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+            },
         },
         "handlers": {
             "console": {
                 "class": "logging.StreamHandler",
                 "level": level,
-                "formatter": "standard",
+                "formatter": "color" if env != "production" else "standard",
                 "stream": "ext://sys.stdout",
             },
         },
