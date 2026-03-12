@@ -55,9 +55,10 @@ def _row_to_workflow_app(row: tuple) -> WorkflowApp:
         comfyui_url=row[11] if len(row) > 11 else None,
         supported_input_kinds_json=row[12] if len(row) > 12 else None,
         header_color=row[13] if len(row) > 13 else None,
-        created_from_image_import=bool(row[14]) if len(row) > 14 else False,
-        embed_workflowui_metadata_on_download=_opt_bool(15),
-        embed_workflowui_metadata_on_save=_opt_bool(16),
+        tags_json=row[14] if len(row) > 14 else None,
+        created_from_image_import=bool(row[15]) if len(row) > 15 else False,
+        embed_workflowui_metadata_on_download=_opt_bool(16),
+        embed_workflowui_metadata_on_save=_opt_bool(17),
     )
 
 
@@ -515,6 +516,7 @@ class SqliteWorkflowAppRepository:
         comfyui_url: str | None = None,
         supported_input_kinds_json: str | None = None,
         header_color: str | None = None,
+        tags_json: str | None = None,
         created_from_image_import: bool = False,
         embed_workflowui_metadata_on_download: bool | None = None,
         embed_workflowui_metadata_on_save: bool | None = None,
@@ -526,8 +528,8 @@ class SqliteWorkflowAppRepository:
             conn.execute(
                 """INSERT INTO workflow_app
                    (id, workflow_version_id, slug, title, description, ui_config_json,
-                    default_inputs_json, default_outputs_json, is_public, created_at, app_version, comfyui_url, supported_input_kinds_json, header_color, created_from_image_import, embed_workflowui_metadata_on_download, embed_workflowui_metadata_on_save)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    default_inputs_json, default_outputs_json, is_public, created_at, app_version, comfyui_url, supported_input_kinds_json, header_color, tags_json, created_from_image_import, embed_workflowui_metadata_on_download, embed_workflowui_metadata_on_save)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     id,
                     workflow_version_id,
@@ -543,6 +545,7 @@ class SqliteWorkflowAppRepository:
                     comfyui_url,
                     supported_input_kinds_json,
                     header_color,
+                    tags_json,
                     1 if created_from_image_import else 0,
                     _bool_to_int(embed_workflowui_metadata_on_download),
                     _bool_to_int(embed_workflowui_metadata_on_save),
@@ -564,6 +567,7 @@ class SqliteWorkflowAppRepository:
                 comfyui_url=comfyui_url,
                 supported_input_kinds_json=supported_input_kinds_json,
                 header_color=header_color,
+                tags_json=tags_json,
                 created_from_image_import=created_from_image_import,
                 embed_workflowui_metadata_on_download=embed_workflowui_metadata_on_download,
                 embed_workflowui_metadata_on_save=embed_workflowui_metadata_on_save,
@@ -572,7 +576,7 @@ class SqliteWorkflowAppRepository:
             conn.close()
 
     _APP_SELECT_COLS = """id, workflow_version_id, slug, title, description, ui_config_json,
-        default_inputs_json, default_outputs_json, is_public, created_at, app_version, comfyui_url, supported_input_kinds_json, header_color, created_from_image_import, embed_workflowui_metadata_on_download, embed_workflowui_metadata_on_save"""
+        default_inputs_json, default_outputs_json, is_public, created_at, app_version, comfyui_url, supported_input_kinds_json, header_color, tags_json, created_from_image_import, embed_workflowui_metadata_on_download, embed_workflowui_metadata_on_save"""
 
     def get_app_by_slug(self, slug: str) -> WorkflowApp | None:
         conn = self._conn()
@@ -681,6 +685,7 @@ class SqliteWorkflowAppRepository:
         comfyui_url: str | None = None,
         supported_input_kinds_json: str | None = None,
         header_color: str | None = _UNSET,
+        tags_json: str | None = _UNSET,
         embed_workflowui_metadata_on_download: bool | None = _UNSET,
         embed_workflowui_metadata_on_save: bool | None = _UNSET,
     ) -> WorkflowApp | None:
@@ -720,6 +725,9 @@ class SqliteWorkflowAppRepository:
             if header_color is not _UNSET:
                 updates.append("header_color = ?")
                 params.append(header_color)
+            if tags_json is not _UNSET:
+                updates.append("tags_json = ?")
+                params.append(tags_json)
             if embed_workflowui_metadata_on_download is not _UNSET:
                 updates.append("embed_workflowui_metadata_on_download = ?")
                 params.append(_bool_to_int(embed_workflowui_metadata_on_download))

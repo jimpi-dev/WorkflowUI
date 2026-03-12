@@ -12,6 +12,7 @@ export type AppSummary = {
 	supported_input_kinds?: string[] | null;
 	header_color?: string | null;
 	created_from_image_import?: boolean;
+	tags?: string[] | null;
 };
 
 export type ProjectOption = {

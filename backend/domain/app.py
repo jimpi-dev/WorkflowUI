@@ -17,6 +17,7 @@ class WorkflowApp:
     comfyui_url: str | None = None
     supported_input_kinds_json: str | None = None
     header_color: str | None = None
+    tags_json: str | None = None
     created_from_image_import: bool = False
     embed_workflowui_metadata_on_download: bool | None = None
     embed_workflowui_metadata_on_save: bool | None = None

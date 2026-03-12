@@ -37,6 +37,8 @@
 	let description = $state('');
 	let isPublic = $state(true);
 	let headerColor = $state<string | null>(null);
+	let tags = $state<string[]>([]);
+	let tagInput = $state('');
 	let embedMetadataOnDownload = $state(true);
 	let embedMetadataOnSave = $state(true);
 	let activeTab = $state<'inputs' | 'outputs'>('inputs');
@@ -58,6 +60,25 @@
 	let availableUpscaleMethods = $state<string[]>([]);
 	let collapsedInputNodes = $state<Set<string>>(new Set());
 	let collapsedOutputNodes = $state<Set<string>>(new Set());
+
+	function addTagFromInput() {
+		const raw = tagInput.trim();
+		if (!raw) return;
+		const parts = raw
+			.split(/[;,]/)
+			.map((p) => p.trim().toLowerCase())
+			.filter(Boolean);
+		const next = new Set(tags);
+		for (const p of parts) {
+			next.add(p);
+		}
+		tags = Array.from(next);
+		tagInput = '';
+	}
+
+	function removeTag(tag: string) {
+		tags = tags.filter((t) => t !== tag);
+	}
 
 	function toggleInputNode(nodeId: string) {
 		collapsedInputNodes = new Set(collapsedInputNodes);
@@ -258,6 +279,7 @@
 					description: description.trim() || undefined,
 					is_public: isPublic,
 					header_color: headerColor ?? undefined,
+					tags,
 					embed_workflowui_metadata_on_download: embedMetadataOnDownload,
 					embed_workflowui_metadata_on_save: embedMetadataOnSave,
 					ui_config: draftToUIConfig(appDraft),
@@ -303,16 +325,51 @@
 				<p class="field-help">This setting currently has no effect. It will later control visibility of the app for different users on the same instance.</p>
 			</section>
 			<section class="section">
-				<label for="app-title">Title</label>
+				<label for="app-title">Name</label>
 				<input id="app-title" type="text" bind:value={title} placeholder="My App" />
 			</section>
 			<section class="section">
-				<label for="app-slug">Slug</label>
+				<label for="app-slug">Route (Slug)</label>
 				<input id="app-slug" type="text" bind:value={slug} placeholder="my-app" />
 			</section>
 			<section class="section">
 				<label for="app-desc">Description</label>
 				<textarea id="app-desc" bind:value={description} rows="2" placeholder="Optional"></textarea>
+			</section>
+			<section class="section section-tags">
+				<label for="app-tags" class="field-label">Tags</label>
+				<div class="tags-input-wrap">
+					<div class="tags-chips">
+						{#if tags.length === 0}
+							<span class="tags-placeholder">Add tags like “image”, “video”, “internal”…</span>
+						{/if}
+						{#each tags as tag (tag)}
+							<button
+								type="button"
+								class="tag-chip tag-chip-editable"
+								onclick={() => removeTag(tag)}
+								title="Remove tag"
+							>
+								<span class="tag-chip-label">{tag}</span>
+								<span class="tag-chip-remove">×</span>
+							</button>
+						{/each}
+					</div>
+					<input
+						id="app-tags"
+						type="text"
+						class="tags-text-input"
+						placeholder="Type tags, separate with “;”, then press Enter"
+						bind:value={tagInput}
+						onkeydown={(e) => {
+							if (e.key === 'Enter' || e.key === ',') {
+								e.preventDefault();
+								addTagFromInput();
+							}
+						}}
+					/>
+				</div>
+				<p class="field-help">Use short, meaningful tags. Apps can have multiple tags. You can enter several at once by separating them with “;” and then pressing Enter.</p>
 			</section>
 			<section class="section">
 				<label for="app-header-color" class="field-label">Header color</label>
@@ -644,6 +701,65 @@
 	}
 	.section {
 		margin-bottom: 1.25rem;
+	}
+	.section-tags {
+		margin-bottom: 1.75rem;
+	}
+	.tags-input-wrap {
+		display: flex;
+		flex-direction: column;
+		gap: 0.6rem;
+	}
+	.tags-chips {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.2rem;
+	}
+	.tags-placeholder {
+		font-size: 0.8rem;
+		color: var(--muted);
+	}
+	.tags-text-input {
+		width: 100%;
+		padding: 0.45rem 0.7rem;
+		border-radius: 999px;
+		border: 1px solid var(--border);
+		background: var(--surface);
+		color: var(--text);
+		font-size: 0.85rem;
+	}
+	.tags-text-input:focus {
+		outline: none;
+		border-color: var(--accent);
+		box-shadow: 0 0 0 1px var(--accent-soft);
+	}
+	.section-tags .tag-chip {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.15rem;
+		padding: 0.05rem 0.4rem;
+		border-radius: 999px;
+		font-size: 0.68rem;
+		font-weight: 500;
+		color: var(--muted);
+		background: color-mix(in srgb, var(--accent) 10%, var(--surface));
+		border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--border));
+		box-shadow:
+			0 0 0 1px color-mix(in srgb, var(--accent) 30%, transparent),
+			0 0 8px color-mix(in srgb, var(--accent) 30%, transparent);
+		cursor: pointer;
+	}
+	.section-tags .tag-chip-label {
+		max-width: 110px;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+	.section-tags .tag-chip-remove {
+		margin-left: 0.25rem;
+		font-size: 0.7rem;
+		line-height: 1;
+		opacity: 0.7;
 	}
 	.field-help,
 	.master-seed-help {
