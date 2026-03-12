@@ -843,23 +843,40 @@
 
     async function deleteBothRunGroup(runId: string, backendRunIds: string[]) {
         const apiBase = getApiBase() || '';
+        const run = runs.find((r) => r.id === runId);
+        if (run?.status === 'queued' || run?.status === 'running') {
+            for (const backendRunId of backendRunIds) {
+                await fetch(`${apiBase}/runs/${backendRunId}/cancel`, { method: 'POST' }).catch(() => {});
+            }
+        }
+        let allSucceeded = true;
         for (const backendRunId of backendRunIds) {
             deletingBothRunIds = new Set([...deletingBothRunIds, backendRunId]);
             try {
                 const res = await fetch(`${apiBase}/runs/${backendRunId}/delete-both`, { method: 'POST' });
                 const data = await res.json().catch(() => ({}));
                 if (res.ok) {
-                    await refetchRunImagesForBackendRun(runId, backendRunId);
+                    if (data.updated_runs?.length) {
+                        for (const u of data.updated_runs) {
+                            const r = runs.find((x) => x.backendRunIds?.includes(u.id));
+                            if (r) applyUpdatedRunToRuns(r.id, u.id, u);
+                        }
+                    }
                 } else {
+                    allSucceeded = false;
                     updateStorage(runId, backendRunId, { remote_status: 'exists' });
                 }
             } catch {
+                allSucceeded = false;
                 updateStorage(runId, backendRunId, { remote_status: 'exists' });
             } finally {
                 const next = new Set(deletingBothRunIds);
                 next.delete(backendRunId);
                 deletingBothRunIds = next;
             }
+        }
+        if (allSucceeded && backendRunIds.length > 0) {
+            runs = runs.filter((r) => r.id !== runId);
         }
     }
 
