@@ -187,6 +187,9 @@ class RunRepository(Protocol):
     def delete_runs_by_project(
         self, project_id: str, *, conn: Any = None
     ) -> int: ...
+    def move_runs_to_project(
+        self, run_ids: list[str], target_project_id: str, *, conn: Any = None
+    ) -> int: ...
 
 
 class AppPresetRepository(Protocol):
