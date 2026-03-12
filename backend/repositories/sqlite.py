@@ -1229,6 +1229,26 @@ class SqliteRunRepository:
         finally:
             conn.close()
 
+    def move_runs_to_project(
+        self, run_ids: list[str], target_project_id: str, *, conn: sqlite3.Connection | None = None
+    ) -> int:
+        if not run_ids:
+            return 0
+        own = conn is None
+        c = conn or self._conn()
+        try:
+            placeholders = ",".join("?" * len(run_ids))
+            cur = c.execute(
+                f"UPDATE run SET project_id = ? WHERE id IN ({placeholders})",
+                [target_project_id] + run_ids,
+            )
+            if own:
+                c.commit()
+            return cur.rowcount
+        finally:
+            if own:
+                c.close()
+
     def null_app_ids(self, app_ids: list[str], *, conn: sqlite3.Connection | None = None) -> None:
         if not app_ids:
             return

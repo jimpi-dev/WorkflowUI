@@ -339,6 +339,88 @@ def list_project_runs(
     return {"runs": out, "total": total}
 
 
+def _format_run_date_ms(ms: int) -> str:
+    try:
+        return time.strftime("%Y-%m-%d", time.gmtime(ms / 1000))
+    except Exception:
+        return time.strftime("%Y-%m-%d", time.gmtime())
+
+
+@router.post("/projects/{project_id}/runs/move")
+def move_runs_to_project(
+    project_id: str,
+    body: dict,
+    db=Depends(get_db),
+):
+    run_ids = body.get("run_ids")
+    target_project_id = body.get("target_project_id")
+    if not isinstance(run_ids, list) or not run_ids:
+        raise HTTPException(status_code=400, detail="run_ids must be a non-empty list")
+    if not target_project_id or not isinstance(target_project_id, str) or not target_project_id.strip():
+        raise HTTPException(status_code=400, detail="target_project_id is required")
+    target_project_id = target_project_id.strip()
+    if target_project_id == project_id:
+        raise HTTPException(status_code=400, detail="Target project must be different from source project")
+
+    _, _, _, run_repo, project_repo, _, _ = db
+    source_proj = project_repo.get_project(project_id)
+    if not source_proj:
+        raise HTTPException(status_code=404, detail="Source project not found")
+    if getattr(source_proj, "archived_at", None) is not None:
+        raise HTTPException(status_code=400, detail="Cannot move runs from an archived project")
+
+    target_proj = project_repo.get_project(target_project_id)
+    if not target_proj:
+        raise HTTPException(status_code=404, detail="Target project not found")
+    if getattr(target_proj, "archived_at", None) is not None:
+        raise HTTPException(status_code=400, detail="Cannot move runs into an archived project")
+
+    run_ids = [str(rid).strip() for rid in run_ids if rid]
+    if not run_ids:
+        raise HTTPException(status_code=400, detail="run_ids must be a non-empty list")
+
+    runs_to_move = []
+    for rid in run_ids:
+        r = run_repo.get_run(rid)
+        if not r:
+            raise HTTPException(status_code=404, detail=f"Run not found: {rid}")
+        if r.project_id != project_id:
+            raise HTTPException(status_code=400, detail=f"Run {rid} does not belong to this project")
+        runs_to_move.append(r)
+
+    root = (get_media_storage_config().root_path or "").strip()
+    if root:
+        for run in runs_to_move:
+            run_date = _format_run_date_ms(run.created_at)
+            group_or_run_id = run.run_group_id or run.id
+            old_dir = Path(root) / project_id / run_date / group_or_run_id
+            new_dir = Path(root) / target_project_id / run_date / group_or_run_id
+            if old_dir.exists() and old_dir.is_dir():
+                try:
+                    new_dir.parent.mkdir(parents=True, exist_ok=True)
+                    if new_dir.exists():
+                        shutil.rmtree(new_dir)
+                    shutil.move(str(old_dir), str(new_dir))
+                except Exception as e:
+                    logger.warning("move_runs_to_project: failed to move run dir %s -> %s: %s", old_dir, new_dir, e)
+
+    def _do_move(conn):
+        return run_repo.move_runs_to_project([r.id for r in runs_to_move], target_project_id, conn=conn)
+
+    workflow_repo = db[1]
+    n = workflow_repo.run_in_transaction(_do_move)
+
+    if root and n > 0:
+        for run in runs_to_move:
+            run_date = _format_run_date_ms(run.created_at)
+            group_or_run_id = run.run_group_id or run.id
+            new_path = Path(root) / target_project_id / run_date / group_or_run_id
+            if new_path.exists():
+                run_repo.update_run(run.id, local_path=str(new_path))
+
+    return {"moved": n}
+
+
 @router.get("/projects/{project_id}/runs/stats")
 def get_project_runs_stats(
     project_id: str,
