@@ -688,6 +688,7 @@ class SqliteWorkflowAppRepository:
         tags_json: str | None = _UNSET,
         embed_workflowui_metadata_on_download: bool | None = _UNSET,
         embed_workflowui_metadata_on_save: bool | None = _UNSET,
+        new_slug: str | None = None,
     ) -> WorkflowApp | None:
         def _bool_to_int(b: bool | None) -> int | None:
             return (1 if b else 0) if b is not None else None
@@ -696,8 +697,8 @@ class SqliteWorkflowAppRepository:
             app = self.get_app_by_slug(slug)
             if not app:
                 return None
-            updates = []
-            params = []
+            updates: list[str] = []
+            params: list[object] = []
             if title is not None:
                 updates.append("title = ?")
                 params.append(title)
@@ -734,6 +735,9 @@ class SqliteWorkflowAppRepository:
             if embed_workflowui_metadata_on_save is not _UNSET:
                 updates.append("embed_workflowui_metadata_on_save = ?")
                 params.append(_bool_to_int(embed_workflowui_metadata_on_save))
+            if new_slug is not None:
+                updates.append("slug = ?")
+                params.append(new_slug)
             if not updates:
                 return app
             params.append(slug)
@@ -742,7 +746,7 @@ class SqliteWorkflowAppRepository:
                 params,
             )
             conn.commit()
-            return self.get_app_by_slug(slug)
+            return self.get_app_by_slug(new_slug or slug)
         finally:
             conn.close()
 

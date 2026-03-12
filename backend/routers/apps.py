@@ -107,7 +107,7 @@ def post_apps(body: dict, db=Depends(get_db)):
         raise HTTPException(status_code=404, detail="workflow_version_id not found")
     existing = app_repo.get_app_by_slug(slug)
     if existing:
-        raise HTTPException(status_code=409, detail="slug already in use")
+        raise HTTPException(status_code=409, detail="route (slug) already in use by a different app")
     app_id = str(uuid.uuid4())
     created_at = int(time.time() * 1000)
     ui_config_json = json.dumps(ui_config)
@@ -204,6 +204,21 @@ def patch_app(slug: str, body: dict, db=Depends(get_db)):
     if not app:
         raise HTTPException(status_code=404, detail="App not found")
     kwargs = {}
+    # Optional slug change with uniqueness check
+    if "slug" in body:
+        raw_new_slug = body.get("slug")
+        if raw_new_slug is None:
+            raise HTTPException(status_code=400, detail="slug cannot be null")
+        if not isinstance(raw_new_slug, str):
+            raise HTTPException(status_code=400, detail="slug must be a string")
+        new_slug = raw_new_slug.strip()
+        if not new_slug:
+            raise HTTPException(status_code=400, detail="slug cannot be empty")
+        if new_slug != app.slug:
+            existing = app_repo.get_app_by_slug(new_slug)
+            if existing:
+                raise HTTPException(status_code=409, detail="route (slug) already in use by a different app")
+            kwargs["new_slug"] = new_slug
     if "title" in body:
         kwargs["title"] = body["title"]
     if "description" in body:
