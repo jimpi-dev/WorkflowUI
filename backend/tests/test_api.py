@@ -5,6 +5,7 @@ import pytest
 import requests
 
 from conftest import SAMPLE_WORKFLOW_GRAPH
+from services.comfyui_info import WORKFLOWUI_PLUGIN_MIN_VERSION
 
 
 def test_get_workflow_definitions_empty(client):
@@ -20,7 +21,7 @@ def test_get_config_returns_workflowui_plugin_incompatible_when_plugin_below_min
     data = r.json()
     assert data.get("workflowuiPluginAvailable") is False
     assert data.get("workflowuiPluginIncompatible") is True
-    assert data.get("workflowuiPluginMinVersion") == "1.0.10"
+    assert data.get("workflowuiPluginMinVersion") == WORKFLOWUI_PLUGIN_MIN_VERSION
 
 
 def test_import_preview_success(client):
