@@ -9,6 +9,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
+from logging_config import setup_logging
+
 logger = logging.getLogger(__name__)
 
 try:
@@ -34,12 +36,8 @@ if API_PREFIX and not API_PREFIX.startswith("/"):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    if not logger.handlers:
-        h = logging.StreamHandler(sys.stdout)
-        h.setLevel(logging.INFO)
-        h.setFormatter(logging.Formatter("%(message)s"))
-        logger.addHandler(h)
-        logger.setLevel(logging.INFO)
+    # Configure logging once on startup using central configuration
+    setup_logging()
     yield
 
 

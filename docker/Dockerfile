@@ -32,6 +32,8 @@ COPY docker/entrypoint.sh /app/backend/entrypoint.sh
 RUN sed -i 's/\r$//' /app/backend/entrypoint.sh
 RUN chmod +x /app/backend/entrypoint.sh
 
+ENV APP_ENV=production
+
 ENV PORT=3000
 EXPOSE 3000
 

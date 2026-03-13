@@ -841,25 +841,76 @@
         }
     }
 
-    async function deleteBothRunGroup(runId: string, backendRunIds: string[]) {
+    let deleteRunPending = $state<{ runId: string; backendRunIds: string[] } | null>(null);
+
+    async function saveProjectFavorites(nextFavorites: string[]) {
+        const projectId = currentProject?.id;
+        if (!projectId) return;
+        favoritesSaving = true;
+        try {
+            const meta = { ...(projectMetadata ?? {}), favorites: nextFavorites };
+            const res = await fetch(`${getApiBase() || ''}/projects/${projectId}`, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ metadata: meta })
+            });
+            if (res.ok) {
+                projectMetadata = meta;
+                projectFavorites = new Set(nextFavorites);
+            }
+        } finally {
+            favoritesSaving = false;
+        }
+    }
+
+    async function deleteBothRunGroup(
+        runId: string,
+        backendRunIdsToDelete: string[],
+        options?: { allBackendRunIdsForRun?: string[]; removeFromFavorites?: string[] }
+    ) {
         const apiBase = getApiBase() || '';
-        for (const backendRunId of backendRunIds) {
+        const run = runs.find((r) => r.id === runId);
+        if (run?.status === 'queued' || run?.status === 'running') {
+            for (const backendRunId of backendRunIdsToDelete) {
+                await fetch(`${apiBase}/runs/${backendRunId}/cancel`, { method: 'POST' }).catch(() => {});
+            }
+        }
+        let allSucceeded = true;
+        const deletedIds = new Set<string>();
+        for (const backendRunId of backendRunIdsToDelete) {
             deletingBothRunIds = new Set([...deletingBothRunIds, backendRunId]);
             try {
                 const res = await fetch(`${apiBase}/runs/${backendRunId}/delete-both`, { method: 'POST' });
                 const data = await res.json().catch(() => ({}));
                 if (res.ok) {
-                    await refetchRunImagesForBackendRun(runId, backendRunId);
+                    deletedIds.add(backendRunId);
+                    if (data.updated_runs?.length) {
+                        for (const u of data.updated_runs) {
+                            const r = runs.find((x) => x.backendRunIds?.includes(u.id));
+                            if (r) applyUpdatedRunToRuns(r.id, u.id, u);
+                        }
+                    }
                 } else {
+                    allSucceeded = false;
                     updateStorage(runId, backendRunId, { remote_status: 'exists' });
                 }
             } catch {
+                allSucceeded = false;
                 updateStorage(runId, backendRunId, { remote_status: 'exists' });
             } finally {
                 const next = new Set(deletingBothRunIds);
                 next.delete(backendRunId);
                 deletingBothRunIds = next;
             }
+        }
+        const removeRunFromList = options?.allBackendRunIdsForRun == null
+            || backendRunIdsToDelete.length === options.allBackendRunIdsForRun.length;
+        if (allSucceeded && backendRunIdsToDelete.length > 0 && removeRunFromList) {
+            runs = runs.filter((r) => r.id !== runId);
+        }
+        if (options?.removeFromFavorites?.length && deletedIds.size > 0) {
+            const nextFav = [...projectFavorites].filter((id) => !deletedIds.has(id));
+            if (nextFav.length !== projectFavorites.size) await saveProjectFavorites(nextFav);
         }
     }
 
@@ -1224,7 +1275,10 @@
                     onDeleteRun={(runId, backendRunIds) => {
                         const run = runs.find((r) => r.id === runId);
                         const hasFav = run?.images.some((img) => projectFavorites.has(img.backendRunId));
-                        if (hasFav && !window.confirm('This run includes favorited generations. Do you still want to delete the entire run?')) return;
+                        if (hasFav) {
+                            deleteRunPending = { runId, backendRunIds };
+                            return;
+                        }
                         deleteBothRunGroup(runId, backendRunIds);
                     }}
                     appSlugForReplicate={data.workflowId ?? $page.params.id}
@@ -1276,6 +1330,49 @@
                     🎲 Random seed ({formValues.runs ?? 1}x)
                 </button>
             {/if}
+        </div>
+    {/if}
+
+    <!-- Delete run with favorites: choose non-favorites only / all / cancel -->
+    {#if deleteRunPending}
+        {@const pending = deleteRunPending}
+        <div
+            class="confirm-delete-overlay"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="app-delete-run-fav-title"
+            tabindex="-1"
+            onclick={() => { deleteRunPending = null; }}
+            onkeydown={(e) => { if (e.key === 'Escape') deleteRunPending = null; }}
+        >
+            <div class="confirm-delete-card delete-run-fav-card" role="presentation" tabindex="-1" onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.stopPropagation()}>
+                <p id="app-delete-run-fav-title" class="confirm-delete-title">Delete Run</p>
+                <p class="confirm-delete-msg">This run includes favorited generations. What do you want to do?</p>
+                <div class="delete-run-fav-actions">
+                    <button
+                        type="button"
+                        class="confirm-delete-btn danger"
+                        onclick={async () => {
+                            const nonFav = pending.backendRunIds.filter((id) => !projectFavorites.has(id));
+                            deleteRunPending = null;
+                            if (nonFav.length > 0) await deleteBothRunGroup(pending.runId, nonFav, { allBackendRunIdsForRun: pending.backendRunIds });
+                        }}
+                    >Delete non-favorites only</button>
+                    <button
+                        type="button"
+                        class="confirm-delete-btn danger"
+                        onclick={async () => {
+                            deleteRunPending = null;
+                            await deleteBothRunGroup(pending.runId, pending.backendRunIds, { allBackendRunIdsForRun: pending.backendRunIds, removeFromFavorites: pending.backendRunIds });
+                        }}
+                    >Delete all (including favorites)</button>
+                    <button
+                        type="button"
+                        class="confirm-delete-btn secondary"
+                        onclick={() => { deleteRunPending = null; }}
+                    >Cancel</button>
+                </div>
+            </div>
         </div>
     {/if}
 
@@ -1847,5 +1944,67 @@
         color: #f0c674;
         border: 1px solid #f0c674;
         background: rgba(240, 198, 116, 0.08);
+    }
+    .confirm-delete-overlay {
+        position: fixed;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.5);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 1000;
+    }
+    .confirm-delete-card.delete-run-fav-card {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 0.75rem 1rem;
+        max-width: 22rem;
+        width: calc(100% - 2rem);
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+    }
+    .confirm-delete-card .confirm-delete-title {
+        margin: 0 0 0.35rem 0;
+        font-size: 0.95rem;
+        font-weight: 600;
+        color: var(--text);
+    }
+    .confirm-delete-card .confirm-delete-msg {
+        margin: 0 0 0.75rem 0;
+        font-size: 0.85rem;
+        line-height: 1.35;
+        color: var(--muted);
+    }
+    .delete-run-fav-actions {
+        display: flex;
+        flex-direction: column;
+        gap: 0.5rem;
+        margin-top: 0.5rem;
+    }
+    .delete-run-fav-actions .confirm-delete-btn {
+        padding: 0.35rem 0.75rem;
+        border-radius: 6px;
+        font-size: 0.85rem;
+        font-weight: 500;
+        cursor: pointer;
+        border: 1px solid transparent;
+    }
+    .delete-run-fav-actions .confirm-delete-btn.secondary {
+        background: var(--surface);
+        color: var(--text);
+        border-color: var(--border);
+    }
+    .delete-run-fav-actions .confirm-delete-btn.secondary:hover {
+        background: color-mix(in srgb, var(--accent) 15%, var(--surface));
+        border-color: var(--accent);
+    }
+    .delete-run-fav-actions .confirm-delete-btn.danger {
+        background: var(--error, #c55);
+        color: white;
+        border-color: var(--error, #c55);
+    }
+    .delete-run-fav-actions .confirm-delete-btn.danger:hover {
+        background: var(--error-hover, #e55);
+        border-color: var(--error-hover, #e55);
     }
 </style>

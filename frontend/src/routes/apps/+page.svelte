@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
+	import { onMount, tick } from 'svelte';
 	import { get } from 'svelte/store';
 	import { goto, invalidate } from '$app/navigation';
 	import { page } from '$app/stores';
@@ -102,7 +102,7 @@
 
 	let search = $state('');
 	let sortBy = $state<SortKey>('used');
-	let colorFilter = $state<string>('all'); // 'all' | '' (no color) | hex
+	let tagFilters = $state<string[]>([]); // [] = all tags
 	let viewMode = $state<'grid' | 'list'>('grid');
 	let activeTab = $state<'my-apps' | 'browse'>('my-apps');
 	let openDropdownFor = $state<string | null>(null);
@@ -115,6 +115,19 @@
 	let deleteLoading = $state(false);
 	let copyingSlug = $state<string | null>(null);
 	let copyError = $state<string | null>(null);
+	let copySuccessMessage = $state<string | null>(null);
+	let copiedAppId = $state<string | null>(null);
+	let highlightedAppId = $state<string | null>(null);
+	const appCardRefs = new Map<string, HTMLElement>();
+
+	function registerAppCard(node: HTMLElement, slug: string) {
+		appCardRefs.set(slug, node);
+		return {
+			destroy() {
+				appCardRefs.delete(slug);
+			}
+		};
+	}
 
 	function requestDeleteApp(app: AppSummary) {
 		appToDelete = { slug: app.slug, title: app.title ?? app.slug };
@@ -150,6 +163,22 @@
 		}
 	}
 
+	function scrollToCopiedAndHighlight(slug: string) {
+		highlightedAppId = slug;
+		function tryScroll() {
+			const el = appCardRefs.get(slug);
+			if (el) {
+				el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+				setTimeout(() => {
+					if (highlightedAppId === slug) highlightedAppId = null;
+				}, 4500);
+				return;
+			}
+			tick().then(() => setTimeout(tryScroll, 50));
+		}
+		tick().then(tryScroll);
+	}
+
 	async function copyApp(app: AppSummary) {
 		copyError = null;
 		copyingSlug = app.slug;
@@ -167,8 +196,19 @@
 				);
 			}
 			const created = await res.json();
-			invalidate(get(page).url);
-			goto(`/apps/${created.slug}/edit`);
+			const newSlug: string | undefined = created?.slug;
+			await invalidate(get(page).url);
+
+			if (newSlug) {
+				copiedAppId = newSlug;
+				copySuccessMessage = 'The app has been copied.';
+				scrollToCopiedAndHighlight(newSlug);
+				setTimeout(() => {
+					if (copySuccessMessage === 'The app has been copied.') {
+						copySuccessMessage = null;
+					}
+				}, 3000);
+			}
 		} catch (e) {
 			copyError = e instanceof Error ? e.message : 'Failed to copy app';
 		} finally {
@@ -207,39 +247,50 @@
 		return kinds.some((k) => (k ?? '').toLowerCase() === kind.toLowerCase());
 	}
 
-	const distinctHeaderColors = $derived(
-		[...new Set(data.apps.map((a) => a.header_color).filter((c): c is string => Boolean(c && String(c).trim())))].sort()
+	const allTags = $derived(
+		Array.from(
+			new Set(
+				(data.apps ?? [])
+					.flatMap((a) => a.tags ?? [])
+					.map((t) => (t ?? '').trim().toLowerCase())
+					.filter(Boolean)
+			)
+		).sort()
 	);
 
-	const colorFilterOptions = $derived.by(() => {
-		const apps = data.apps;
-		const noColorCount = apps.filter((a) => !a.header_color).length;
-		const byColor = new Map<string, number>();
-		for (const a of apps) {
-			const c = a.header_color;
-			if (c && String(c).trim()) {
-				byColor.set(c, (byColor.get(c) ?? 0) + 1);
-			}
-		}
-		const options: { value: string; label: string; count: number; swatch?: string }[] = [
-			{ value: 'all', label: 'All', count: apps.length }
-		];
-		options.push({ value: '', label: 'No color', count: noColorCount });
-		for (const hex of distinctHeaderColors) {
-			options.push({ value: hex, label: hex, count: byColor.get(hex) ?? 0, swatch: hex });
-		}
-		return options;
-	});
-
-	function matchesColorFilter(a: AppSummary): boolean {
-		if (colorFilter === 'all') return true;
-		if (colorFilter === '') return !a.header_color;
-		return (a.header_color ?? '') === colorFilter;
+	function matchesTagFilter(a: AppSummary): boolean {
+		if (!tagFilters.length) return true;
+		const appTags = (a.tags ?? []).map((t) => (t ?? '').trim().toLowerCase());
+		if (!appTags.length) return false;
+		// ANY-of-selected semantics
+		return tagFilters.some((t) => appTags.includes(t));
 	}
+
+	let tagFilterOpen = $state(false);
+
+	$effect(() => {
+		if (!tagFilterOpen) return;
+		const onClick = (e: MouseEvent) => {
+			if (!(e.target as Element).closest('.tag-filter')) {
+				tagFilterOpen = false;
+			}
+		};
+		const onKey = (e: KeyboardEvent) => {
+			if (e.key === 'Escape') {
+				tagFilterOpen = false;
+			}
+		};
+		document.addEventListener('click', onClick);
+		document.addEventListener('keydown', onKey);
+		return () => {
+			document.removeEventListener('click', onClick);
+			document.removeEventListener('keydown', onKey);
+		};
+	});
 
 	const filtered = $derived(
 		data.apps.filter(
-			(a) => matchesSearch(a) && isCompatibleWithSendFrom(a) && matchesColorFilter(a)
+			(a) => matchesSearch(a) && isCompatibleWithSendFrom(a) && matchesTagFilter(a)
 		)
 	);
 
@@ -464,29 +515,83 @@
 					<option value={opt.value}>{opt.label}</option>
 				{/each}
 			</select>
-			<div class="color-filter" role="group" aria-label="Filter by color">
-				{#each colorFilterOptions as opt}
-					<button
-						type="button"
-						class="color-filter-btn"
-						class:active={colorFilter === opt.value}
-						class:has-swatch={!!opt.swatch}
-						onclick={() => (colorFilter = opt.value)}
-						aria-pressed={colorFilter === opt.value}
-						aria-label="{opt.swatch ? `Color ${opt.value} (${opt.count} apps)` : `${opt.label} (${opt.count} apps)`}"
-					>
-						{#if opt.swatch}
-							<span
-								class="color-filter-swatch"
-								style="background-color: {opt.swatch}"
-								aria-hidden="true"
-							></span>
+			<div class="tag-filter">
+				<button
+					type="button"
+					class="tag-filter-trigger"
+					onclick={() => (tagFilterOpen = !tagFilterOpen)}
+					aria-haspopup="listbox"
+					aria-expanded={tagFilterOpen}
+					id="tag-filter-trigger"
+				>
+					<span class="tag-filter-trigger-main">
+						{#if !tagFilters.length}
+							<span class="tag-filter-summary-text">All tags</span>
 						{:else}
-							<span class="color-filter-label">{opt.label}</span>
+							<span class="tag-filter-summary-text">
+								{tagFilters.length === 1 ? '1 tag' : `${tagFilters.length} tags`}
+							</span>
+							<span class="tag-filter-summary-chips" aria-hidden="true">
+								{#each tagFilters.slice(0, 3) as tag (tag)}
+									<span class="tag-chip tag-chip-small">{tag}</span>
+								{/each}
+								{#if tagFilters.length > 3}
+									<span class="tag-chip tag-chip-more">+{tagFilters.length - 3}</span>
+								{/if}
+							</span>
 						{/if}
-						<span class="color-filter-count">({opt.count})</span>
-					</button>
-				{/each}
+					</span>
+					<svg class="tag-filter-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+						<path d="M6 9l6 6 6-6"/>
+					</svg>
+				</button>
+				{#if tagFilterOpen}
+					<div
+						class="tag-filter-menu"
+						role="listbox"
+						aria-multiselectable="true"
+						aria-label="Filter apps by tag"
+					>
+						<button
+							type="button"
+							class="tag-filter-option"
+							role="option"
+							aria-selected={!tagFilters.length}
+							onclick={() => (tagFilters = [])}
+						>
+							<span class="tag-filter-checkbox" aria-hidden="true">
+								{#if !tagFilters.length}
+									<span class="tag-filter-checkbox-inner"></span>
+								{/if}
+							</span>
+							<span class="tag-filter-option-text">
+								<span class="tag-filter-option-label">All tags</span>
+							</span>
+						</button>
+						{#each allTags as tag (tag)}
+							<button
+								type="button"
+								class="tag-filter-option"
+								role="option"
+								aria-selected={tagFilters.includes(tag)}
+								onclick={() => {
+									const set = new Set(tagFilters);
+									if (set.has(tag)) set.delete(tag); else set.add(tag);
+									tagFilters = Array.from(set);
+								}}
+							>
+								<span class="tag-filter-checkbox" aria-hidden="true">
+									{#if tagFilters.includes(tag)}
+										<span class="tag-filter-checkbox-inner"></span>
+									{/if}
+								</span>
+								<span class="tag-filter-option-text">
+									<span class="tag-filter-option-label">{tag}</span>
+								</span>
+							</button>
+						{/each}
+					</div>
+				{/if}
 			</div>
 			<div class="view-toggle" role="tablist" aria-label="View">
 				<button
@@ -537,13 +642,18 @@
 			{#if copyError}
 				<p class="copy-error-text">{copyError}</p>
 			{/if}
+			{#if copySuccessMessage}
+				<p class="copy-success-text">{copySuccessMessage}</p>
+			{/if}
 			<div class="apps-container" class:list-view={viewMode === 'list'}>
 			{#each sorted as app (app.id)}
 				<div
 					class="app-card"
+					class:app-card-highlighted={app.slug === highlightedAppId}
 					role="button"
 					tabindex="0"
 					aria-label="Open {app.title} in Quick runs"
+					use:registerAppCard={app.slug}
 					onclick={(e) => onCardClick(e, app.slug)}
 					onkeydown={(e) => onCardKeydown(e, app.slug)}
 				>
@@ -578,6 +688,16 @@
 								{/if}
 								<h3 class="app-name list-name">{app.title}</h3>
 								<span class="list-slug-desc">{#if app.description}{app.description}{:else}/{app.slug}{/if}</span>
+								{#if app.tags && app.tags.length}
+									<div class="app-tags-row list-tags">
+										{#each app.tags.slice(0, 4) as tag (tag)}
+											<span class="tag-chip tag-chip-small">{tag}</span>
+										{/each}
+										{#if app.tags.length > 4}
+											<span class="tag-chip tag-chip-more">+{app.tags.length - 4}</span>
+										{/if}
+									</div>
+								{/if}
 								<div class="list-right-group">
 									<div class="date-infobox date-infobox-list" role="group" aria-label="Dates">
 										<span class="date-infobox-inline">
@@ -696,6 +816,16 @@
 							<p class="app-desc">{app.description}</p>
 						{:else}
 							<p class="app-slug">/{app.slug}</p>
+						{/if}
+						{#if app.tags && app.tags.length}
+							<div class="app-tags-row">
+								{#each app.tags.slice(0, 3) as tag (tag)}
+									<span class="tag-chip">{tag}</span>
+								{/each}
+								{#if app.tags.length > 3}
+									<span class="tag-chip tag-chip-more">+{app.tags.length - 3}</span>
+								{/if}
+							</div>
 						{/if}
 						<div class="card-actions">
 							<a
@@ -1104,63 +1234,177 @@
 
 	.color-filter {
 		display: flex;
-		flex-wrap: wrap;
-		align-items: center;
-		gap: 0.35rem;
+		flex-direction: column;
+		gap: 0.25rem;
+		min-width: 160px;
 	}
 
-	.color-filter-btn {
+	.color-filter-label {
+		font-size: 0.75rem;
+		font-weight: 500;
+		color: var(--muted);
+	}
+	/* Tag filter */
+	.tag-filter {
+		position: relative;
+		display: flex;
+		flex-direction: column;
+		gap: 0.25rem;
+		min-width: 180px;
+	}
+
+	.tag-filter-label {
+		font-size: 0.75rem;
+		font-weight: 500;
+		color: var(--muted);
+	}
+
+	.tag-filter-trigger {
 		display: inline-flex;
 		align-items: center;
-		gap: 0.35rem;
-		padding: 0.5rem 0.65rem;
+		justify-content: space-between;
+		gap: 0.5rem;
+		width: 100%;
+		padding: 0.45rem 0.6rem;
 		background: var(--surface);
 		border: 1px solid var(--border);
 		border-radius: 8px;
 		color: var(--text);
-		font-size: 0.875rem;
+		font-size: 0.85rem;
 		cursor: pointer;
-		transition: border-color 0.2s, background 0.2s, color 0.2s;
+		transition: border-color 0.2s, background 0.2s, box-shadow 0.2s;
+		text-align: left;
 	}
 
-	.color-filter-btn:hover {
+	.tag-filter-trigger:hover {
 		border-color: var(--accent);
-		color: var(--accent);
-		background: var(--accent-soft);
+		background: color-mix(in srgb, var(--accent) 6%, var(--surface));
 	}
 
-	.color-filter-btn.active {
-		border-color: var(--accent);
-		color: var(--accent);
-		background: var(--accent-soft);
+	.tag-filter-trigger:focus-visible {
+		outline: 2px solid var(--accent);
+		outline-offset: 2px;
 	}
 
-	.color-filter-btn .color-filter-swatch {
-		display: inline-block;
-		width: 1.1rem;
-		height: 1.1rem;
-		border-radius: 4px;
-		border: 1px solid var(--border);
-		flex-shrink: 0;
+	.tag-filter-trigger-main {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.4rem;
+		min-width: 0;
 	}
 
-	.color-filter-btn.has-swatch .color-filter-label {
-		display: none;
-	}
-
-	.color-filter-count {
-		font-variant-numeric: tabular-nums;
-		color: var(--muted);
+	.tag-filter-summary-text {
+		white-space: nowrap;
 		font-size: 0.8rem;
 	}
 
-	.color-filter-btn.active .color-filter-count {
-		color: inherit;
+	.tag-filter-summary-chips {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.2rem;
 	}
 
-	.color-filter-btn:focus-visible {
-		outline: 2px solid var(--accent);
-		outline-offset: 2px;
+	.tag-filter-chevron {
+		flex-shrink: 0;
+		opacity: 0.7;
+	}
+
+	.tag-filter-menu {
+		position: absolute;
+		margin-top: 0.25rem;
+		min-width: 220px;
+		max-height: 320px;
+		overflow: auto;
+		background: var(--card);
+		border: 1px solid var(--border);
+		border-radius: 8px;
+		box-shadow: 0 10px 26px rgba(0, 0, 0, 0.35);
+		padding: 0.25rem 0;
+		z-index: 40;
+	}
+
+	.tag-filter-option {
+		display: flex;
+		align-items: center;
+		gap: 0.4rem;
+		width: 100%;
+		padding: 0.4rem 0.6rem;
+		background: transparent;
+		border: none;
+		color: var(--text);
+		font-size: 0.8rem;
+		cursor: pointer;
+		text-align: left;
+	}
+
+	.tag-filter-option:hover {
+		background: var(--accent-soft);
+	}
+
+	.tag-filter-checkbox {
+		width: 0.9rem;
+		height: 0.9rem;
+		border-radius: 3px;
+		border: 1px solid var(--border);
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		background: var(--surface);
+		flex-shrink: 0;
+	}
+
+	.tag-filter-checkbox-inner {
+		width: 0.55rem;
+		height: 0.55rem;
+		border-radius: 2px;
+		background: var(--accent);
+	}
+	.tag-filter-option-text {
+		display: flex;
+		flex-direction: column;
+		align-items: flex-start;
+		gap: 0.05rem;
+		min-width: 0;
+	}
+
+	.tag-filter-option-label {
+		font-size: 0.8rem;
+		font-weight: 500;
+	}
+
+	/* Shared tag chips (used in cards and tag filter summary) */
+	.app-tags-row {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.25rem;
+	margin-top: 0.2rem;
+	}
+
+	.tag-chip {
+		display: inline-flex;
+		align-items: center;
+	padding: 0.05rem 0.4rem;
+		border-radius: 999px;
+	font-size: 0.68rem;
+		font-weight: 500;
+		color: var(--muted);
+		background: color-mix(in srgb, var(--accent) 8%, var(--surface));
+		border: 1px solid color-mix(in srgb, var(--accent) 20%, var(--border));
+	max-width: 110px;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+
+	.tag-chip-small {
+	font-size: 0.62rem;
+	max-width: 80px;
+	}
+
+	.tag-chip-more {
+		color: var(--accent);
+		border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+		background: color-mix(in srgb, var(--accent) 12%, transparent);
 	}
 
 	.view-toggle {
@@ -1869,6 +2113,30 @@
 		margin: 0 0 0.5rem 0;
 		font-size: 0.9rem;
 		color: var(--error, #dc2626);
+	}
+	.copy-success-text {
+		margin: 0 0 0.5rem 0;
+		font-size: 0.9rem;
+		color: var(--success, #16a34a);
+	}
+	.app-card-highlighted {
+		border: 2px solid var(--accent);
+		box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 40%, transparent),
+			0 0 20px color-mix(in srgb, var(--accent) 50%, transparent),
+			0 0 40px color-mix(in srgb, var(--accent) 30%, transparent);
+		animation: copiedGlow 1.2s ease-in-out infinite;
+	}
+	@keyframes copiedGlow {
+		0%, 100% {
+			box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 40%, transparent),
+				0 0 20px color-mix(in srgb, var(--accent) 50%, transparent),
+				0 0 40px color-mix(in srgb, var(--accent) 30%, transparent);
+		}
+		50% {
+			box-shadow: 0 0 0 3px var(--accent),
+				0 0 28px color-mix(in srgb, var(--accent) 70%, transparent),
+				0 0 56px color-mix(in srgb, var(--accent) 45%, transparent);
+		}
 	}
 	.delete-app-actions {
 		display: flex;

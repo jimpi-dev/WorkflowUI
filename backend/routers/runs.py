@@ -7,7 +7,7 @@ import requests
 from fastapi import APIRouter, HTTPException, Depends, Request
 
 from db.migrate import QUICK_RUNS_PROJECT_ID
-from services.comfyui_info import normalize_comfy_url as _normalize_comfy_url
+from services.comfyui_info import normalize_comfy_url as _normalize_comfy_url, get_run_remote_storage_bytes
 from services.run_queue import (
     queue_run as run_queue_queue_run,
     start_worker as run_queue_start_worker,
@@ -539,7 +539,7 @@ def start_queue(state=Depends(get_run_queue_state)):
 
 
 @router.get("/runs/{run_id}")
-def get_run_detail(run_id: str, db=Depends(get_db)):
+def get_run_detail(run_id: str, db=Depends(get_db), service: MediaStorageService = Depends(get_media_storage_service)):
     _, _, app_repo, run_repo, _, _, _ = db
     run_entity = run_repo.get_run(run_id)
     if not run_entity:
@@ -551,6 +551,19 @@ def get_run_detail(run_id: str, db=Depends(get_db)):
             parent_app = app_repo.get_app_by_id(parent_run.app_id)
             if parent_app:
                 parent_app_title = parent_app.title
+    local_storage_bytes = None
+    if run_entity.local_storage_status in ("saved", "partial"):
+        local_storage_bytes = service.get_run_local_storage_bytes(run_entity)
+    remote_storage_bytes = None
+    run_images = json.loads(run_entity.images_json) if run_entity.images_json else []
+    if run_images:
+        comfy_url = run_entity.comfyui_url
+        if not comfy_url and run_entity.app_id and app_repo:
+            app = app_repo.get_app_by_id(run_entity.app_id)
+            comfy_url = app.comfyui_url if app else None
+        comfy_url = _normalize_comfy_url(comfy_url or COMFY_URL or "").rstrip("/") if comfy_url or COMFY_URL else ""
+        if comfy_url:
+            remote_storage_bytes = get_run_remote_storage_bytes(comfy_url, run_images)
     out = {
         "id": run_entity.id,
         "project_id": run_entity.project_id,
@@ -568,6 +581,8 @@ def get_run_detail(run_id: str, db=Depends(get_db)):
         "local_storage_status": run_entity.local_storage_status,
         "remote_status": run_entity.remote_status,
         "local_path": run_entity.local_path,
+        "local_storage_bytes": local_storage_bytes,
+        "remote_storage_bytes": remote_storage_bytes,
         "deleted_outputs": json.loads(run_entity.deleted_outputs_json) if run_entity.deleted_outputs_json else [],
         "parent_run_id": run_entity.parent_run_id,
         "parent_media_id": run_entity.parent_media_id,

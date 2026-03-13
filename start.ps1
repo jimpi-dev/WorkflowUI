@@ -27,8 +27,8 @@ Stop-ProcessOnPort -Port $BackendPort
 Stop-ProcessOnPort -Port $FrontendPort
 Start-Sleep -Seconds 1
 
-Write-Host "Starting backend (FastAPI) on port $BackendPort ..."
-Start-Process powershell -ArgumentList "-NoExit", "-Command", "cd '$RootDir\backend'; uvicorn main:app --reload --port $BackendPort"
+Write-Host "Starting backend (FastAPI) on port $BackendPort with APP_ENV=production ..."
+Start-Process powershell -ArgumentList "-NoExit", "-Command", "cd '$RootDir\backend'; `$env:APP_ENV='production'; uvicorn main:app --reload --port $BackendPort"
 
 Start-Sleep -Seconds 2
 

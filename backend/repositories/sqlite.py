@@ -55,9 +55,10 @@ def _row_to_workflow_app(row: tuple) -> WorkflowApp:
         comfyui_url=row[11] if len(row) > 11 else None,
         supported_input_kinds_json=row[12] if len(row) > 12 else None,
         header_color=row[13] if len(row) > 13 else None,
-        created_from_image_import=bool(row[14]) if len(row) > 14 else False,
-        embed_workflowui_metadata_on_download=_opt_bool(15),
-        embed_workflowui_metadata_on_save=_opt_bool(16),
+        tags_json=row[14] if len(row) > 14 else None,
+        created_from_image_import=bool(row[15]) if len(row) > 15 else False,
+        embed_workflowui_metadata_on_download=_opt_bool(16),
+        embed_workflowui_metadata_on_save=_opt_bool(17),
     )
 
 
@@ -515,6 +516,7 @@ class SqliteWorkflowAppRepository:
         comfyui_url: str | None = None,
         supported_input_kinds_json: str | None = None,
         header_color: str | None = None,
+        tags_json: str | None = None,
         created_from_image_import: bool = False,
         embed_workflowui_metadata_on_download: bool | None = None,
         embed_workflowui_metadata_on_save: bool | None = None,
@@ -526,8 +528,8 @@ class SqliteWorkflowAppRepository:
             conn.execute(
                 """INSERT INTO workflow_app
                    (id, workflow_version_id, slug, title, description, ui_config_json,
-                    default_inputs_json, default_outputs_json, is_public, created_at, app_version, comfyui_url, supported_input_kinds_json, header_color, created_from_image_import, embed_workflowui_metadata_on_download, embed_workflowui_metadata_on_save)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    default_inputs_json, default_outputs_json, is_public, created_at, app_version, comfyui_url, supported_input_kinds_json, header_color, tags_json, created_from_image_import, embed_workflowui_metadata_on_download, embed_workflowui_metadata_on_save)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     id,
                     workflow_version_id,
@@ -543,6 +545,7 @@ class SqliteWorkflowAppRepository:
                     comfyui_url,
                     supported_input_kinds_json,
                     header_color,
+                    tags_json,
                     1 if created_from_image_import else 0,
                     _bool_to_int(embed_workflowui_metadata_on_download),
                     _bool_to_int(embed_workflowui_metadata_on_save),
@@ -564,6 +567,7 @@ class SqliteWorkflowAppRepository:
                 comfyui_url=comfyui_url,
                 supported_input_kinds_json=supported_input_kinds_json,
                 header_color=header_color,
+                tags_json=tags_json,
                 created_from_image_import=created_from_image_import,
                 embed_workflowui_metadata_on_download=embed_workflowui_metadata_on_download,
                 embed_workflowui_metadata_on_save=embed_workflowui_metadata_on_save,
@@ -572,7 +576,7 @@ class SqliteWorkflowAppRepository:
             conn.close()
 
     _APP_SELECT_COLS = """id, workflow_version_id, slug, title, description, ui_config_json,
-        default_inputs_json, default_outputs_json, is_public, created_at, app_version, comfyui_url, supported_input_kinds_json, header_color, created_from_image_import, embed_workflowui_metadata_on_download, embed_workflowui_metadata_on_save"""
+        default_inputs_json, default_outputs_json, is_public, created_at, app_version, comfyui_url, supported_input_kinds_json, header_color, tags_json, created_from_image_import, embed_workflowui_metadata_on_download, embed_workflowui_metadata_on_save"""
 
     def get_app_by_slug(self, slug: str) -> WorkflowApp | None:
         conn = self._conn()
@@ -681,8 +685,10 @@ class SqliteWorkflowAppRepository:
         comfyui_url: str | None = None,
         supported_input_kinds_json: str | None = None,
         header_color: str | None = _UNSET,
+        tags_json: str | None = _UNSET,
         embed_workflowui_metadata_on_download: bool | None = _UNSET,
         embed_workflowui_metadata_on_save: bool | None = _UNSET,
+        new_slug: str | None = None,
     ) -> WorkflowApp | None:
         def _bool_to_int(b: bool | None) -> int | None:
             return (1 if b else 0) if b is not None else None
@@ -691,8 +697,8 @@ class SqliteWorkflowAppRepository:
             app = self.get_app_by_slug(slug)
             if not app:
                 return None
-            updates = []
-            params = []
+            updates: list[str] = []
+            params: list[object] = []
             if title is not None:
                 updates.append("title = ?")
                 params.append(title)
@@ -720,12 +726,18 @@ class SqliteWorkflowAppRepository:
             if header_color is not _UNSET:
                 updates.append("header_color = ?")
                 params.append(header_color)
+            if tags_json is not _UNSET:
+                updates.append("tags_json = ?")
+                params.append(tags_json)
             if embed_workflowui_metadata_on_download is not _UNSET:
                 updates.append("embed_workflowui_metadata_on_download = ?")
                 params.append(_bool_to_int(embed_workflowui_metadata_on_download))
             if embed_workflowui_metadata_on_save is not _UNSET:
                 updates.append("embed_workflowui_metadata_on_save = ?")
                 params.append(_bool_to_int(embed_workflowui_metadata_on_save))
+            if new_slug is not None:
+                updates.append("slug = ?")
+                params.append(new_slug)
             if not updates:
                 return app
             params.append(slug)
@@ -734,7 +746,7 @@ class SqliteWorkflowAppRepository:
                 params,
             )
             conn.commit()
-            return self.get_app_by_slug(slug)
+            return self.get_app_by_slug(new_slug or slug)
         finally:
             conn.close()
 
@@ -1216,6 +1228,26 @@ class SqliteRunRepository:
             return row[0] if row else 0
         finally:
             conn.close()
+
+    def move_runs_to_project(
+        self, run_ids: list[str], target_project_id: str, *, conn: sqlite3.Connection | None = None
+    ) -> int:
+        if not run_ids:
+            return 0
+        own = conn is None
+        c = conn or self._conn()
+        try:
+            placeholders = ",".join("?" * len(run_ids))
+            cur = c.execute(
+                f"UPDATE run SET project_id = ? WHERE id IN ({placeholders})",
+                [target_project_id] + run_ids,
+            )
+            if own:
+                c.commit()
+            return cur.rowcount
+        finally:
+            if own:
+                c.close()
 
     def null_app_ids(self, app_ids: list[str], *, conn: sqlite3.Connection | None = None) -> None:
         if not app_ids:
