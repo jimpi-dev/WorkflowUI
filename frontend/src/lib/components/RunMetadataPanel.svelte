@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { getApiBase } from '$lib/config';
+	import { formatBytes } from '$lib/utils/format';
 	import SendToAppDialog from '$lib/components/SendToAppDialog.svelte';
 
 	let { runId, projectId = null, onClose, mode = 'output' }: { runId: string; projectId?: string | null; onClose: () => void; mode?: 'output' | 'run' } = $props();
@@ -16,6 +17,7 @@
 		prompt_id?: string | null;
 		seed?: number | null;
 		images?: { filename: string; subfolder?: string; type?: string; remote_deleted?: boolean }[];
+		media?: { filename: string; subfolder?: string; type?: string; remote_deleted?: boolean }[];
 		execution_time?: number | null;
 		error?: string | null;
 		input_snapshot?: Record<string, unknown> | null;
@@ -27,6 +29,10 @@
 		root_run_id?: string | null;
 		deleted_at?: number | null;
 		child_run_ids?: string[];
+		local_storage_status?: string | null;
+		local_path?: string | null;
+		local_storage_bytes?: number | null;
+		remote_storage_bytes?: number | null;
 	};
 
 	let run = $state<RunDetail | null>(null);
@@ -94,6 +100,8 @@
 		if (r.app_id) lines.push(`App ID: ${r.app_id}`);
 		if (r.seed != null) lines.push(`Seed: ${r.seed}`);
 		if (r.execution_time != null) lines.push(`Execution time: ${r.execution_time} s`);
+		if (r.local_storage_bytes != null) lines.push(`Local storage: ${formatBytes(r.local_storage_bytes)}`);
+		if (r.remote_storage_bytes != null) lines.push(`Remote (ComfyUI): ${formatBytes(r.remote_storage_bytes)}`);
 		if (r.prompt_id) lines.push(`Prompt ID: ${r.prompt_id}`);
 		if (r.error) lines.push(`Error: ${r.error}`);
 		if (r.deleted_at) lines.push('Run: Deleted (lineage preserved)');
@@ -171,6 +179,18 @@
 							{#if run.execution_time != null}
 								<dt>Execution time</dt>
 								<dd>{run.execution_time} s</dd>
+							{/if}
+							{#if run.local_storage_bytes != null}
+								<dt>Local storage</dt>
+								<dd>{formatBytes(run.local_storage_bytes)}</dd>
+							{/if}
+							{#if run.remote_storage_bytes != null}
+								<dt>Remote (ComfyUI)</dt>
+								<dd>{formatBytes(run.remote_storage_bytes)}</dd>
+							{/if}
+							{#if (run.images?.length ?? run.media?.length ?? 0) > 0}
+								<dt>Outputs</dt>
+								<dd>{(run.images ?? run.media ?? []).length} image{(run.images ?? run.media ?? []).length === 1 ? '' : 's'}</dd>
 							{/if}
 							{#if run.prompt_id}
 								<dt>Prompt ID</dt>

@@ -1,4 +1,3 @@
-"""ComfyUI capability, version, and status helpers. No FastAPI or DB."""
 from __future__ import annotations
 
 import time
@@ -6,7 +5,7 @@ from typing import Any
 
 import requests
 
-WORKFLOWUI_PLUGIN_MIN_VERSION = "1.0.10"
+WORKFLOWUI_PLUGIN_MIN_VERSION = "1.0.11"
 COMFYUI_CAPABILITIES_TTL_SEC = 60
 COMFYUI_STATUS_TTL_SEC = 2.5
 
@@ -101,6 +100,159 @@ def get_workflowui_plugin_status(comfy_url: str) -> tuple[bool, bool, bool]:
 def get_comfyui_delete_supported(comfy_url: str) -> bool:
     delete_supported, _, _ = get_workflowui_plugin_status(comfy_url)
     return delete_supported
+
+
+def get_run_remote_storage_bytes(comfy_url: str, images: list[dict]) -> int | None:
+    """
+    Return total bytes of the run's output files on ComfyUI (remote), using the
+    WorkflowUI plugin's list endpoint. Returns None if plugin unavailable or request fails.
+    """
+    if not images or not isinstance(images, list):
+        return None
+    _, plugin_available, _ = get_workflowui_plugin_status(comfy_url)
+    if not plugin_available:
+        return None
+    base = normalize_comfy_url(comfy_url).rstrip("/")
+    # Group (filename, subfolder) by subfolder; only count outputs not deleted on remote
+    by_subfolder: dict[str, set[str]] = {}
+    for ent in images:
+        if not isinstance(ent, dict) or ent.get("remote_deleted"):
+            continue
+        fn = (ent.get("filename") or "").strip()
+        if not fn:
+            continue
+        sub = (ent.get("subfolder") or "").strip()
+        by_subfolder.setdefault(sub, set()).add(fn)
+    total = 0
+    try:
+        for subfolder, filenames in by_subfolder.items():
+            params = {"type": "output", "subfolder": subfolder}
+            r = requests.get(f"{base}/workflowui/media/list", params=params, timeout=10)
+            if not r.ok or not r.headers.get("content-type", "").startswith("application/json"):
+                return None
+            data = r.json()
+            if not isinstance(data, dict):
+                return None
+            files = data.get("files")
+            if not isinstance(files, list):
+                continue
+            for f in files:
+                if not isinstance(f, dict):
+                    continue
+                if (f.get("filename") or "").strip() not in filenames:
+                    continue
+                try:
+                    total += int(f.get("size", 0) or 0)
+                except (TypeError, ValueError):
+                    pass
+    except Exception:
+        return None
+    return total if total >= 0 else None
+
+
+def get_runs_remote_storage_bytes_deduplicated(comfy_url: str, groups: list[list[dict]]) -> list[int]:
+    """
+    Fallback when batch endpoint is unavailable: fetch list once per unique (subfolder),
+    then compute each group's total from cached file sizes. Avoids one GET per run.
+    Tries the list endpoint regardless of plugin version check so we get real sizes when
+    the list API works (e.g. plugin has list but fails version_info).
+    """
+    if not groups:
+        return []
+    base = normalize_comfy_url(comfy_url).rstrip("/")
+    # Build subfolder -> {filename: size} by fetching each subfolder list once
+    cache: dict[str, dict[str, int]] = {}  # subfolder -> {filename: size}
+    for group in groups:
+        if not isinstance(group, list):
+            continue
+        for ent in group:
+            if not isinstance(ent, dict) or ent.get("remote_deleted"):
+                continue
+            sub = (ent.get("subfolder") or "").strip()
+            if sub not in cache:
+                cache[sub] = {}
+                try:
+                    r = requests.get(
+                        f"{base}/workflowui/media/list",
+                        params={"type": "output", "subfolder": sub},
+                        timeout=15,
+                    )
+                    if r.ok and r.headers.get("content-type", "").startswith("application/json"):
+                        data = r.json()
+                        if isinstance(data, dict) and isinstance(data.get("files"), list):
+                            for f in data["files"]:
+                                if isinstance(f, dict):
+                                    fn = (f.get("filename") or "").strip()
+                                    try:
+                                        cache[sub][fn] = int(f.get("size", 0) or 0)
+                                    except (TypeError, ValueError):
+                                        pass
+                except Exception:
+                    pass
+    # Sum size per group from cache
+    result = []
+    for group in groups:
+        total = 0
+        if not isinstance(group, list):
+            result.append(0)
+            continue
+        for ent in group:
+            if not isinstance(ent, dict) or ent.get("remote_deleted"):
+                continue
+            fn = (ent.get("filename") or "").strip()
+            sub = (ent.get("subfolder") or "").strip()
+            if fn and sub in cache:
+                total += cache[sub].get(fn, 0)
+        result.append(total)
+    return result
+
+
+def get_runs_remote_storage_bytes_batch(comfy_url: str, groups: list[list[dict]]) -> list[int] | None:
+    """
+    Return total bytes per group of output files on ComfyUI in one request, using the
+    plugin's batch endpoint. Each group is a list of {"filename", "subfolder"} (e.g. one run's images).
+    Returns list of sizes (one per group), or None if request fails.
+    Always tries the batch request first (no plugin version check) so updated plugins work even if
+    version_info is missing or cached as unavailable.
+    """
+    if not groups:
+        return []
+    base = normalize_comfy_url(comfy_url).rstrip("/")
+    # Build payload: list of groups; each group is list of {subfolder, filename}, exclude remote_deleted
+    payload_groups: list[list[dict]] = []
+    for group in groups:
+        if not isinstance(group, list):
+            payload_groups.append([])
+            continue
+        entries = []
+        for ent in group:
+            if not isinstance(ent, dict) or ent.get("remote_deleted"):
+                continue
+            fn = (ent.get("filename") or "").strip()
+            if not fn:
+                continue
+            entries.append({
+                "subfolder": (ent.get("subfolder") or "").strip(),
+                "filename": fn,
+            })
+        payload_groups.append(entries)
+    try:
+        r = requests.post(
+            f"{base}/workflowui/media/batch_output_sizes",
+            json={"groups": payload_groups},
+            timeout=30,
+        )
+        if not r.ok or not r.headers.get("content-type", "").startswith("application/json"):
+            return None
+        data = r.json()
+        if not isinstance(data, dict):
+            return None
+        sizes = data.get("sizes")
+        if not isinstance(sizes, list) or len(sizes) != len(groups):
+            return None
+        return [int(x) if isinstance(x, (int, float)) and x >= 0 else 0 for x in sizes]
+    except Exception:
+        return None
 
 
 def is_comfyui_unreachable_error(e: Exception) -> bool:

@@ -1,4 +1,6 @@
 <script lang="ts">
+	import { formatBytes } from '$lib/utils/format';
+
 	export type StorageSummary = { label: string; tone: string } | null;
 
 	const STORAGE_TOOLTIPS: Record<string, string> = {
@@ -14,6 +16,8 @@
 
 	let {
 		storageSummary = null,
+		localStorageBytes = null as number | null | undefined,
+		remoteStorageBytes = null as number | null | undefined,
 		status = 'done',
 		createdAt = 0,
 		timeExtra = '',
@@ -47,6 +51,8 @@
 		hasSelection = false,
 	}: {
 		storageSummary?: StorageSummary;
+		localStorageBytes?: number | null;
+		remoteStorageBytes?: number | null;
 		status?: string;
 		createdAt?: number;
 		timeExtra?: string;
@@ -94,6 +100,15 @@
 			title={storageTooltip}
 		>
 			{storageSummary.label}
+			{#if (storageSummary.tone === 'saved' || storageSummary.tone === 'partial') && localStorageBytes != null && localStorageBytes >= 0 && remoteStorageBytes != null && remoteStorageBytes >= 0}
+				<span class="run-storage-size"> · Local: {formatBytes(localStorageBytes)} · Remote: {formatBytes(remoteStorageBytes)}</span>
+			{:else if (storageSummary.tone === 'saved' || storageSummary.tone === 'partial') && localStorageBytes != null && localStorageBytes >= 0}
+				<span class="run-storage-size"> · {formatBytes(localStorageBytes)}</span>
+			{:else if remoteStorageBytes != null && remoteStorageBytes >= 0}
+				<span class="run-storage-size"> · {formatBytes(remoteStorageBytes)}</span>
+			{:else if storageSummary.tone === 'remote'}
+				<span class="run-storage-size" aria-hidden="true"> · —</span>
+			{/if}
 		</span>
 	{/if}
 	{#if !collapsed}
@@ -324,6 +339,9 @@
 	}
 	.run-storage-badge.remote {
 		color: var(--muted);
+	}
+	.run-storage-size {
+		opacity: 0.9;
 	}
 	.run-replicate-btn {
 		font-size: 0.8rem;

@@ -10,7 +10,12 @@ from fastapi import APIRouter, HTTPException, Depends, Response
 from db.migrate import QUICK_RUNS_PROJECT_ID
 from config import get_media_storage_config
 
-from dependencies import get_db, get_media_storage_service, get_run_queue_state
+from dependencies import get_db, get_media_storage_service, get_run_queue_state, COMFY_URL
+from services.comfyui_info import (
+    normalize_comfy_url as _normalize_comfy_url,
+    get_runs_remote_storage_bytes_batch,
+    get_runs_remote_storage_bytes_deduplicated,
+)
 from services.run_serialization import (
     safe_json_loads,
     latent_resolution_from_input_snapshot,
@@ -311,6 +316,7 @@ def list_project_runs(
         error = mem_run.get("error", r.error) if mem_run else r.error
         queue_position = mem_run.get("queue_position") if mem_run else None
         comfyui_unreachable_warning = mem_run.get("comfyui_unreachable_warning") if mem_run else None
+        # Sizes are loaded separately via GET .../runs/storage_sizes so the list returns fast
         out.append({
             "id": r.id,
             "project_id": r.project_id,
@@ -331,6 +337,8 @@ def list_project_runs(
             "local_storage_status": r.local_storage_status,
             "remote_status": r.remote_status,
             "local_path": r.local_path,
+            "local_storage_bytes": None,
+            "remote_storage_bytes": None,
             "comfyui_unreachable_warning": comfyui_unreachable_warning,
             "parent_run_id": r.parent_run_id,
             "parent_media_id": r.parent_media_id,
@@ -344,6 +352,54 @@ def _format_run_date_ms(ms: int) -> str:
         return time.strftime("%Y-%m-%d", time.gmtime(ms / 1000))
     except Exception:
         return time.strftime("%Y-%m-%d", time.gmtime())
+
+
+@router.get("/projects/{project_id}/runs/storage_sizes")
+def get_project_runs_storage_sizes(
+    project_id: str,
+    run_ids: str,
+    db=Depends(get_db),
+    service=Depends(get_media_storage_service),
+):
+    """Return local and remote storage bytes for the given run IDs (comma-separated). Runs must belong to the project."""
+    _, _, app_repo, run_repo, project_repo, _, _ = db
+    proj = project_repo.get_project(project_id)
+    if not proj:
+        raise HTTPException(status_code=404, detail="Project not found")
+    ids = [rid.strip() for rid in (run_ids or "").split(",") if rid.strip()]
+    if not ids:
+        return {}
+    result: dict[str, dict[str, int | None]] = {}
+    runs_with_images: list[tuple[str, str, list]] = []  # (run_id, comfy_url, images)
+    for rid in ids:
+        r = run_repo.get_run(rid)
+        if not r or r.project_id != project_id:
+            continue
+        result[rid] = {"local_storage_bytes": None, "remote_storage_bytes": None}
+        if r.local_storage_status in ("saved", "partial"):
+            result[rid]["local_storage_bytes"] = service.get_run_local_storage_bytes(r)
+        run_images = safe_json_loads(r.images_json, [])
+        if run_images:
+            app = app_repo.get_app_by_id(r.app_id) if r.app_id else None
+            raw_url = (r.comfyui_url or (app.comfyui_url if app else None) or COMFY_URL or "").strip()
+            # Always try to resolve a ComfyUI URL for remote size when run has images
+            if not raw_url:
+                raw_url = (COMFY_URL or "http://localhost:8188/").strip()
+            comfy_url = _normalize_comfy_url(raw_url).rstrip("/") if raw_url else ""
+            if comfy_url:
+                runs_with_images.append((rid, comfy_url, run_images))
+    by_url: dict[str, list[tuple[str, list]]] = {}
+    for rid, url, imgs in runs_with_images:
+        by_url.setdefault(url, []).append((rid, imgs))
+    for url, entries in by_url.items():
+        groups = [imgs for _, imgs in entries]
+        sizes = get_runs_remote_storage_bytes_batch(url, groups)
+        if sizes is None:
+            sizes = get_runs_remote_storage_bytes_deduplicated(url, groups)
+        for i, (rid, _) in enumerate(entries):
+            if i < len(sizes):
+                result[rid]["remote_storage_bytes"] = sizes[i]
+    return result
 
 
 @router.post("/projects/{project_id}/runs/move")
