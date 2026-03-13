@@ -1,5 +1,6 @@
 <script lang="ts">
     import type { Snippet } from 'svelte';
+    import FavoriteSash from '$lib/components/FavoriteSash.svelte';
     let {
         mediaType = 'image',
         seed = undefined as number | string | undefined,
@@ -45,6 +46,7 @@
 </script>
 
 <div class="thumb-overlay-root">
+    <FavoriteSash visible={isFavorite} />
     <div class="thumb-overlay-media">
         {#if children}
             {@render children()}
