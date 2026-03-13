@@ -156,3 +156,38 @@ def test_get_workflowui_plugin_status_capabilities_fail_returns_not_incompatible
     assert delete_supported is False
     assert plugin_available is False
     assert plugin_incompatible is False
+
+
+@patch.object(comfyui_info, "get_workflowui_plugin_status")
+def test_get_run_remote_storage_bytes_plugin_unavailable_returns_none(mock_status):
+    mock_status.return_value = (False, False, True)  # delete, available, incompatible
+    result = comfyui_info.get_run_remote_storage_bytes(
+        "http://localhost:8188/",
+        [{"filename": "out.png", "subfolder": "", "type": "output"}],
+    )
+    assert result is None
+
+
+@patch.object(comfyui_info, "requests")
+@patch.object(comfyui_info, "get_workflowui_plugin_status")
+def test_get_run_remote_storage_bytes_sums_matching_files(mock_status, mock_requests):
+    _clear_capabilities_cache()
+    mock_status.return_value = (True, True, False)  # plugin available
+    list_res = MagicMock()
+    list_res.ok = True
+    list_res.headers = {"content-type": "application/json"}
+    list_res.json.return_value = {
+        "type": "output",
+        "subfolder": "",
+        "files": [
+            {"filename": "a.png", "size": 1000, "mtime": 0},
+            {"filename": "b.png", "size": 2000, "mtime": 0},
+        ],
+    }
+    mock_requests.get.return_value = list_res
+    images = [
+        {"filename": "a.png", "subfolder": "", "type": "output"},
+        {"filename": "b.png", "subfolder": "", "type": "output"},
+    ]
+    result = comfyui_info.get_run_remote_storage_bytes("http://localhost:8188/", images)
+    assert result == 3000

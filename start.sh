@@ -17,8 +17,8 @@ for port in $BACKEND_PORT $FRONTEND_PORT; do
 done
 sleep 1
 
-echo "Starting backend (FastAPI) on port $BACKEND_PORT..."
-(cd "$ROOT_DIR/backend" && uvicorn main:app --reload --port $BACKEND_PORT) &
+echo "Starting backend (FastAPI) on port $BACKEND_PORT (APP_ENV=production)..."
+(cd "$ROOT_DIR/backend" && APP_ENV=production uvicorn main:app --reload --port $BACKEND_PORT) &
 BACKEND_PID=$!
 sleep 2
 

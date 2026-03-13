@@ -137,6 +137,8 @@ def migrate(db_path: Path | str) -> None:
             conn.execute("ALTER TABLE workflow_app ADD COLUMN supported_input_kinds_json TEXT")
         if "header_color" not in app_cols:
             conn.execute("ALTER TABLE workflow_app ADD COLUMN header_color TEXT")
+        if "tags_json" not in app_cols:
+            conn.execute("ALTER TABLE workflow_app ADD COLUMN tags_json TEXT")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_run_prompt_id ON run(prompt_id)")
         wd_cols = _run_columns(conn, "workflow_definition")
         if "deleted_at" not in wd_cols:

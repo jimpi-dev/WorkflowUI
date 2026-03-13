@@ -6,6 +6,7 @@
 	import { onMount, onDestroy, tick, untrack } from 'svelte';
 	import { getThumbSizeCookie, setThumbSizeCookie, getNotesCollapsedCookie, setNotesCollapsedCookie, getLeftPanelCollapsedCookie, setLeftPanelCollapsedCookie, getSkipDeleteConfirmCookie, setSkipDeleteConfirmCookie, type ThumbSize, type DeleteConfirmKey } from '$lib/cookie';
 	import SendToAppDialog from '$lib/components/SendToAppDialog.svelte';
+	import MoveRunsDialog from '$lib/components/MoveRunsDialog.svelte';
 	import ThumbnailOverlay from '$lib/components/ThumbnailOverlay.svelte';
 	import PageLoadingIndicator from '$lib/components/PageLoadingIndicator.svelte';
 	import RunHeaderActions from '$lib/components/RunHeaderActions.svelte';
@@ -63,6 +64,8 @@
 		local_storage_status?: string | null;
 		remote_status?: string | null;
 		local_path?: string | null;
+		local_storage_bytes?: number | null;
+		remote_storage_bytes?: number | null;
 		comfyui_unreachable_warning?: string | null;
 	};
 	let runs = $state<ApiRun[]>([]);
@@ -104,6 +107,9 @@
 	let sendToAppOutputIndex = $state<number | null>(null);
 
 	let deleteProjectDialogOpen = $state(false);
+
+	let selectedRunIds = $state<Set<string>>(new Set());
+	let moveDialogOpen = $state(false);
 
 	let metadataPanelRunId = $state<string | null>(null);
 	let metadataPanelMode = $state<'output' | 'run'>('output');
@@ -226,8 +232,45 @@
 		const byId = new Map(updatedRuns.map((r) => [r.id, r]));
 		runs = runs.map((r) => {
 			const u = byId.get(r.id);
-			return u ? { ...r, ...u, run_group_id: u.run_group_id ?? r.run_group_id } : r;
+			if (!u) return r;
+			// Use updated run but keep images from response (so remote_deleted/removed items are reflected)
+			const merged = { ...r, ...u, run_group_id: u.run_group_id ?? r.run_group_id };
+			if (Array.isArray(u.images)) merged.images = u.images;
+			// Preserve sizes when list response doesn't include them
+			if (u.local_storage_bytes === undefined) merged.local_storage_bytes = r.local_storage_bytes;
+			if (u.remote_storage_bytes === undefined) merged.remote_storage_bytes = r.remote_storage_bytes;
+			return merged;
 		});
+	}
+
+	async function refetchStorageSizesForRunIds(
+		runIds: string[],
+		expectedProjectId?: string
+	) {
+		const projectId = expectedProjectId ?? data.projectId;
+		if (!runIds.length || !projectId) return;
+		try {
+			const res = await fetch(
+				`${apiBase}/projects/${projectId}/runs/storage_sizes?run_ids=${encodeURIComponent(runIds.join(','))}`
+			);
+			if (!res.ok) return;
+			const sizes: Record<string, { local_storage_bytes?: number | null; remote_storage_bytes?: number | null }> =
+				await res.json().catch(() => ({}));
+			if (typeof sizes !== 'object') return;
+			// Only merge if still on the same project (avoid overwriting after navigation)
+			if (expectedProjectId != null && data.projectId !== expectedProjectId) return;
+			runs = runs.map((r) => {
+				const s = sizes[r.id];
+				if (!s) return r;
+				return {
+					...r,
+					local_storage_bytes: s.local_storage_bytes ?? null,
+					remote_storage_bytes: s.remote_storage_bytes ?? null
+				};
+			});
+		} catch {
+			// ignore
+		}
 	}
 	function getGroupStorageSummary(group: (typeof runGroups)[0]): { label: string; tone: string } | null {
 		const states = group.runs.map((r) => r.local_storage_status);
@@ -257,6 +300,7 @@
 					updateRunStorage(run.id, { local_storage_status: 'failed' });
 				}
 			}
+			refetchStorageSizesForRunIds(group.runs.map((r) => r.id));
 		} finally {
 			const next = new Set(savingGroupIds);
 			next.delete(group.groupId);
@@ -287,6 +331,7 @@
 					}
 				}
 			}
+			refetchStorageSizesForRunIds(Array.from(byRun.keys()));
 		} finally {
 			const next = new Set(savingGroupIds);
 			next.delete(group.groupId);
@@ -444,10 +489,11 @@
 		}
 	}
 
-	async function deleteRunGroup(group: { groupId: string; runs: ApiRun[] }) {
-		const runIds = group.runs.map((r) => r.id);
-		const n = runIds.length;
+	async function deleteRunGroup(group: { groupId: string; runs: ApiRun[] }, runIdsToDelete?: string[]) {
+		const runIds = runIdsToDelete ?? group.runs.map((r) => r.id);
+		if (runIds.length === 0) return;
 		deleteError = null;
+		const deletedIds = new Set<string>();
 		for (const id of runIds) deletingRunIds = new Set([...deletingRunIds, id]);
 		try {
 			let anyDeleted = false;
@@ -457,12 +503,17 @@
 				if (res.ok && data.deleted_run_id) {
 					runs = runs.filter((r) => r.id !== data.deleted_run_id);
 					anyDeleted = true;
+					deletedIds.add(data.deleted_run_id);
 				} else {
 					deleteError = typeof data?.detail === 'string' ? data.detail : data?.error ?? 'Delete run failed';
 				}
 				deletingRunIds = new Set([...deletingRunIds].filter((id) => id !== runId));
 			}
 			if (anyDeleted) totalGroups = Math.max(0, totalGroups - 1);
+			if (deletedIds.size > 0) {
+				const nextFav = [...favorites].filter((id) => !deletedIds.has(id));
+				if (nextFav.length !== favorites.size) await saveFavoritesMetadata(nextFav);
+			}
 			await loadStats();
 		} finally {
 			deletingRunIds = new Set([...deletingRunIds].filter((id) => !runIds.includes(id)));
@@ -470,18 +521,25 @@
 	}
 
 	function requestDeleteRunGroup(group: (typeof runGroups)[0]) {
-		if (getSkipDeleteConfirmCookie('delete_run')) {
+		const hasFav = group.runs.some((r) => favorites.has(r.id));
+		if (!hasFav && getSkipDeleteConfirmCookie('delete_run')) {
 			deleteRunGroup(group).catch(() => {});
 			return;
 		}
 		deleteRunGroupPending = { groupId: group.groupId, runs: group.runs };
 	}
 
-	async function confirmDeleteRunGroup() {
+	async function confirmDeleteRunGroup(mode: 'all' | 'non_favorites') {
 		const group = deleteRunGroupPending;
 		if (!group) return;
 		deleteRunGroupPending = null;
-		await deleteRunGroup(group);
+		if (mode === 'non_favorites') {
+			const runIdsToDelete = group.runs.filter((r) => !favorites.has(r.id)).map((r) => r.id);
+			if (runIdsToDelete.length === 0) return;
+			await deleteRunGroup(group, runIdsToDelete);
+		} else {
+			await deleteRunGroup(group);
+		}
 	}
 
 	$effect(() => {
@@ -585,6 +643,58 @@
 		} finally {
 			descriptionSaving = false;
 		}
+	}
+
+	let projectTags = $state<string[]>([]);
+	let projectTagInput = $state('');
+	let tagsSaving = $state(false);
+	$effect(() => {
+		const raw = project?.tags ?? [];
+		projectTags = Array.isArray(raw)
+			? Array.from(
+					new Set(
+						raw
+							.map((t) => (t ?? '').trim().toLowerCase())
+							.filter(Boolean)
+					)
+			  )
+			: [];
+	});
+
+	async function saveProjectTags() {
+		if (!project) return;
+		tagsSaving = true;
+		try {
+			const res = await fetch(`${apiBase}/projects/${project.id}`, {
+				method: 'PATCH',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ tags: projectTags }),
+			});
+			if (res.ok) {
+				data.project.tags = [...projectTags];
+			}
+		} finally {
+			tagsSaving = false;
+		}
+	}
+
+	function addProjectTagFromInput() {
+		const raw = projectTagInput.trim();
+		if (!raw) return;
+		const parts = raw
+			.split(/[;,]/)
+			.map((p) => p.trim().toLowerCase())
+			.filter(Boolean);
+		const next = new Set(projectTags);
+		for (const p of parts) next.add(p);
+		projectTags = Array.from(next);
+		projectTagInput = '';
+		saveProjectTags();
+	}
+
+	function removeProjectTag(tag: string) {
+		projectTags = projectTags.filter((t) => t !== tag);
+		saveProjectTags();
 	}
 
 	let projectHeaderColor = $state<string | null>(null);
@@ -774,6 +884,11 @@
 					totalGroups = typeof raw.total === 'number' ? raw.total : newRuns.length;
 				} else {
 					runs = [...runs, ...newRuns];
+				}
+				// Fetch storage sizes in the background and merge when ready (one batch request, no per-run list calls)
+				const idsToFetch = newRuns.map((r: ApiRun) => r.id);
+				if (idsToFetch.length > 0) {
+					refetchStorageSizesForRunIds(idsToFetch, projectIdWeFetch);
 				}
 			} else if (isInitial) {
 				runs = Array.isArray(raw) ? raw.map(mapRun) : [];
@@ -1161,6 +1276,15 @@
 		return (selectedInGroup[groupId]?.size ?? 0) > 0;
 	}
 
+	function setCheckboxIndeterminate(el: HTMLInputElement, value: boolean) {
+		el.indeterminate = !!value;
+		return {
+			update(value: boolean) {
+				el.indeterminate = !!value;
+			},
+		};
+	}
+
 	function getSelectedByRun(group: (typeof runGroups)[0]): Map<string, number[]> {
 		const sel = selectedInGroup[group.groupId];
 		if (!sel?.size) return new Map();
@@ -1186,6 +1310,7 @@
 			const data = await res.json().catch(() => ({}));
 			if (res.ok) {
 				mergeUpdatedRuns(data.updated_runs);
+				refetchStorageSizesForRunIds([runId]);
 			} else {
 				deleteError = typeof data?.detail === 'string' ? data.detail : data?.error ?? 'Delete failed';
 			}
@@ -1206,6 +1331,7 @@
 			if (res.ok) {
 				if (data.updated_runs?.length) mergeUpdatedRuns(data.updated_runs);
 				updateRunStorage(runId, { local_storage_status: data.local_storage_status, local_path: data.local_path });
+				refetchStorageSizesForRunIds([runId]);
 			} else {
 				deleteError = typeof data?.detail === 'string' ? data.detail : data?.error ?? 'Delete failed';
 			}
@@ -1225,6 +1351,7 @@
 			const data = await res.json().catch(() => ({}));
 			if (res.ok) {
 				mergeUpdatedRuns(data.updated_runs);
+				refetchStorageSizesForRunIds([runId]);
 			} else {
 				deleteError = typeof data?.detail === 'string' ? data.detail : data?.error ?? 'Delete failed';
 			}
@@ -1270,6 +1397,7 @@
 							deletingImageKeys = next;
 						}
 					}
+					refetchStorageSizesForRunIds(Array.from(byRun.keys()));
 				};
 				if (getSkipDeleteConfirmCookie('delete_remote')) {
 					await doDelete();
@@ -1324,6 +1452,7 @@
 							deletingLocalImageKeys = next;
 						}
 					}
+					refetchStorageSizesForRunIds(Array.from(byRun.keys()));
 				};
 				if (getSkipDeleteConfirmCookie('delete_local')) {
 					await doDelete();
@@ -1378,6 +1507,7 @@
 							deletingBothImageKeys = next;
 						}
 					}
+					refetchStorageSizesForRunIds(Array.from(byRun.keys()));
 				};
 				if (getSkipDeleteConfirmCookie('delete_all')) {
 					await doDelete();
@@ -1595,6 +1725,43 @@
 						<span class="save-hint">Saving…</span>
 					{/if}
 				</label>
+				<div class="project-tags-section">
+					<div class="tags-input-wrap">
+						<div class="tags-chips">
+							{#if projectTags.length === 0}
+								<span class="tags-placeholder">Add tags like “client”, “internal”, “image”, “video”…</span>
+							{/if}
+							{#each projectTags as tag (tag)}
+								<button
+									type="button"
+									class="tag-chip tag-chip-editable"
+									onclick={() => removeProjectTag(tag)}
+									title="Remove tag"
+								>
+									<span class="tag-chip-label">{tag}</span>
+									<span class="tag-chip-remove">×</span>
+								</button>
+							{/each}
+						</div>
+						<input
+							type="text"
+							class="tags-text-input"
+							placeholder="Type tags, separate with “;”, then press Enter"
+							bind:value={projectTagInput}
+							onkeydown={(e) => {
+								if (e.key === 'Enter' || e.key === ',') {
+									e.preventDefault();
+									addProjectTagFromInput();
+								}
+							}}
+							disabled={tagsSaving}
+						/>
+						<p class="tags-input-hint">You can enter multiple tags at once by separating them with “;” and then pressing Enter.</p>
+					</div>
+					{#if tagsSaving}
+						<span class="save-hint">Saving…</span>
+					{/if}
+				</div>
 				<div class="header-color-section">
 					<span class="filter-label">Header color</span>
 					<p class="header-color-help">Optional. Colors the project card and name in the header when viewing an app.</p>
@@ -1626,13 +1793,6 @@
 						>
 							Delete / Archive project
 						</button>
-					</div>
-				{/if}
-				{#if data.project.tags?.length}
-					<div class="tags">
-						{#each data.project.tags as tag (tag)}
-							<span class="tag">{tag}</span>
-						{/each}
 					</div>
 				{/if}
 			</div>
@@ -1895,6 +2055,21 @@
 				</div>
 				{#if !loading}
 					<div class="runs-list-head-actions">
+						{#if runGroups.length > 0}
+						<div class="move-runs-actions">
+							<button
+								type="button"
+								class="move-to-project-btn"
+								disabled={selectedRunIds.size === 0}
+								title={selectedRunIds.size === 0 ? 'Select at least one run using the checkbox on each group, then click here to move runs to another project' : `Move ${selectedRunIds.size} run(s) to another project`}
+								aria-label={selectedRunIds.size === 0 ? 'Select at least one run using the checkbox on each group to enable move' : 'Move selected runs to another project'}
+								onclick={() => (moveDialogOpen = true)}
+							>
+								Move to project
+							</button>
+							<span class="gallery-size-divider" aria-hidden="true"></span>
+						</div>
+						{/if}
 						<label class="favorites-filter-option" title="Show only favorited runs">
 							<span class="favorites-filter-label">Favorites only</span>
 							<button
@@ -2059,6 +2234,25 @@
 								onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleGroup(group.groupId); } }}
 							>
 								<div class="run-title">
+									<label
+										class="move-runs-group-checkbox-wrap"
+										title="Select runs in this group to move to another project"
+										onclick={(e) => e.stopPropagation()}
+										onkeydown={(e) => e.stopPropagation()}
+									>
+										<input
+											type="checkbox"
+											class="move-runs-checkbox"
+											aria-label="Select runs in this group for move"
+											checked={group.runs.length > 0 && group.runs.every((r) => selectedRunIds.has(r.id))}
+											use:setCheckboxIndeterminate={group.runs.some((r) => selectedRunIds.has(r.id)) && !group.runs.every((r) => selectedRunIds.has(r.id))}
+											onchange={(e) => {
+												const ids = group.runs.map((r) => r.id);
+												if ((e.currentTarget as HTMLInputElement).checked) selectedRunIds = new Set([...selectedRunIds, ...ids]);
+												else selectedRunIds = new Set([...selectedRunIds].filter((id) => !ids.includes(id)));
+											}}
+										/>
+									</label>
 									<span class="run-dot"></span>
 									<RunAppBadge
 										appHeaderColor={group.app_header_color ?? undefined}
@@ -2111,6 +2305,8 @@
 								</div>
 								<RunHeaderActions
 									storageSummary={storageSummary}
+									localStorageBytes={storageSummary != null ? group.runs.reduce((s, r) => s + (r.local_storage_bytes ?? 0), 0) : undefined}
+									remoteStorageBytes={storageSummary != null ? group.runs.reduce((s, r) => s + (r.remote_storage_bytes ?? 0), 0) : undefined}
 									status={group.status}
 									createdAt={group.createdAt}
 									timeExtra=""
@@ -2417,6 +2613,21 @@
 			onClose={() => { sendToAppRunId = null; sendToAppOutputIndex = null; }}
 		/>
 	{/if}
+	{#if moveDialogOpen && data.project}
+		<MoveRunsDialog
+			open={moveDialogOpen}
+			sourceProjectId={data.projectId}
+			sourceProjectName={data.project.name ?? ''}
+			runIds={Array.from(selectedRunIds)}
+			onClose={() => { moveDialogOpen = false; }}
+			onMoved={() => {
+				const moved = new Set(selectedRunIds);
+				runs = runs.filter((r) => !moved.has(r.id));
+				selectedRunIds = new Set();
+				moveDialogOpen = false;
+			}}
+		/>
+	{/if}
 	{#if data.project && deleteProjectDialogOpen}
 		<DeleteProjectDialog
 			open={deleteProjectDialogOpen}
@@ -2446,18 +2657,52 @@
 		{@const mainMsg = n > 1
 			? `Delete ${n} generations permanently? This cannot be undone.`
 			: 'Delete this prompt (and all its files) permanently? This cannot be undone.'}
-		{@const deleteRunMessage = hasFav ? `This run includes favorited generations. They will be removed from favorites.\n\n${mainMsg}` : mainMsg}
-		<ConfirmDeleteDialog
-			open={true}
-			title="Delete Run with all of its generations"
-			message={deleteRunMessage}
-			confirmLabel="Delete Run"
-			onConfirm={async (dontShowAgain) => {
-				if (dontShowAgain) setSkipDeleteConfirmCookie('delete_run', true);
-				await confirmDeleteRunGroup();
-			}}
-			onCancel={() => { deleteRunGroupPending = null; }}
-		/>
+		{#if hasFav}
+			<div
+				class="confirm-delete-overlay"
+				role="dialog"
+				aria-modal="true"
+				aria-labelledby="delete-run-fav-dialog-title"
+				tabindex="-1"
+				onclick={() => { deleteRunGroupPending = null; }}
+				onkeydown={(e) => { if (e.key === 'Escape') deleteRunGroupPending = null; }}
+			>
+				<div class="confirm-delete-card delete-run-fav-card" role="presentation" tabindex="-1" onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.stopPropagation()}>
+					<p id="delete-run-fav-dialog-title" class="confirm-delete-title">Delete Run</p>
+					<p class="confirm-delete-msg">This run includes favorited generations. What do you want to do?</p>
+					<div class="delete-run-fav-actions">
+						<button
+							type="button"
+							class="confirm-delete-btn danger"
+							onclick={async () => { await confirmDeleteRunGroup('non_favorites'); }}
+						>Delete non-favorites only</button>
+						<button
+							type="button"
+							class="confirm-delete-btn danger"
+							onclick={async () => { await confirmDeleteRunGroup('all'); }}
+						>Delete all (including favorites)</button>
+						<button
+							type="button"
+							class="confirm-delete-btn secondary"
+							onclick={() => { deleteRunGroupPending = null; }}
+						>Cancel</button>
+					</div>
+				</div>
+			</div>
+		{:else}
+			{@const deleteRunMessage = mainMsg}
+			<ConfirmDeleteDialog
+				open={true}
+				title="Delete Run with all of its generations"
+				message={deleteRunMessage}
+				confirmLabel="Delete Run"
+				onConfirm={async (dontShowAgain) => {
+					if (dontShowAgain) setSkipDeleteConfirmCookie('delete_run', true);
+					await confirmDeleteRunGroup('all');
+				}}
+				onCancel={() => { deleteRunGroupPending = null; }}
+			/>
+		{/if}
 	{/if}
 
 	{#if deleteConfirmPending}
@@ -2712,6 +2957,75 @@
 	.description-label {
 		display: block;
 		margin-bottom: 0.5rem;
+	}
+
+	.project-tags-section {
+		margin-top: 0.4rem;
+		margin-bottom: 0.9rem;
+	}
+
+	.tags-input-wrap {
+		display: flex;
+		flex-direction: column;
+		gap: 0.5rem;
+	}
+
+	.tags-chips {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.2rem;
+	}
+
+	.tags-placeholder {
+		font-size: 0.8rem;
+		color: var(--muted);
+	}
+
+	.tags-text-input {
+		width: 100%;
+		padding: 0.4rem 0.65rem;
+		border-radius: 999px;
+		border: 1px solid var(--border);
+		background: var(--surface);
+		color: var(--text);
+		font-size: 0.82rem;
+	}
+
+	.tags-text-input:focus {
+		outline: none;
+		border-color: var(--accent);
+		box-shadow: 0 0 0 1px var(--accent-soft);
+	}
+	.tags-input-hint {
+		margin: 0.1rem 0 0 0.2rem;
+		font-size: 0.76rem;
+		color: var(--muted);
+	}
+	.project-tags-section .tag-chip {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.15rem;
+		padding: 0.05rem 0.4rem;
+		border-radius: 999px;
+		font-size: 0.68rem;
+		font-weight: 500;
+		color: var(--muted);
+		background: color-mix(in srgb, var(--accent) 10%, var(--surface));
+		border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--border));
+		box-shadow:
+			0 0 0 1px color-mix(in srgb, var(--accent) 30%, transparent),
+			0 0 8px color-mix(in srgb, var(--accent) 30%, transparent);
+		cursor: pointer;
+	}
+	.project-tags-section .tag-chip-label {
+		max-width: 110px;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+	.project-tags-section .tag-chip-remove {
+		font-size: 0.7rem;
+		line-height: 1;
 	}
 	.description-textarea {
 		width: 100%;
@@ -3364,6 +3678,47 @@
 		align-items: center;
 		gap: 0.5rem;
 		flex-wrap: wrap;
+	}
+	.move-runs-actions {
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+	}
+	.move-runs-checkbox {
+		width: 1rem;
+		height: 1rem;
+		cursor: pointer;
+		accent-color: var(--accent);
+	}
+	.move-to-project-btn {
+		padding: 0.4rem 0.75rem;
+		font-size: 0.85rem;
+		font-weight: 500;
+		border-radius: 8px;
+		border: 1px solid var(--border);
+		background: var(--surface);
+		color: var(--text);
+		cursor: pointer;
+		transition: border-color 0.2s, background 0.2s;
+	}
+	.move-to-project-btn:hover:not(:disabled) {
+		border-color: var(--accent);
+		background: var(--accent-soft, color-mix(in srgb, var(--accent) 12%, transparent));
+	}
+	.move-to-project-btn:disabled {
+		opacity: 0.6;
+		cursor: not-allowed;
+	}
+	.move-runs-group-checkbox-wrap {
+		display: inline-flex;
+		align-items: center;
+		cursor: pointer;
+		margin-right: 0.25rem;
+		flex-shrink: 0;
+	}
+	.move-runs-group-checkbox-wrap .move-runs-checkbox {
+		width: 0.95rem;
+		height: 0.95rem;
 	}
 	.favorites-filter-option {
 		display: inline-flex;
@@ -4218,5 +4573,70 @@
 			overflow-y: auto;
 			-webkit-overflow-scrolling: touch;
 		}
+	}
+
+	/* Delete run with favorites dialog (matches ConfirmDeleteDialog look) */
+	.confirm-delete-overlay {
+		position: fixed;
+		inset: 0;
+		background: rgba(0, 0, 0, 0.5);
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		z-index: 1000;
+	}
+	.confirm-delete-card.delete-run-fav-card {
+		background: var(--surface);
+		border: 1px solid var(--border);
+		border-radius: 8px;
+		padding: 0.75rem 1rem;
+		max-width: 22rem;
+		width: calc(100% - 2rem);
+		box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+	}
+	.confirm-delete-card .confirm-delete-title {
+		margin: 0 0 0.35rem 0;
+		font-size: 0.95rem;
+		font-weight: 600;
+		color: var(--text);
+	}
+	.confirm-delete-card .confirm-delete-msg {
+		margin: 0 0 0.75rem 0;
+		font-size: 0.85rem;
+		line-height: 1.35;
+		color: var(--muted);
+		white-space: pre-line;
+	}
+	.delete-run-fav-actions {
+		display: flex;
+		flex-direction: column;
+		gap: 0.5rem;
+		margin-top: 0.5rem;
+	}
+	.delete-run-fav-actions .confirm-delete-btn {
+		padding: 0.35rem 0.75rem;
+		border-radius: 6px;
+		font-size: 0.85rem;
+		font-weight: 500;
+		cursor: pointer;
+		border: 1px solid transparent;
+	}
+	.delete-run-fav-actions .confirm-delete-btn.secondary {
+		background: var(--surface);
+		color: var(--text);
+		border-color: var(--border);
+	}
+	.delete-run-fav-actions .confirm-delete-btn.secondary:hover {
+		background: color-mix(in srgb, var(--accent) 15%, var(--surface));
+		border-color: var(--accent);
+	}
+	.delete-run-fav-actions .confirm-delete-btn.danger {
+		background: var(--error, #c55);
+		color: white;
+		border-color: var(--error, #c55);
+	}
+	.delete-run-fav-actions .confirm-delete-btn.danger:hover {
+		background: var(--error-hover, #e55);
+		border-color: var(--error-hover, #e55);
 	}
 </style>

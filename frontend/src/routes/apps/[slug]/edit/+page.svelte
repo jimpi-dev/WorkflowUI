@@ -40,6 +40,8 @@
 	let isPublic = $state(true);
 	let supportedInputKinds = $state<string[]>([]);
 	let headerColor = $state<string | null>(null);
+	let tags = $state<string[]>([]);
+	let tagInput = $state('');
 	let embedMetadataOnDownload = $state(true);
 	let embedMetadataOnSave = $state(true);
 	const SUPPORTED_KIND_OPTIONS = ['image', 'video', 'audio'] as const;
@@ -50,6 +52,7 @@
 	let saveError = $state('');
 	let copyError = $state('');
 	let copying = $state(false);
+	let showCopyAppDialog = $state(false);
 	let draftInitialized = $state(false);
 	let availableLoras = $state<string[]>([]);
 	let availableCheckpoints = $state<string[]>([]);
@@ -214,6 +217,16 @@
 			const raw = (app as { supported_input_kinds?: string[] | null }).supported_input_kinds;
 			supportedInputKinds = Array.isArray(raw) ? [...raw] : [];
 			headerColor = (app as { header_color?: string | null }).header_color ?? null;
+			const rawTags = (app as { tags?: string[] | null }).tags;
+			tags = Array.isArray(rawTags)
+				? Array.from(
+						new Set(
+							rawTags
+								.map((t) => (t ?? '').trim().toLowerCase())
+								.filter(Boolean)
+						)
+				  )
+				: [];
 			embedMetadataOnDownload = (app as { embedWorkflowuiMetadataOnDownload?: boolean }).embedWorkflowuiMetadataOnDownload ?? true;
 			embedMetadataOnSave = (app as { embedWorkflowuiMetadataOnSave?: boolean }).embedWorkflowuiMetadataOnSave ?? true;
 			appDraft = draftFromExistingApp(
@@ -226,6 +239,25 @@
 		}
 	});
 
+	function addTagFromInput() {
+		const raw = tagInput.trim();
+		if (!raw) return;
+		const parts = raw
+			.split(/[;,]/)
+			.map((p) => p.trim().toLowerCase())
+			.filter(Boolean);
+		const next = new Set(tags);
+		for (const p of parts) {
+			next.add(p);
+		}
+		tags = Array.from(next);
+		tagInput = '';
+	}
+
+	function removeTag(tag: string) {
+		tags = tags.filter((t) => t !== tag);
+	}
+
 	async function save() {
 		if (!appDraft || !slugParam) return;
 		const visibleOutputs = Array.from(appDraft.visibleOutputs);
@@ -233,7 +265,12 @@
 			saveError = 'At least one output must be visible';
 			return;
 		}
+		const trimmedSlug = slug.trim();
 		const trimmedTitle = title.trim();
+		if (!trimmedSlug) {
+			saveError = 'Slug is required';
+			return;
+		}
 		if (!trimmedTitle) {
 			saveError = 'Title is required';
 			return;
@@ -246,10 +283,12 @@
 				method: 'PATCH',
 				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify({
+					slug: trimmedSlug,
 					title: trimmedTitle,
 					description: description.trim() || undefined,
 					is_public: isPublic,
 					header_color: headerColor,
+					tags,
 					embed_workflowui_metadata_on_download: embedMetadataOnDownload,
 					embed_workflowui_metadata_on_save: embedMetadataOnSave,
 					ui_config: draftToUIConfig(appDraft),
@@ -263,14 +302,24 @@
 				saving = false;
 				return;
 			}
-			window.location.href = `/app/${slugParam}`;
+			// After saving, return to apps overview instead of opening the app
+			goto('/apps');
 		} catch (e) {
 			saveError = e instanceof Error ? e.message : String(e);
 			saving = false;
 		}
 	}
 
-	async function copyApp() {
+	function openCopyAppDialog() {
+		copyError = '';
+		showCopyAppDialog = true;
+	}
+
+	function closeCopyAppDialog() {
+		if (!copying) showCopyAppDialog = false;
+	}
+
+	async function confirmCopyApp() {
 		if (!slugParam || copying) return;
 		copyError = '';
 		copying = true;
@@ -288,6 +337,8 @@
 				return;
 			}
 			const created = await res.json();
+			showCopyAppDialog = false;
+			copying = false;
 			goto(`/apps/${created.slug}/edit`);
 		} catch (e) {
 			copyError = e instanceof Error ? e.message : 'Failed to copy app';
@@ -308,7 +359,6 @@
 	<div class="two-col-page page">
 		<aside class="panel-left panel-scroll card">
 			<h1>Edit App</h1>
-			<p class="muted">Slug: {slugParam}</p>
 
 			<section class="section">
 				<label class="toggle-label" for="app-public-edit">
@@ -321,16 +371,62 @@
 				<p class="field-help">This setting currently has no effect. It will later control visibility of the app for different users on the same instance.</p>
 			</section>
 			<section class="section">
-				<label for="app-title">Title</label>
+				<label for="app-title">Name</label>
 				<input id="app-title" type="text" bind:value={title} placeholder="My App" />
 			</section>
 			<section class="section">
-				<span class="field-label">Slug</span>
-				<p class="slug-readonly" id="app-slug-readonly">{slugParam}</p>
+				<label for="app-slug-edit">Route (Slug)</label>
+				<input
+					id="app-slug-edit"
+					type="text"
+					class="slug-input"
+					class:slug-input-error={saveError === 'route (slug) already in use by a different app'}
+					bind:value={slug}
+					placeholder="my-app"
+				/>
+				<p class="field-help">
+					This controls the URL path:
+					<span class="slug-readonly">/app/{slug || slugParam}</span>
+				</p>
 			</section>
 			<section class="section">
 				<label for="app-desc">Description</label>
 				<textarea id="app-desc" bind:value={description} rows="2" placeholder="Optional"></textarea>
+			</section>
+			<section class="section section-tags">
+				<label for="app-tags" class="field-label">Tags</label>
+				<div class="tags-input-wrap">
+					<div class="tags-chips">
+						{#if tags.length === 0}
+							<span class="tags-placeholder">Add tags like “image”, “video”, “internal”…</span>
+						{/if}
+						{#each tags as tag (tag)}
+							<button
+								type="button"
+								class="tag-chip tag-chip-editable"
+								onclick={() => removeTag(tag)}
+								title="Remove tag"
+							>
+								<span class="tag-chip-label">{tag}</span>
+								<span class="tag-chip-remove">×</span>
+							</button>
+						{/each}
+					</div>
+					<input
+						id="app-tags"
+						type="text"
+						class="tags-text-input"
+						placeholder="Type tags, separate with “;”, then press Enter"
+						bind:value={tagInput}
+						onkeydown={(e) => {
+							if (e.key === 'Enter' || e.key === ',') {
+								e.preventDefault();
+								addTagFromInput();
+							}
+						}}
+					/>
+				</div>
+				<p class="field-help">Use short, meaningful tags. Apps can have multiple tags. You can enter several at once by separating them with “;” and then pressing Enter.</p>
 			</section>
 			<section class="section">
 				<label for="app-header-color-edit" class="field-label">Header color</label>
@@ -433,9 +529,6 @@
 					</select>
 				</section>
 			{/if}
-			{#if saveError}
-				<p class="error-text">{saveError}</p>
-			{/if}
 			{#if copyError}
 				<p class="error-text">{copyError}</p>
 			{/if}
@@ -453,8 +546,11 @@
 			</section>
 			<section class="section sticky-save">
 				<button onclick={save} disabled={saving}>{saving ? 'Saving…' : 'Save'}</button>
+				{#if saveError}
+					<p class="error-text save-error-inline">{saveError}</p>
+				{/if}
 				<button type="button" class="cancel-btn" onclick={() => goto('/apps')}>Cancel</button>
-				<button type="button" class="cancel-btn" onclick={copyApp} disabled={copying}>{copying ? 'Copying…' : 'Copy app'}</button>
+				<button type="button" class="cancel-btn" onclick={openCopyAppDialog} disabled={copying}>{copying ? 'Copying…' : 'Copy app'}</button>
 			</section>
 		</aside>
 
@@ -644,6 +740,40 @@
 			{/if}
 		</div>
 	</div>
+	{#if showCopyAppDialog}
+		<div
+			class="copy-app-backdrop"
+			role="dialog"
+			aria-modal="true"
+			aria-labelledby="copy-app-dialog-title"
+			tabindex="-1"
+			onclick={closeCopyAppDialog}
+			onkeydown={(e) => { if (e.key === 'Escape') closeCopyAppDialog(); }}
+		>
+			<div class="copy-app-dialog" role="presentation" tabindex="-1" onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.stopPropagation()}>
+				<h2 id="copy-app-dialog-title" class="copy-app-dialog-title">Copy app</h2>
+				<p class="copy-app-dialog-desc">
+					This app will be copied and the new copy will open on this edit page. You will be editing the copy, not the original.
+				</p>
+				{#if copyError}
+					<p class="copy-app-dialog-error">{copyError}</p>
+				{/if}
+				<div class="copy-app-dialog-actions">
+					<button type="button" class="copy-app-dialog-btn secondary" onclick={closeCopyAppDialog} disabled={copying}>
+						Cancel
+					</button>
+					<button
+						type="button"
+						class="copy-app-dialog-btn primary"
+						disabled={copying}
+						onclick={confirmCopyApp}
+					>
+						{copying ? 'Copying…' : 'Copy app'}
+					</button>
+				</div>
+			</div>
+		</div>
+	{/if}
 {/if}
 
 <style>
@@ -672,8 +802,95 @@
 		color: var(--muted);
 		margin: 0;
 	}
+	.slug-input {
+		width: 100%;
+		box-sizing: border-box;
+		padding: 0.45rem 0.7rem;
+		font-size: 0.9rem;
+		border: 1px solid var(--border);
+		border-radius: 6px;
+		background: var(--surface);
+		color: var(--text);
+		transition: border-color 0.2s, box-shadow 0.2s;
+	}
+	.slug-input:focus {
+		outline: none;
+		border-color: var(--accent);
+	}
+	.slug-input.slug-input-error {
+		border-color: var(--error, #dc2626);
+		box-shadow: 0 0 0 2px color-mix(in srgb, var(--error, #dc2626) 25%, transparent);
+	}
+	.slug-input.slug-input-error:focus {
+		border-color: var(--error, #dc2626);
+		box-shadow: 0 0 0 2px color-mix(in srgb, var(--error, #dc2626) 35%, transparent);
+	}
 	.section {
 		margin-bottom: 1.25rem;
+	}
+	.section-tags {
+		margin-bottom: 1.75rem;
+	}
+
+	.tags-input-wrap {
+		display: flex;
+		flex-direction: column;
+		gap: 0.6rem;
+	}
+
+	.tags-chips {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.2rem;
+	}
+
+	.tags-placeholder {
+		font-size: 0.8rem;
+		color: var(--muted);
+	}
+
+	.tags-text-input {
+		width: 100%;
+		padding: 0.45rem 0.7rem;
+		border-radius: 999px;
+		border: 1px solid var(--border);
+		background: var(--surface);
+		color: var(--text);
+		font-size: 0.85rem;
+	}
+
+	.tags-text-input:focus {
+		outline: none;
+		border-color: var(--accent);
+		box-shadow: 0 0 0 1px var(--accent-soft);
+	}
+	.section-tags .tag-chip {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.15rem;
+		padding: 0.05rem 0.4rem;
+		border-radius: 999px;
+		font-size: 0.68rem;
+		font-weight: 500;
+		color: var(--muted);
+		background: color-mix(in srgb, var(--accent) 10%, var(--surface));
+		border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--border));
+		box-shadow:
+			0 0 0 1px color-mix(in srgb, var(--accent) 30%, transparent),
+			0 0 8px color-mix(in srgb, var(--accent) 30%, transparent);
+		cursor: pointer;
+	}
+	.section-tags .tag-chip-label {
+		max-width: 110px;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+	.section-tags .tag-chip-remove {
+		margin-left: 0.25rem;
+		font-size: 0.7rem;
+		line-height: 1;
+		opacity: 0.7;
 	}
 	.supported-kinds-wrap {
 		display: flex;
@@ -993,5 +1210,71 @@
 		flex: 1;
 		min-height: 0;
 		overflow-y: auto;
+	}
+	.copy-app-backdrop {
+		position: fixed;
+		inset: 0;
+		background: rgba(0, 0, 0, 0.5);
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		z-index: 1000;
+		padding: 1rem;
+	}
+	.copy-app-dialog {
+		background: var(--card-bg, var(--card));
+		border: 1px solid var(--border);
+		border-radius: 12px;
+		padding: 1.5rem;
+		min-width: 320px;
+		max-width: 440px;
+		box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+	}
+	.copy-app-dialog-title {
+		margin: 0 0 0.5rem 0;
+		font-size: 1.2rem;
+		color: var(--text);
+	}
+	.copy-app-dialog-desc {
+		margin: 0 0 1rem 0;
+		font-size: 0.9rem;
+		color: var(--muted);
+		line-height: 1.45;
+	}
+	.copy-app-dialog-error {
+		margin: 0 0 1rem 0;
+		font-size: 0.9rem;
+		color: var(--error, #dc2626);
+	}
+	.copy-app-dialog-actions {
+		display: flex;
+		justify-content: flex-end;
+		gap: 0.5rem;
+		flex-wrap: wrap;
+	}
+	.copy-app-dialog-btn {
+		padding: 0.5rem 1rem;
+		font-size: 0.9rem;
+		border-radius: 8px;
+		cursor: pointer;
+		border: 1px solid var(--border);
+		background: var(--surface);
+		color: var(--text);
+	}
+	.copy-app-dialog-btn:disabled {
+		opacity: 0.7;
+		cursor: not-allowed;
+	}
+	.copy-app-dialog-btn.secondary:hover:not(:disabled) {
+		background: color-mix(in srgb, var(--accent) 15%, var(--surface));
+		border-color: var(--accent);
+	}
+	.copy-app-dialog-btn.primary {
+		background: var(--accent);
+		color: var(--accent-fg, #fff);
+		border-color: var(--accent);
+	}
+	.copy-app-dialog-btn.primary:hover:not(:disabled) {
+		filter: brightness(1.1);
 	}
 </style>

@@ -10,7 +10,12 @@ from fastapi import APIRouter, HTTPException, Depends, Response
 from db.migrate import QUICK_RUNS_PROJECT_ID
 from config import get_media_storage_config
 
-from dependencies import get_db, get_media_storage_service, get_run_queue_state
+from dependencies import get_db, get_media_storage_service, get_run_queue_state, COMFY_URL
+from services.comfyui_info import (
+    normalize_comfy_url as _normalize_comfy_url,
+    get_runs_remote_storage_bytes_batch,
+    get_runs_remote_storage_bytes_deduplicated,
+)
 from services.run_serialization import (
     safe_json_loads,
     latent_resolution_from_input_snapshot,
@@ -311,6 +316,7 @@ def list_project_runs(
         error = mem_run.get("error", r.error) if mem_run else r.error
         queue_position = mem_run.get("queue_position") if mem_run else None
         comfyui_unreachable_warning = mem_run.get("comfyui_unreachable_warning") if mem_run else None
+        # Sizes are loaded separately via GET .../runs/storage_sizes so the list returns fast
         out.append({
             "id": r.id,
             "project_id": r.project_id,
@@ -331,12 +337,144 @@ def list_project_runs(
             "local_storage_status": r.local_storage_status,
             "remote_status": r.remote_status,
             "local_path": r.local_path,
+            "local_storage_bytes": None,
+            "remote_storage_bytes": None,
             "comfyui_unreachable_warning": comfyui_unreachable_warning,
             "parent_run_id": r.parent_run_id,
             "parent_media_id": r.parent_media_id,
             "root_run_id": r.root_run_id,
         })
     return {"runs": out, "total": total}
+
+
+def _format_run_date_ms(ms: int) -> str:
+    try:
+        return time.strftime("%Y-%m-%d", time.gmtime(ms / 1000))
+    except Exception:
+        return time.strftime("%Y-%m-%d", time.gmtime())
+
+
+@router.get("/projects/{project_id}/runs/storage_sizes")
+def get_project_runs_storage_sizes(
+    project_id: str,
+    run_ids: str,
+    db=Depends(get_db),
+    service=Depends(get_media_storage_service),
+):
+    """Return local and remote storage bytes for the given run IDs (comma-separated). Runs must belong to the project."""
+    _, _, app_repo, run_repo, project_repo, _, _ = db
+    proj = project_repo.get_project(project_id)
+    if not proj:
+        raise HTTPException(status_code=404, detail="Project not found")
+    ids = [rid.strip() for rid in (run_ids or "").split(",") if rid.strip()]
+    if not ids:
+        return {}
+    result: dict[str, dict[str, int | None]] = {}
+    runs_with_images: list[tuple[str, str, list]] = []  # (run_id, comfy_url, images)
+    for rid in ids:
+        r = run_repo.get_run(rid)
+        if not r or r.project_id != project_id:
+            continue
+        result[rid] = {"local_storage_bytes": None, "remote_storage_bytes": None}
+        if r.local_storage_status in ("saved", "partial"):
+            result[rid]["local_storage_bytes"] = service.get_run_local_storage_bytes(r)
+        run_images = safe_json_loads(r.images_json, [])
+        if run_images:
+            app = app_repo.get_app_by_id(r.app_id) if r.app_id else None
+            raw_url = (r.comfyui_url or (app.comfyui_url if app else None) or COMFY_URL or "").strip()
+            # Always try to resolve a ComfyUI URL for remote size when run has images
+            if not raw_url:
+                raw_url = (COMFY_URL or "http://localhost:8188/").strip()
+            comfy_url = _normalize_comfy_url(raw_url).rstrip("/") if raw_url else ""
+            if comfy_url:
+                runs_with_images.append((rid, comfy_url, run_images))
+    by_url: dict[str, list[tuple[str, list]]] = {}
+    for rid, url, imgs in runs_with_images:
+        by_url.setdefault(url, []).append((rid, imgs))
+    for url, entries in by_url.items():
+        groups = [imgs for _, imgs in entries]
+        sizes = get_runs_remote_storage_bytes_batch(url, groups)
+        if sizes is None:
+            sizes = get_runs_remote_storage_bytes_deduplicated(url, groups)
+        for i, (rid, _) in enumerate(entries):
+            if i < len(sizes):
+                result[rid]["remote_storage_bytes"] = sizes[i]
+    return result
+
+
+@router.post("/projects/{project_id}/runs/move")
+def move_runs_to_project(
+    project_id: str,
+    body: dict,
+    db=Depends(get_db),
+):
+    run_ids = body.get("run_ids")
+    target_project_id = body.get("target_project_id")
+    if not isinstance(run_ids, list) or not run_ids:
+        raise HTTPException(status_code=400, detail="run_ids must be a non-empty list")
+    if not target_project_id or not isinstance(target_project_id, str) or not target_project_id.strip():
+        raise HTTPException(status_code=400, detail="target_project_id is required")
+    target_project_id = target_project_id.strip()
+    if target_project_id == project_id:
+        raise HTTPException(status_code=400, detail="Target project must be different from source project")
+
+    _, _, _, run_repo, project_repo, _, _ = db
+    source_proj = project_repo.get_project(project_id)
+    if not source_proj:
+        raise HTTPException(status_code=404, detail="Source project not found")
+    if getattr(source_proj, "archived_at", None) is not None:
+        raise HTTPException(status_code=400, detail="Cannot move runs from an archived project")
+
+    target_proj = project_repo.get_project(target_project_id)
+    if not target_proj:
+        raise HTTPException(status_code=404, detail="Target project not found")
+    if getattr(target_proj, "archived_at", None) is not None:
+        raise HTTPException(status_code=400, detail="Cannot move runs into an archived project")
+
+    run_ids = [str(rid).strip() for rid in run_ids if rid]
+    if not run_ids:
+        raise HTTPException(status_code=400, detail="run_ids must be a non-empty list")
+
+    runs_to_move = []
+    for rid in run_ids:
+        r = run_repo.get_run(rid)
+        if not r:
+            raise HTTPException(status_code=404, detail=f"Run not found: {rid}")
+        if r.project_id != project_id:
+            raise HTTPException(status_code=400, detail=f"Run {rid} does not belong to this project")
+        runs_to_move.append(r)
+
+    root = (get_media_storage_config().root_path or "").strip()
+    if root:
+        for run in runs_to_move:
+            run_date = _format_run_date_ms(run.created_at)
+            group_or_run_id = run.run_group_id or run.id
+            old_dir = Path(root) / project_id / run_date / group_or_run_id
+            new_dir = Path(root) / target_project_id / run_date / group_or_run_id
+            if old_dir.exists() and old_dir.is_dir():
+                try:
+                    new_dir.parent.mkdir(parents=True, exist_ok=True)
+                    if new_dir.exists():
+                        shutil.rmtree(new_dir)
+                    shutil.move(str(old_dir), str(new_dir))
+                except Exception as e:
+                    logger.warning("move_runs_to_project: failed to move run dir %s -> %s: %s", old_dir, new_dir, e)
+
+    def _do_move(conn):
+        return run_repo.move_runs_to_project([r.id for r in runs_to_move], target_project_id, conn=conn)
+
+    workflow_repo = db[1]
+    n = workflow_repo.run_in_transaction(_do_move)
+
+    if root and n > 0:
+        for run in runs_to_move:
+            run_date = _format_run_date_ms(run.created_at)
+            group_or_run_id = run.run_group_id or run.id
+            new_path = Path(root) / target_project_id / run_date / group_or_run_id
+            if new_path.exists():
+                run_repo.update_run(run.id, local_path=str(new_path))
+
+    return {"moved": n}
 
 
 @router.get("/projects/{project_id}/runs/stats")
