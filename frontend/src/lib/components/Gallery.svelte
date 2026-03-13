@@ -467,6 +467,8 @@
     {@const deletingRun = run.backendRunIds?.some((id) => deletingRunIds.has(id))}
     {@const deletingLocalRun = run.backendRunIds?.some((id) => deletingLocalRunIds.has(id))}
     {@const deletingBothRun = run.backendRunIds?.some((id) => deletingBothRunIds.has(id))}
+    {@const hasVisibleContent = displayImages.length > 0 || run.status === 'queued' || run.status === 'running'}
+    {#if hasVisibleContent}
     <section class="run-section" use:observeRunSection={run.id}>
         <header
             class="run-header"
@@ -811,6 +813,7 @@
             </div>
         {/if}
     </section>
+    {/if}
 {/each}
 {/if}
 
