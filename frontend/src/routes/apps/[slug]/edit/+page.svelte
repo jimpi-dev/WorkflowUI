@@ -52,6 +52,7 @@
 	let saveError = $state('');
 	let copyError = $state('');
 	let copying = $state(false);
+	let showCopyAppDialog = $state(false);
 	let draftInitialized = $state(false);
 	let availableLoras = $state<string[]>([]);
 	let availableCheckpoints = $state<string[]>([]);
@@ -264,7 +265,12 @@
 			saveError = 'At least one output must be visible';
 			return;
 		}
+		const trimmedSlug = slug.trim();
 		const trimmedTitle = title.trim();
+		if (!trimmedSlug) {
+			saveError = 'Slug is required';
+			return;
+		}
 		if (!trimmedTitle) {
 			saveError = 'Title is required';
 			return;
@@ -277,6 +283,7 @@
 				method: 'PATCH',
 				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify({
+					slug: trimmedSlug,
 					title: trimmedTitle,
 					description: description.trim() || undefined,
 					is_public: isPublic,
@@ -303,7 +310,16 @@
 		}
 	}
 
-	async function copyApp() {
+	function openCopyAppDialog() {
+		copyError = '';
+		showCopyAppDialog = true;
+	}
+
+	function closeCopyAppDialog() {
+		if (!copying) showCopyAppDialog = false;
+	}
+
+	async function confirmCopyApp() {
 		if (!slugParam || copying) return;
 		copyError = '';
 		copying = true;
@@ -321,6 +337,8 @@
 				return;
 			}
 			const created = await res.json();
+			showCopyAppDialog = false;
+			copying = false;
 			goto(`/apps/${created.slug}/edit`);
 		} catch (e) {
 			copyError = e instanceof Error ? e.message : 'Failed to copy app';
@@ -357,8 +375,19 @@
 				<input id="app-title" type="text" bind:value={title} placeholder="My App" />
 			</section>
 			<section class="section">
-				<span class="field-label">Route (Slug)</span>
-				<p class="slug-readonly" id="app-slug-readonly">/{slugParam}</p>
+				<label for="app-slug-edit">Route (Slug)</label>
+				<input
+					id="app-slug-edit"
+					type="text"
+					class="slug-input"
+					class:slug-input-error={saveError === 'route (slug) already in use by a different app'}
+					bind:value={slug}
+					placeholder="my-app"
+				/>
+				<p class="field-help">
+					This controls the URL path:
+					<span class="slug-readonly">/app/{slug || slugParam}</span>
+				</p>
 			</section>
 			<section class="section">
 				<label for="app-desc">Description</label>
@@ -500,9 +529,6 @@
 					</select>
 				</section>
 			{/if}
-			{#if saveError}
-				<p class="error-text">{saveError}</p>
-			{/if}
 			{#if copyError}
 				<p class="error-text">{copyError}</p>
 			{/if}
@@ -520,8 +546,11 @@
 			</section>
 			<section class="section sticky-save">
 				<button onclick={save} disabled={saving}>{saving ? 'Saving…' : 'Save'}</button>
+				{#if saveError}
+					<p class="error-text save-error-inline">{saveError}</p>
+				{/if}
 				<button type="button" class="cancel-btn" onclick={() => goto('/apps')}>Cancel</button>
-				<button type="button" class="cancel-btn" onclick={copyApp} disabled={copying}>{copying ? 'Copying…' : 'Copy app'}</button>
+				<button type="button" class="cancel-btn" onclick={openCopyAppDialog} disabled={copying}>{copying ? 'Copying…' : 'Copy app'}</button>
 			</section>
 		</aside>
 
@@ -711,6 +740,40 @@
 			{/if}
 		</div>
 	</div>
+	{#if showCopyAppDialog}
+		<div
+			class="copy-app-backdrop"
+			role="dialog"
+			aria-modal="true"
+			aria-labelledby="copy-app-dialog-title"
+			tabindex="-1"
+			onclick={closeCopyAppDialog}
+			onkeydown={(e) => { if (e.key === 'Escape') closeCopyAppDialog(); }}
+		>
+			<div class="copy-app-dialog" role="presentation" tabindex="-1" onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.stopPropagation()}>
+				<h2 id="copy-app-dialog-title" class="copy-app-dialog-title">Copy app</h2>
+				<p class="copy-app-dialog-desc">
+					This app will be copied and the new copy will open on this edit page. You will be editing the copy, not the original.
+				</p>
+				{#if copyError}
+					<p class="copy-app-dialog-error">{copyError}</p>
+				{/if}
+				<div class="copy-app-dialog-actions">
+					<button type="button" class="copy-app-dialog-btn secondary" onclick={closeCopyAppDialog} disabled={copying}>
+						Cancel
+					</button>
+					<button
+						type="button"
+						class="copy-app-dialog-btn primary"
+						disabled={copying}
+						onclick={confirmCopyApp}
+					>
+						{copying ? 'Copying…' : 'Copy app'}
+					</button>
+				</div>
+			</div>
+		</div>
+	{/if}
 {/if}
 
 <style>
@@ -738,6 +801,29 @@
 		font-size: 0.9rem;
 		color: var(--muted);
 		margin: 0;
+	}
+	.slug-input {
+		width: 100%;
+		box-sizing: border-box;
+		padding: 0.45rem 0.7rem;
+		font-size: 0.9rem;
+		border: 1px solid var(--border);
+		border-radius: 6px;
+		background: var(--surface);
+		color: var(--text);
+		transition: border-color 0.2s, box-shadow 0.2s;
+	}
+	.slug-input:focus {
+		outline: none;
+		border-color: var(--accent);
+	}
+	.slug-input.slug-input-error {
+		border-color: var(--error, #dc2626);
+		box-shadow: 0 0 0 2px color-mix(in srgb, var(--error, #dc2626) 25%, transparent);
+	}
+	.slug-input.slug-input-error:focus {
+		border-color: var(--error, #dc2626);
+		box-shadow: 0 0 0 2px color-mix(in srgb, var(--error, #dc2626) 35%, transparent);
 	}
 	.section {
 		margin-bottom: 1.25rem;
@@ -1124,5 +1210,71 @@
 		flex: 1;
 		min-height: 0;
 		overflow-y: auto;
+	}
+	.copy-app-backdrop {
+		position: fixed;
+		inset: 0;
+		background: rgba(0, 0, 0, 0.5);
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		z-index: 1000;
+		padding: 1rem;
+	}
+	.copy-app-dialog {
+		background: var(--card-bg, var(--card));
+		border: 1px solid var(--border);
+		border-radius: 12px;
+		padding: 1.5rem;
+		min-width: 320px;
+		max-width: 440px;
+		box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+	}
+	.copy-app-dialog-title {
+		margin: 0 0 0.5rem 0;
+		font-size: 1.2rem;
+		color: var(--text);
+	}
+	.copy-app-dialog-desc {
+		margin: 0 0 1rem 0;
+		font-size: 0.9rem;
+		color: var(--muted);
+		line-height: 1.45;
+	}
+	.copy-app-dialog-error {
+		margin: 0 0 1rem 0;
+		font-size: 0.9rem;
+		color: var(--error, #dc2626);
+	}
+	.copy-app-dialog-actions {
+		display: flex;
+		justify-content: flex-end;
+		gap: 0.5rem;
+		flex-wrap: wrap;
+	}
+	.copy-app-dialog-btn {
+		padding: 0.5rem 1rem;
+		font-size: 0.9rem;
+		border-radius: 8px;
+		cursor: pointer;
+		border: 1px solid var(--border);
+		background: var(--surface);
+		color: var(--text);
+	}
+	.copy-app-dialog-btn:disabled {
+		opacity: 0.7;
+		cursor: not-allowed;
+	}
+	.copy-app-dialog-btn.secondary:hover:not(:disabled) {
+		background: color-mix(in srgb, var(--accent) 15%, var(--surface));
+		border-color: var(--accent);
+	}
+	.copy-app-dialog-btn.primary {
+		background: var(--accent);
+		color: var(--accent-fg, #fff);
+		border-color: var(--accent);
+	}
+	.copy-app-dialog-btn.primary:hover:not(:disabled) {
+		filter: brightness(1.1);
 	}
 </style>

@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
+	import { onMount, tick } from 'svelte';
 	import { get } from 'svelte/store';
 	import { goto, invalidate } from '$app/navigation';
 	import { page } from '$app/stores';
@@ -115,6 +115,19 @@
 	let deleteLoading = $state(false);
 	let copyingSlug = $state<string | null>(null);
 	let copyError = $state<string | null>(null);
+	let copySuccessMessage = $state<string | null>(null);
+	let copiedAppId = $state<string | null>(null);
+	let highlightedAppId = $state<string | null>(null);
+	const appCardRefs = new Map<string, HTMLElement>();
+
+	function registerAppCard(node: HTMLElement, slug: string) {
+		appCardRefs.set(slug, node);
+		return {
+			destroy() {
+				appCardRefs.delete(slug);
+			}
+		};
+	}
 
 	function requestDeleteApp(app: AppSummary) {
 		appToDelete = { slug: app.slug, title: app.title ?? app.slug };
@@ -150,6 +163,22 @@
 		}
 	}
 
+	function scrollToCopiedAndHighlight(slug: string) {
+		highlightedAppId = slug;
+		function tryScroll() {
+			const el = appCardRefs.get(slug);
+			if (el) {
+				el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+				setTimeout(() => {
+					if (highlightedAppId === slug) highlightedAppId = null;
+				}, 4500);
+				return;
+			}
+			tick().then(() => setTimeout(tryScroll, 50));
+		}
+		tick().then(tryScroll);
+	}
+
 	async function copyApp(app: AppSummary) {
 		copyError = null;
 		copyingSlug = app.slug;
@@ -167,8 +196,19 @@
 				);
 			}
 			const created = await res.json();
-			invalidate(get(page).url);
-			goto(`/apps/${created.slug}/edit`);
+			const newSlug: string | undefined = created?.slug;
+			await invalidate(get(page).url);
+
+			if (newSlug) {
+				copiedAppId = newSlug;
+				copySuccessMessage = 'The app has been copied.';
+				scrollToCopiedAndHighlight(newSlug);
+				setTimeout(() => {
+					if (copySuccessMessage === 'The app has been copied.') {
+						copySuccessMessage = null;
+					}
+				}, 3000);
+			}
 		} catch (e) {
 			copyError = e instanceof Error ? e.message : 'Failed to copy app';
 		} finally {
@@ -602,13 +642,18 @@
 			{#if copyError}
 				<p class="copy-error-text">{copyError}</p>
 			{/if}
+			{#if copySuccessMessage}
+				<p class="copy-success-text">{copySuccessMessage}</p>
+			{/if}
 			<div class="apps-container" class:list-view={viewMode === 'list'}>
 			{#each sorted as app (app.id)}
 				<div
 					class="app-card"
+					class:app-card-highlighted={app.slug === highlightedAppId}
 					role="button"
 					tabindex="0"
 					aria-label="Open {app.title} in Quick runs"
+					use:registerAppCard={app.slug}
 					onclick={(e) => onCardClick(e, app.slug)}
 					onkeydown={(e) => onCardKeydown(e, app.slug)}
 				>
@@ -2068,6 +2113,30 @@
 		margin: 0 0 0.5rem 0;
 		font-size: 0.9rem;
 		color: var(--error, #dc2626);
+	}
+	.copy-success-text {
+		margin: 0 0 0.5rem 0;
+		font-size: 0.9rem;
+		color: var(--success, #16a34a);
+	}
+	.app-card-highlighted {
+		border: 2px solid var(--accent);
+		box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 40%, transparent),
+			0 0 20px color-mix(in srgb, var(--accent) 50%, transparent),
+			0 0 40px color-mix(in srgb, var(--accent) 30%, transparent);
+		animation: copiedGlow 1.2s ease-in-out infinite;
+	}
+	@keyframes copiedGlow {
+		0%, 100% {
+			box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 40%, transparent),
+				0 0 20px color-mix(in srgb, var(--accent) 50%, transparent),
+				0 0 40px color-mix(in srgb, var(--accent) 30%, transparent);
+		}
+		50% {
+			box-shadow: 0 0 0 3px var(--accent),
+				0 0 28px color-mix(in srgb, var(--accent) 70%, transparent),
+				0 0 56px color-mix(in srgb, var(--accent) 45%, transparent);
+		}
 	}
 	.delete-app-actions {
 		display: flex;
