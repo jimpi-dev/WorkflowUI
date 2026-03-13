@@ -80,6 +80,7 @@ def list_apps(db=Depends(get_db)):
             "app_version": getattr(a, "app_version", "1.0.0"),
             "supported_input_kinds": _app_supported_input_kinds(a, workflow_repo),
             "header_color": a.header_color,
+            "tags": json.loads(a.tags_json) if getattr(a, "tags_json", None) else [],
             "created_from_image_import": getattr(a, "created_from_image_import", False),
         }
         for a in apps
@@ -127,6 +128,16 @@ def post_apps(body: dict, db=Depends(get_db)):
     if embed_on_save is not None and not isinstance(embed_on_save, bool):
         embed_on_save = None
     app_version = (body.get("app_version") or "1.0.0").strip() if isinstance(body.get("app_version"), str) else "1.0.0"
+    raw_tags = body.get("tags")
+    tags_json = None
+    if isinstance(raw_tags, list):
+        tags = []
+        for t in raw_tags:
+            if isinstance(t, str):
+                tt = t.strip().lower()
+                if tt and tt not in tags:
+                    tags.append(tt)
+        tags_json = json.dumps(tags)
     created = app_repo.create_app(
         app_id,
         workflow_version_id,
@@ -142,6 +153,7 @@ def post_apps(body: dict, db=Depends(get_db)):
         comfyui_url=comfyui_url or None,
         supported_input_kinds_json=supported_input_kinds_json,
         header_color=header_color.strip() if header_color else None,
+        tags_json=tags_json,
         embed_workflowui_metadata_on_download=embed_on_download,
         embed_workflowui_metadata_on_save=embed_on_save,
     )
@@ -160,6 +172,7 @@ def post_apps(body: dict, db=Depends(get_db)):
         "comfyui_url": created.comfyui_url,
         "supported_input_kinds": json.loads(created.supported_input_kinds_json) if created.supported_input_kinds_json else None,
         "header_color": created.header_color,
+        "tags": json.loads(created.tags_json) if getattr(created, "tags_json", None) else [],
         "embedWorkflowuiMetadataOnDownload": created.embed_workflowui_metadata_on_download if created.embed_workflowui_metadata_on_download is not None else embed_cfg.embed_on_download,
         "embedWorkflowuiMetadataOnSave": created.embed_workflowui_metadata_on_save if created.embed_workflowui_metadata_on_save is not None else embed_cfg.embed_on_save,
     }
@@ -178,6 +191,7 @@ def list_public_apps(db=Depends(get_db)):
             "app_version": getattr(a, "app_version", "1.0.0"),
             "supported_input_kinds": _app_supported_input_kinds(a, workflow_repo),
             "header_color": a.header_color,
+            "tags": json.loads(a.tags_json) if getattr(a, "tags_json", None) else [],
         }
         for a in apps
     ]
@@ -209,6 +223,18 @@ def patch_app(slug: str, body: dict, db=Depends(get_db)):
     if "header_color" in body:
         hc = body["header_color"]
         kwargs["header_color"] = hc.strip() if isinstance(hc, str) and hc.strip() else None
+    if "tags" in body:
+        raw_tags = body["tags"]
+        tags_json = None
+        if isinstance(raw_tags, list):
+            tags: list[str] = []
+            for t in raw_tags:
+                if isinstance(t, str):
+                    tt = t.strip().lower()
+                    if tt and tt not in tags:
+                        tags.append(tt)
+            tags_json = json.dumps(tags)
+        kwargs["tags_json"] = tags_json
     if "embed_workflowui_metadata_on_download" in body:
         v = body["embed_workflowui_metadata_on_download"]
         kwargs["embed_workflowui_metadata_on_download"] = bool(v) if isinstance(v, bool) else None
@@ -234,6 +260,7 @@ def patch_app(slug: str, body: dict, db=Depends(get_db)):
         "comfyui_url": updated.comfyui_url,
         "supported_input_kinds": json.loads(updated.supported_input_kinds_json) if updated.supported_input_kinds_json else None,
         "header_color": updated.header_color,
+        "tags": json.loads(updated.tags_json) if getattr(updated, "tags_json", None) else [],
         "embedWorkflowuiMetadataOnDownload": updated.embed_workflowui_metadata_on_download if updated.embed_workflowui_metadata_on_download is not None else embed_cfg.embed_on_download,
         "embedWorkflowuiMetadataOnSave": updated.embed_workflowui_metadata_on_save if updated.embed_workflowui_metadata_on_save is not None else embed_cfg.embed_on_save,
     }
@@ -348,6 +375,7 @@ def get_app_by_slug(slug: str, db=Depends(get_db)):
             "comfyui_url": app.comfyui_url,
             "supported_input_kinds": supported,
             "header_color": app.header_color,
+            "tags": json.loads(app.tags_json) if getattr(app, "tags_json", None) else [],
             "created_from_image_import": getattr(app, "created_from_image_import", False),
             "embedWorkflowuiMetadataOnDownload": _resolved_embed_on_download(app),
             "embedWorkflowuiMetadataOnSave": _resolved_embed_on_save(app),
