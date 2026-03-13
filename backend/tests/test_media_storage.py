@@ -114,3 +114,25 @@ def test_save_uses_comfy_filename_and_unique_counter(monkeypatch, service, repos
     assert "comfy_output_1.png" in files
     assert "comfy_output_2.png" in files
     assert len(files) == 2
+
+
+def test_get_run_local_storage_bytes(monkeypatch, service, repos):
+    media_service, root = service
+    project_repo, run_repo, _ = repos
+    project = project_repo.create_project(str(uuid.uuid4()), "p", None, 0, 0)
+    run_id = create_run(run_repo, project.id)
+    run = run_repo.get_run(run_id)
+
+    # No local storage yet
+    assert media_service.get_run_local_storage_bytes(run) is None
+
+    # After save, size is sum of output file sizes
+    monkeypatch.setattr(MediaStorageService, "_fetch_remote_image_bytes", lambda *_: b"abcd")  # 4 bytes
+    monkeypatch.setattr(MediaStorageService, "_delete_remote_images", lambda *_: (True, None))
+    save_result = media_service.save_run(run_id)
+    assert save_result["local_storage_status"] == "saved"
+
+    run = run_repo.get_run(run_id)
+    total = media_service.get_run_local_storage_bytes(run)
+    assert total is not None
+    assert total == 4  # single image, 4 bytes

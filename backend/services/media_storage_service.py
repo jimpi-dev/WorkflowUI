@@ -797,6 +797,24 @@ class MediaStorageService:
         except Exception:
             return []
 
+    def get_run_local_storage_bytes(self, run: Run) -> int | None:
+        if run.local_storage_status not in ("saved", "partial"):
+            return None
+        run_dir = self._resolve_run_dir(run)
+        if run_dir is None or not run_dir.exists():
+            return None
+        total = 0
+        for fname in self._get_run_saved_filenames(run_dir, run):
+            if not fname:
+                continue
+            path = run_dir / fname
+            if path.is_file():
+                try:
+                    total += path.stat().st_size
+                except OSError:
+                    pass
+        return total
+
     def _rewrite_metadata_after_removing_outputs(
         self, run_dir: Path, run: Run, indices_to_remove: list[int]
     ) -> None:
