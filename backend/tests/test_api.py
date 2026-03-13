@@ -183,6 +183,139 @@ def test_get_project_runs_stats(client):
     assert data["total_generations"] == 0
 
 
+def test_move_runs_to_project_success(client):
+    import dependencies
+
+    imp = client.post(
+        "/import",
+        json={"name": "MoveWF", "graph": SAMPLE_WORKFLOW_GRAPH},
+    )
+    version_id = imp.json()["workflow_version_id"]
+    source_proj = client.post("/projects", json={"name": "SourceProj"})
+    source_id = source_proj.json()["id"]
+    target_proj = client.post("/projects", json={"name": "TargetProj"})
+    target_id = target_proj.json()["id"]
+
+    run_repo = dependencies.get_db()[3]
+    created_at = int(time.time() * 1000)
+    run1 = run_repo.create_run(
+        id="move-run-1",
+        project_id=source_id,
+        workflow_version_id=version_id,
+        app_id=None,
+        status="done",
+        created_at=created_at,
+    )
+    run2 = run_repo.create_run(
+        id="move-run-2",
+        project_id=source_id,
+        workflow_version_id=version_id,
+        app_id=None,
+        status="done",
+        created_at=created_at + 1,
+    )
+
+    r = client.post(
+        f"/projects/{source_id}/runs/move",
+        json={"run_ids": [run1.id, run2.id], "target_project_id": target_id},
+    )
+    assert r.status_code == 200
+    data = r.json()
+    assert data["moved"] == 2
+
+    source_runs = client.get(f"/projects/{source_id}/runs")
+    assert source_runs.status_code == 200
+    assert len(source_runs.json()["runs"]) == 0
+
+    target_runs = client.get(f"/projects/{target_id}/runs")
+    assert target_runs.status_code == 200
+    target_run_ids = [x["id"] for x in target_runs.json()["runs"]]
+    assert run1.id in target_run_ids
+    assert run2.id in target_run_ids
+
+
+def test_move_runs_to_project_target_same_as_source_returns_400(client):
+    create = client.post("/projects", json={"name": "SameProj"})
+    project_id = create.json()["id"]
+    r = client.post(
+        f"/projects/{project_id}/runs/move",
+        json={"run_ids": ["any-run-id"], "target_project_id": project_id},
+    )
+    assert r.status_code == 400
+    assert "different" in (r.json().get("detail") or "").lower()
+
+
+def test_move_runs_to_project_empty_run_ids_returns_400(client):
+    create = client.post("/projects", json={"name": "EmptyRunsProj"})
+    project_id = create.json()["id"]
+    r = client.post(
+        f"/projects/{project_id}/runs/move",
+        json={"run_ids": [], "target_project_id": "other-project-id"},
+    )
+    assert r.status_code == 400
+
+
+def test_move_runs_to_project_source_not_found_returns_404(client):
+    r = client.post(
+        "/projects/nonexistent-source/runs/move",
+        json={"run_ids": ["run-1"], "target_project_id": "some-target-id"},
+    )
+    assert r.status_code == 404
+
+
+def test_move_runs_to_project_target_not_found_returns_404(client):
+    import dependencies
+
+    imp = client.post("/import", json={"name": "MoveNF", "graph": SAMPLE_WORKFLOW_GRAPH})
+    version_id = imp.json()["workflow_version_id"]
+    source_proj = client.post("/projects", json={"name": "SourceNF"})
+    source_id = source_proj.json()["id"]
+
+    run_repo = dependencies.get_db()[3]
+    run = run_repo.create_run(
+        id="move-nf-run",
+        project_id=source_id,
+        workflow_version_id=version_id,
+        app_id=None,
+        status="done",
+        created_at=int(time.time() * 1000),
+    )
+
+    r = client.post(
+        f"/projects/{source_id}/runs/move",
+        json={"run_ids": [run.id], "target_project_id": "nonexistent-target"},
+    )
+    assert r.status_code == 404
+
+
+def test_move_runs_to_project_run_not_in_source_returns_400(client):
+    import dependencies
+
+    imp = client.post("/import", json={"name": "MoveOther", "graph": SAMPLE_WORKFLOW_GRAPH})
+    version_id = imp.json()["workflow_version_id"]
+    source_proj = client.post("/projects", json={"name": "SourceOther"})
+    source_id = source_proj.json()["id"]
+    other_proj = client.post("/projects", json={"name": "OtherProj"})
+    other_id = other_proj.json()["id"]
+
+    run_repo = dependencies.get_db()[3]
+    run = run_repo.create_run(
+        id="move-other-run",
+        project_id=other_id,
+        workflow_version_id=version_id,
+        app_id=None,
+        status="done",
+        created_at=int(time.time() * 1000),
+    )
+
+    r = client.post(
+        f"/projects/{source_id}/runs/move",
+        json={"run_ids": [run.id], "target_project_id": other_id},
+    )
+    assert r.status_code == 400
+    assert "does not belong" in (r.json().get("detail") or "").lower()
+
+
 def test_post_apps_success(client):
     imp = client.post(
         "/import",

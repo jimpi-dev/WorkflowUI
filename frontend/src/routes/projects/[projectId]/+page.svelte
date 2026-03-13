@@ -6,6 +6,7 @@
 	import { onMount, onDestroy, tick, untrack } from 'svelte';
 	import { getThumbSizeCookie, setThumbSizeCookie, getNotesCollapsedCookie, setNotesCollapsedCookie, getLeftPanelCollapsedCookie, setLeftPanelCollapsedCookie, getSkipDeleteConfirmCookie, setSkipDeleteConfirmCookie, type ThumbSize, type DeleteConfirmKey } from '$lib/cookie';
 	import SendToAppDialog from '$lib/components/SendToAppDialog.svelte';
+	import MoveRunsDialog from '$lib/components/MoveRunsDialog.svelte';
 	import ThumbnailOverlay from '$lib/components/ThumbnailOverlay.svelte';
 	import PageLoadingIndicator from '$lib/components/PageLoadingIndicator.svelte';
 	import RunHeaderActions from '$lib/components/RunHeaderActions.svelte';
@@ -104,6 +105,9 @@
 	let sendToAppOutputIndex = $state<number | null>(null);
 
 	let deleteProjectDialogOpen = $state(false);
+
+	let selectedRunIds = $state<Set<string>>(new Set());
+	let moveDialogOpen = $state(false);
 
 	let metadataPanelRunId = $state<string | null>(null);
 	let metadataPanelMode = $state<'output' | 'run'>('output');
@@ -1213,6 +1217,15 @@
 		return (selectedInGroup[groupId]?.size ?? 0) > 0;
 	}
 
+	function setCheckboxIndeterminate(el: HTMLInputElement, value: boolean) {
+		el.indeterminate = !!value;
+		return {
+			update(value: boolean) {
+				el.indeterminate = !!value;
+			},
+		};
+	}
+
 	function getSelectedByRun(group: (typeof runGroups)[0]): Map<string, number[]> {
 		const sel = selectedInGroup[group.groupId];
 		if (!sel?.size) return new Map();
@@ -1977,6 +1990,21 @@
 				</div>
 				{#if !loading}
 					<div class="runs-list-head-actions">
+						{#if runGroups.length > 0}
+						<div class="move-runs-actions">
+							<button
+								type="button"
+								class="move-to-project-btn"
+								disabled={selectedRunIds.size === 0}
+								title={selectedRunIds.size === 0 ? 'Select at least one run using the checkbox on each group, then click here to move runs to another project' : `Move ${selectedRunIds.size} run(s) to another project`}
+								aria-label={selectedRunIds.size === 0 ? 'Select at least one run using the checkbox on each group to enable move' : 'Move selected runs to another project'}
+								onclick={() => (moveDialogOpen = true)}
+							>
+								Move to project
+							</button>
+							<span class="gallery-size-divider" aria-hidden="true"></span>
+						</div>
+						{/if}
 						<label class="favorites-filter-option" title="Show only favorited runs">
 							<span class="favorites-filter-label">Favorites only</span>
 							<button
@@ -2141,6 +2169,25 @@
 								onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleGroup(group.groupId); } }}
 							>
 								<div class="run-title">
+									<label
+										class="move-runs-group-checkbox-wrap"
+										title="Select runs in this group to move to another project"
+										onclick={(e) => e.stopPropagation()}
+										onkeydown={(e) => e.stopPropagation()}
+									>
+										<input
+											type="checkbox"
+											class="move-runs-checkbox"
+											aria-label="Select runs in this group for move"
+											checked={group.runs.length > 0 && group.runs.every((r) => selectedRunIds.has(r.id))}
+											use:setCheckboxIndeterminate={group.runs.some((r) => selectedRunIds.has(r.id)) && !group.runs.every((r) => selectedRunIds.has(r.id))}
+											onchange={(e) => {
+												const ids = group.runs.map((r) => r.id);
+												if ((e.currentTarget as HTMLInputElement).checked) selectedRunIds = new Set([...selectedRunIds, ...ids]);
+												else selectedRunIds = new Set([...selectedRunIds].filter((id) => !ids.includes(id)));
+											}}
+										/>
+									</label>
 									<span class="run-dot"></span>
 									<RunAppBadge
 										appHeaderColor={group.app_header_color ?? undefined}
@@ -2497,6 +2544,21 @@
 			sendFromOutput={sendToAppOutputIndex}
 			projectId={data.projectId}
 			onClose={() => { sendToAppRunId = null; sendToAppOutputIndex = null; }}
+		/>
+	{/if}
+	{#if moveDialogOpen && data.project}
+		<MoveRunsDialog
+			open={moveDialogOpen}
+			sourceProjectId={data.projectId}
+			sourceProjectName={data.project.name ?? ''}
+			runIds={Array.from(selectedRunIds)}
+			onClose={() => { moveDialogOpen = false; }}
+			onMoved={() => {
+				const moved = new Set(selectedRunIds);
+				runs = runs.filter((r) => !moved.has(r.id));
+				selectedRunIds = new Set();
+				moveDialogOpen = false;
+			}}
 		/>
 	{/if}
 	{#if data.project && deleteProjectDialogOpen}
@@ -3515,6 +3577,47 @@
 		align-items: center;
 		gap: 0.5rem;
 		flex-wrap: wrap;
+	}
+	.move-runs-actions {
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+	}
+	.move-runs-checkbox {
+		width: 1rem;
+		height: 1rem;
+		cursor: pointer;
+		accent-color: var(--accent);
+	}
+	.move-to-project-btn {
+		padding: 0.4rem 0.75rem;
+		font-size: 0.85rem;
+		font-weight: 500;
+		border-radius: 8px;
+		border: 1px solid var(--border);
+		background: var(--surface);
+		color: var(--text);
+		cursor: pointer;
+		transition: border-color 0.2s, background 0.2s;
+	}
+	.move-to-project-btn:hover:not(:disabled) {
+		border-color: var(--accent);
+		background: var(--accent-soft, color-mix(in srgb, var(--accent) 12%, transparent));
+	}
+	.move-to-project-btn:disabled {
+		opacity: 0.6;
+		cursor: not-allowed;
+	}
+	.move-runs-group-checkbox-wrap {
+		display: inline-flex;
+		align-items: center;
+		cursor: pointer;
+		margin-right: 0.25rem;
+		flex-shrink: 0;
+	}
+	.move-runs-group-checkbox-wrap .move-runs-checkbox {
+		width: 0.95rem;
+		height: 0.95rem;
 	}
 	.favorites-filter-option {
 		display: inline-flex;
