@@ -87,7 +87,7 @@
 
 	$effect(() => {
 		if ($queuePanelOpen) {
-			if (!queue) loading = true;
+			loading = true;
 			fetchQueue();
 			startPolling();
 		} else {

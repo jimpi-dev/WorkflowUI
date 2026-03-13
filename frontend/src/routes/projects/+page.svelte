@@ -141,7 +141,7 @@
 
 	let search = $state('');
 	let sortBy = $state<SortKey>('updated');
-	let colorFilter = $state<string>('all');
+	let tagFilters = $state<string[]>([]);
 	let viewMode = $state<'grid' | 'list'>('grid');
 
 	function setViewMode(mode: 'grid' | 'list') {
@@ -177,36 +177,48 @@
 		return name.includes(q) || desc.includes(q) || tags.includes(q);
 	}
 
-	const distinctHeaderColors = $derived(
-		[...new Set(data.projects.map((p) => p.header_color).filter((c): c is string => Boolean(c && String(c).trim())))].sort()
+	const allTags = $derived(
+		Array.from(
+			new Set(
+				(data.projects ?? [])
+					.flatMap((p) => p.tags ?? [])
+					.map((t) => (t ?? '').trim().toLowerCase())
+					.filter(Boolean)
+			)
+		).sort()
 	);
 
-	const colorFilterOptions = $derived.by(() => {
-		const projects = data.projects;
-		const noColorCount = projects.filter((p) => !p.header_color).length;
-		const byColor = new Map<string, number>();
-		for (const p of projects) {
-			const c = p.header_color;
-			if (c && String(c).trim()) byColor.set(c, (byColor.get(c) ?? 0) + 1);
-		}
-		const options: { value: string; label: string; count: number; swatch?: string }[] = [
-			{ value: 'all', label: 'All', count: projects.length }
-		];
-		options.push({ value: '', label: 'No color', count: noColorCount });
-		for (const hex of distinctHeaderColors) {
-			options.push({ value: hex, label: hex, count: byColor.get(hex) ?? 0, swatch: hex });
-		}
-		return options;
-	});
-
-	function matchesColorFilter(p: ProjectSummary): boolean {
-		if (colorFilter === 'all') return true;
-		if (colorFilter === '') return !p.header_color;
-		return (p.header_color ?? '') === colorFilter;
+	function matchesTagFilter(p: ProjectSummary): boolean {
+		if (!tagFilters.length) return true;
+		const projTags = (p.tags ?? []).map((t) => (t ?? '').trim().toLowerCase());
+		if (!projTags.length) return false;
+		return tagFilters.some((t) => projTags.includes(t));
 	}
 
+	let tagFilterOpen = $state(false);
+
+	$effect(() => {
+		if (!tagFilterOpen) return;
+		const onClick = (e: MouseEvent) => {
+			if (!(e.target as Element).closest('.tag-filter')) {
+				tagFilterOpen = false;
+			}
+		};
+		const onKey = (e: KeyboardEvent) => {
+			if (e.key === 'Escape') {
+				tagFilterOpen = false;
+			}
+		};
+		document.addEventListener('click', onClick);
+		document.addEventListener('keydown', onKey);
+		return () => {
+			document.removeEventListener('click', onClick);
+			document.removeEventListener('keydown', onKey);
+		};
+	});
+
 	const filtered = $derived(
-		data.projects.filter((p) => matchesSearch(p) && matchesColorFilter(p))
+		data.projects.filter((p) => matchesSearch(p) && matchesTagFilter(p))
 	);
 
 	const sorted = $derived.by(() => {
@@ -293,25 +305,83 @@
 					<option value={opt.value}>{opt.label}</option>
 				{/each}
 			</select>
-			<div class="color-filter" role="group" aria-label="Filter by color">
-				{#each colorFilterOptions as opt}
-					<button
-						type="button"
-						class="color-filter-btn"
-						class:active={colorFilter === opt.value}
-						class:has-swatch={!!opt.swatch}
-						onclick={() => setColorFilter(opt.value)}
-						aria-pressed={colorFilter === opt.value}
-						aria-label="{opt.swatch ? `Color ${opt.value} (${opt.count} projects)` : `${opt.label} (${opt.count} projects)`}"
-					>
-						{#if opt.swatch}
-							<span class="color-filter-swatch" style="background-color: {opt.swatch}" aria-hidden="true"></span>
+			<div class="tag-filter">
+				<button
+					type="button"
+					class="tag-filter-trigger"
+					onclick={() => (tagFilterOpen = !tagFilterOpen)}
+					aria-haspopup="listbox"
+					aria-expanded={tagFilterOpen}
+					id="tag-filter-trigger"
+				>
+					<span class="tag-filter-trigger-main">
+						{#if !tagFilters.length}
+							<span class="tag-filter-summary-text">All tags</span>
 						{:else}
-							<span class="color-filter-label">{opt.label}</span>
+							<span class="tag-filter-summary-text">
+								{tagFilters.length === 1 ? '1 tag' : `${tagFilters.length} tags`}
+							</span>
+							<span class="tag-filter-summary-chips" aria-hidden="true">
+								{#each tagFilters.slice(0, 3) as tag (tag)}
+									<span class="tag-chip tag-chip-small">{tag}</span>
+								{/each}
+								{#if tagFilters.length > 3}
+									<span class="tag-chip tag-chip-more">+{tagFilters.length - 3}</span>
+								{/if}
+							</span>
 						{/if}
-						<span class="color-filter-count">({opt.count})</span>
-					</button>
-				{/each}
+					</span>
+					<svg class="tag-filter-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+						<path d="M6 9l6 6 6-6"/>
+					</svg>
+				</button>
+				{#if tagFilterOpen}
+					<div
+						class="tag-filter-menu"
+						role="listbox"
+						aria-multiselectable="true"
+						aria-label="Filter projects by tag"
+					>
+						<button
+							type="button"
+							class="tag-filter-option"
+							role="option"
+							aria-selected={!tagFilters.length}
+							onclick={() => (tagFilters = [])}
+						>
+							<span class="tag-filter-checkbox" aria-hidden="true">
+								{#if !tagFilters.length}
+									<span class="tag-filter-checkbox-inner"></span>
+								{/if}
+							</span>
+							<span class="tag-filter-option-text">
+								<span class="tag-filter-option-label">All tags</span>
+							</span>
+						</button>
+						{#each allTags as tag (tag)}
+							<button
+								type="button"
+								class="tag-filter-option"
+								role="option"
+								aria-selected={tagFilters.includes(tag)}
+								onclick={() => {
+									const set = new Set(tagFilters);
+									if (set.has(tag)) set.delete(tag); else set.add(tag);
+									tagFilters = Array.from(set);
+								}}
+							>
+								<span class="tag-filter-checkbox" aria-hidden="true">
+									{#if tagFilters.includes(tag)}
+										<span class="tag-filter-checkbox-inner"></span>
+									{/if}
+								</span>
+								<span class="tag-filter-option-text">
+									<span class="tag-filter-option-label">{tag}</span>
+								</span>
+							</button>
+						{/each}
+					</div>
+				{/if}
 			</div>
 			<div class="view-toggle" role="tablist" aria-label="View">
 				<button
@@ -406,6 +476,16 @@
 								{/if}
 								<h3 class="project-name list-name">{p.name ?? ''}</h3>
 								<span class="list-slug-desc">{#if p.description}{p.description}{:else}—{/if}</span>
+								{#if p.tags?.length}
+									<div class="project-tags list-tags">
+										{#each p.tags.slice(0, 4) as tag (tag)}
+											<span class="tag-chip tag-chip-small">{tag}</span>
+										{/each}
+										{#if (p.tags?.length ?? 0) > 4}
+											<span class="tag-chip tag-chip-more">+{(p.tags?.length ?? 0) - 4}</span>
+										{/if}
+									</div>
+								{/if}
 								<div class="list-right-group">
 									{#if showArchive}
 										<button
@@ -455,10 +535,10 @@
 							{#if p.tags?.length}
 								<div class="project-tags">
 									{#each p.tags.slice(0, 4) as tag (tag)}
-										<span class="tag">{tag}</span>
+										<span class="tag-chip tag-chip-small">{tag}</span>
 									{/each}
 									{#if (p.tags?.length ?? 0) > 4}
-										<span class="tag tag-more">+{(p.tags?.length ?? 0) - 4}</span>
+										<span class="tag-chip tag-chip-more">+{(p.tags?.length ?? 0) - 4}</span>
 									{/if}
 								</div>
 							{/if}
@@ -705,65 +785,164 @@
 		border-color: var(--accent);
 	}
 
-	.color-filter {
+	/* Tag filter (projects) */
+	.tag-filter {
+		position: relative;
 		display: flex;
-		flex-wrap: wrap;
-		align-items: center;
-		gap: 0.35rem;
+		flex-direction: column;
+		gap: 0.25rem;
+		min-width: 180px;
 	}
 
-	.color-filter-btn {
+	.tag-filter-trigger {
 		display: inline-flex;
 		align-items: center;
-		gap: 0.35rem;
-		padding: 0.5rem 0.65rem;
+		justify-content: space-between;
+		gap: 0.5rem;
+		width: 100%;
+		padding: 0.45rem 0.6rem;
 		background: var(--surface);
 		border: 1px solid var(--border);
 		border-radius: 8px;
 		color: var(--text);
-		font-size: 0.875rem;
+		font-size: 0.85rem;
 		cursor: pointer;
-		transition: border-color 0.2s, background 0.2s, color 0.2s;
+		transition: border-color 0.2s, background 0.2s, box-shadow 0.2s;
+		text-align: left;
 	}
 
-	.color-filter-btn:hover {
+	.tag-filter-trigger:hover {
 		border-color: var(--accent);
-		color: var(--accent);
-		background: var(--accent-soft);
+		background: color-mix(in srgb, var(--accent) 6%, var(--surface));
 	}
 
-	.color-filter-btn.active {
-		border-color: var(--accent);
-		color: var(--accent);
-		background: var(--accent-soft);
+	.tag-filter-trigger:focus-visible {
+		outline: 2px solid var(--accent);
+		outline-offset: 2px;
 	}
 
-	.color-filter-btn .color-filter-swatch {
-		display: inline-block;
-		width: 1.1rem;
-		height: 1.1rem;
-		border-radius: 4px;
-		border: 1px solid var(--border);
-		flex-shrink: 0;
+	.tag-filter-trigger-main {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.4rem;
+		min-width: 0;
 	}
 
-	.color-filter-btn.has-swatch .color-filter-label {
-		display: none;
-	}
-
-	.color-filter-count {
-		font-variant-numeric: tabular-nums;
-		color: var(--muted);
+	.tag-filter-summary-text {
+		white-space: nowrap;
 		font-size: 0.8rem;
 	}
 
-	.color-filter-btn.active .color-filter-count {
-		color: inherit;
+	.tag-filter-summary-chips {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.2rem;
 	}
 
-	.color-filter-btn:focus-visible {
-		outline: 2px solid var(--accent);
-		outline-offset: 2px;
+	.tag-filter-chevron {
+		flex-shrink: 0;
+		opacity: 0.7;
+	}
+
+	.tag-filter-menu {
+		position: absolute;
+		margin-top: 0.25rem;
+		min-width: 220px;
+		max-height: 320px;
+		overflow: auto;
+		background: var(--card);
+		border: 1px solid var(--border);
+		border-radius: 8px;
+		box-shadow: 0 10px 26px rgba(0, 0, 0, 0.35);
+		padding: 0.25rem 0;
+		z-index: 40;
+	}
+
+	.tag-filter-option {
+		display: flex;
+		align-items: center;
+		gap: 0.4rem;
+		width: 100%;
+		padding: 0.4rem 0.6rem;
+		background: transparent;
+		border: none;
+		color: var(--text);
+		font-size: 0.8rem;
+		cursor: pointer;
+		text-align: left;
+	}
+
+	.tag-filter-option:hover {
+		background: var(--accent-soft);
+	}
+
+	.tag-filter-checkbox {
+		width: 0.9rem;
+		height: 0.9rem;
+		border-radius: 3px;
+		border: 1px solid var(--border);
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		background: var(--surface);
+		flex-shrink: 0;
+	}
+
+	.tag-filter-checkbox-inner {
+		width: 0.55rem;
+		height: 0.55rem;
+		border-radius: 2px;
+		background: var(--accent);
+	}
+
+	.tag-filter-option-text {
+		display: flex;
+		flex-direction: column;
+		align-items: flex-start;
+		gap: 0.05rem;
+		min-width: 0;
+	}
+
+	.tag-filter-option-label {
+		font-size: 0.8rem;
+		font-weight: 500;
+	}
+
+	/* Shared tag chips (copy of /apps) */
+	.app-tags-row,
+	.project-tags,
+	.tag-filter-summary-chips {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.25rem;
+		margin-top: 0.2rem;
+	}
+
+	.tag-chip {
+		display: inline-flex;
+		align-items: center;
+		padding: 0.05rem 0.4rem;
+		border-radius: 999px;
+		font-size: 0.68rem;
+		font-weight: 500;
+		color: var(--muted);
+		background: color-mix(in srgb, var(--accent) 8%, var(--surface));
+		border: 1px solid color-mix(in srgb, var(--accent) 20%, var(--border));
+		max-width: 110px;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+
+	.tag-chip-small {
+		font-size: 0.62rem;
+		max-width: 80px;
+	}
+
+	.tag-chip-more {
+		color: var(--accent);
+		border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+		background: color-mix(in srgb, var(--accent) 12%, transparent);
 	}
 
 	.view-toggle {
@@ -1187,21 +1366,9 @@
 	.project-tags {
 		display: flex;
 		flex-wrap: wrap;
-		gap: 0.35rem;
-		margin-top: 0.35rem;
-	}
-
-	.tag {
-		font-size: 0.7rem;
-		padding: 0.2rem 0.45rem;
-		background: var(--surface);
-		border: 1px solid var(--border);
-		border-radius: 5px;
-		color: var(--muted);
-	}
-
-	.tag-more {
-		opacity: 0.8;
+		gap: 0.25rem;
+		margin-top: auto;
+		padding-top: 0.25rem;
 	}
 
 	.projects-scroll-wrap::-webkit-scrollbar {
