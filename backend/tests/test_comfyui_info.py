@@ -33,8 +33,8 @@ def test_version_meets_minimum_above_returns_true():
 
 def test_version_meets_minimum_uses_workflowui_min_constant():
     min_ver = comfyui_info.WORKFLOWUI_PLUGIN_MIN_VERSION
-    assert comfyui_info.version_meets_minimum("1.0.10", min_ver) is True
-    assert comfyui_info.version_meets_minimum("1.0.9", min_ver) is False
+    assert comfyui_info.version_meets_minimum("1.0.11", min_ver) is True
+    assert comfyui_info.version_meets_minimum("1.0.10", min_ver) is False
 
 
 # --- get_workflowui_plugin_status ---
@@ -72,7 +72,7 @@ def test_get_workflowui_plugin_status_plugin_meets_minimum_returns_available(moc
     ver_res = MagicMock()
     ver_res.ok = True
     ver_res.headers = {"content-type": "application/json"}
-    ver_res.json.return_value = {"workflowui_plugin_version": "1.0.10"}
+    ver_res.json.return_value = {"workflowui_plugin_version": "1.0.11"}
     mock_requests.get.side_effect = [cap_res, ver_res]
 
     delete_supported, plugin_available, plugin_incompatible = comfyui_info.get_workflowui_plugin_status(
@@ -114,7 +114,7 @@ def test_get_workflowui_plugin_status_capabilities_returns_string_true_still_det
     ver_res = MagicMock()
     ver_res.ok = True
     ver_res.headers = {"content-type": "application/json"}
-    ver_res.json.return_value = {"workflowui_plugin_version": "1.0.10"}
+    ver_res.json.return_value = {"workflowui_plugin_version": "1.0.11"}
     mock_requests.get.side_effect = [cap_res, ver_res]
 
     _, plugin_available, plugin_incompatible = comfyui_info.get_workflowui_plugin_status("http://localhost:8188")
