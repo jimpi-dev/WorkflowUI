@@ -64,6 +64,8 @@
 		local_storage_status?: string | null;
 		remote_status?: string | null;
 		local_path?: string | null;
+		local_storage_bytes?: number | null;
+		remote_storage_bytes?: number | null;
 		comfyui_unreachable_warning?: string | null;
 	};
 	let runs = $state<ApiRun[]>([]);
@@ -230,8 +232,45 @@
 		const byId = new Map(updatedRuns.map((r) => [r.id, r]));
 		runs = runs.map((r) => {
 			const u = byId.get(r.id);
-			return u ? { ...r, ...u, run_group_id: u.run_group_id ?? r.run_group_id } : r;
+			if (!u) return r;
+			// Use updated run but keep images from response (so remote_deleted/removed items are reflected)
+			const merged = { ...r, ...u, run_group_id: u.run_group_id ?? r.run_group_id };
+			if (Array.isArray(u.images)) merged.images = u.images;
+			// Preserve sizes when list response doesn't include them
+			if (u.local_storage_bytes === undefined) merged.local_storage_bytes = r.local_storage_bytes;
+			if (u.remote_storage_bytes === undefined) merged.remote_storage_bytes = r.remote_storage_bytes;
+			return merged;
 		});
+	}
+
+	async function refetchStorageSizesForRunIds(
+		runIds: string[],
+		expectedProjectId?: string
+	) {
+		const projectId = expectedProjectId ?? data.projectId;
+		if (!runIds.length || !projectId) return;
+		try {
+			const res = await fetch(
+				`${apiBase}/projects/${projectId}/runs/storage_sizes?run_ids=${encodeURIComponent(runIds.join(','))}`
+			);
+			if (!res.ok) return;
+			const sizes: Record<string, { local_storage_bytes?: number | null; remote_storage_bytes?: number | null }> =
+				await res.json().catch(() => ({}));
+			if (typeof sizes !== 'object') return;
+			// Only merge if still on the same project (avoid overwriting after navigation)
+			if (expectedProjectId != null && data.projectId !== expectedProjectId) return;
+			runs = runs.map((r) => {
+				const s = sizes[r.id];
+				if (!s) return r;
+				return {
+					...r,
+					local_storage_bytes: s.local_storage_bytes ?? null,
+					remote_storage_bytes: s.remote_storage_bytes ?? null
+				};
+			});
+		} catch {
+			// ignore
+		}
 	}
 	function getGroupStorageSummary(group: (typeof runGroups)[0]): { label: string; tone: string } | null {
 		const states = group.runs.map((r) => r.local_storage_status);
@@ -261,6 +300,7 @@
 					updateRunStorage(run.id, { local_storage_status: 'failed' });
 				}
 			}
+			refetchStorageSizesForRunIds(group.runs.map((r) => r.id));
 		} finally {
 			const next = new Set(savingGroupIds);
 			next.delete(group.groupId);
@@ -291,6 +331,7 @@
 					}
 				}
 			}
+			refetchStorageSizesForRunIds(Array.from(byRun.keys()));
 		} finally {
 			const next = new Set(savingGroupIds);
 			next.delete(group.groupId);
@@ -448,10 +489,11 @@
 		}
 	}
 
-	async function deleteRunGroup(group: { groupId: string; runs: ApiRun[] }) {
-		const runIds = group.runs.map((r) => r.id);
-		const n = runIds.length;
+	async function deleteRunGroup(group: { groupId: string; runs: ApiRun[] }, runIdsToDelete?: string[]) {
+		const runIds = runIdsToDelete ?? group.runs.map((r) => r.id);
+		if (runIds.length === 0) return;
 		deleteError = null;
+		const deletedIds = new Set<string>();
 		for (const id of runIds) deletingRunIds = new Set([...deletingRunIds, id]);
 		try {
 			let anyDeleted = false;
@@ -461,12 +503,17 @@
 				if (res.ok && data.deleted_run_id) {
 					runs = runs.filter((r) => r.id !== data.deleted_run_id);
 					anyDeleted = true;
+					deletedIds.add(data.deleted_run_id);
 				} else {
 					deleteError = typeof data?.detail === 'string' ? data.detail : data?.error ?? 'Delete run failed';
 				}
 				deletingRunIds = new Set([...deletingRunIds].filter((id) => id !== runId));
 			}
 			if (anyDeleted) totalGroups = Math.max(0, totalGroups - 1);
+			if (deletedIds.size > 0) {
+				const nextFav = [...favorites].filter((id) => !deletedIds.has(id));
+				if (nextFav.length !== favorites.size) await saveFavoritesMetadata(nextFav);
+			}
 			await loadStats();
 		} finally {
 			deletingRunIds = new Set([...deletingRunIds].filter((id) => !runIds.includes(id)));
@@ -474,18 +521,25 @@
 	}
 
 	function requestDeleteRunGroup(group: (typeof runGroups)[0]) {
-		if (getSkipDeleteConfirmCookie('delete_run')) {
+		const hasFav = group.runs.some((r) => favorites.has(r.id));
+		if (!hasFav && getSkipDeleteConfirmCookie('delete_run')) {
 			deleteRunGroup(group).catch(() => {});
 			return;
 		}
 		deleteRunGroupPending = { groupId: group.groupId, runs: group.runs };
 	}
 
-	async function confirmDeleteRunGroup() {
+	async function confirmDeleteRunGroup(mode: 'all' | 'non_favorites') {
 		const group = deleteRunGroupPending;
 		if (!group) return;
 		deleteRunGroupPending = null;
-		await deleteRunGroup(group);
+		if (mode === 'non_favorites') {
+			const runIdsToDelete = group.runs.filter((r) => !favorites.has(r.id)).map((r) => r.id);
+			if (runIdsToDelete.length === 0) return;
+			await deleteRunGroup(group, runIdsToDelete);
+		} else {
+			await deleteRunGroup(group);
+		}
 	}
 
 	$effect(() => {
@@ -830,6 +884,11 @@
 					totalGroups = typeof raw.total === 'number' ? raw.total : newRuns.length;
 				} else {
 					runs = [...runs, ...newRuns];
+				}
+				// Fetch storage sizes in the background and merge when ready (one batch request, no per-run list calls)
+				const idsToFetch = newRuns.map((r: ApiRun) => r.id);
+				if (idsToFetch.length > 0) {
+					refetchStorageSizesForRunIds(idsToFetch, projectIdWeFetch);
 				}
 			} else if (isInitial) {
 				runs = Array.isArray(raw) ? raw.map(mapRun) : [];
@@ -1251,6 +1310,7 @@
 			const data = await res.json().catch(() => ({}));
 			if (res.ok) {
 				mergeUpdatedRuns(data.updated_runs);
+				refetchStorageSizesForRunIds([runId]);
 			} else {
 				deleteError = typeof data?.detail === 'string' ? data.detail : data?.error ?? 'Delete failed';
 			}
@@ -1271,6 +1331,7 @@
 			if (res.ok) {
 				if (data.updated_runs?.length) mergeUpdatedRuns(data.updated_runs);
 				updateRunStorage(runId, { local_storage_status: data.local_storage_status, local_path: data.local_path });
+				refetchStorageSizesForRunIds([runId]);
 			} else {
 				deleteError = typeof data?.detail === 'string' ? data.detail : data?.error ?? 'Delete failed';
 			}
@@ -1290,6 +1351,7 @@
 			const data = await res.json().catch(() => ({}));
 			if (res.ok) {
 				mergeUpdatedRuns(data.updated_runs);
+				refetchStorageSizesForRunIds([runId]);
 			} else {
 				deleteError = typeof data?.detail === 'string' ? data.detail : data?.error ?? 'Delete failed';
 			}
@@ -1335,6 +1397,7 @@
 							deletingImageKeys = next;
 						}
 					}
+					refetchStorageSizesForRunIds(Array.from(byRun.keys()));
 				};
 				if (getSkipDeleteConfirmCookie('delete_remote')) {
 					await doDelete();
@@ -1389,6 +1452,7 @@
 							deletingLocalImageKeys = next;
 						}
 					}
+					refetchStorageSizesForRunIds(Array.from(byRun.keys()));
 				};
 				if (getSkipDeleteConfirmCookie('delete_local')) {
 					await doDelete();
@@ -1443,6 +1507,7 @@
 							deletingBothImageKeys = next;
 						}
 					}
+					refetchStorageSizesForRunIds(Array.from(byRun.keys()));
 				};
 				if (getSkipDeleteConfirmCookie('delete_all')) {
 					await doDelete();
@@ -2240,6 +2305,8 @@
 								</div>
 								<RunHeaderActions
 									storageSummary={storageSummary}
+									localStorageBytes={storageSummary != null ? group.runs.reduce((s, r) => s + (r.local_storage_bytes ?? 0), 0) : undefined}
+									remoteStorageBytes={storageSummary != null ? group.runs.reduce((s, r) => s + (r.remote_storage_bytes ?? 0), 0) : undefined}
 									status={group.status}
 									createdAt={group.createdAt}
 									timeExtra=""
@@ -2590,18 +2657,52 @@
 		{@const mainMsg = n > 1
 			? `Delete ${n} generations permanently? This cannot be undone.`
 			: 'Delete this prompt (and all its files) permanently? This cannot be undone.'}
-		{@const deleteRunMessage = hasFav ? `This run includes favorited generations. They will be removed from favorites.\n\n${mainMsg}` : mainMsg}
-		<ConfirmDeleteDialog
-			open={true}
-			title="Delete Run with all of its generations"
-			message={deleteRunMessage}
-			confirmLabel="Delete Run"
-			onConfirm={async (dontShowAgain) => {
-				if (dontShowAgain) setSkipDeleteConfirmCookie('delete_run', true);
-				await confirmDeleteRunGroup();
-			}}
-			onCancel={() => { deleteRunGroupPending = null; }}
-		/>
+		{#if hasFav}
+			<div
+				class="confirm-delete-overlay"
+				role="dialog"
+				aria-modal="true"
+				aria-labelledby="delete-run-fav-dialog-title"
+				tabindex="-1"
+				onclick={() => { deleteRunGroupPending = null; }}
+				onkeydown={(e) => { if (e.key === 'Escape') deleteRunGroupPending = null; }}
+			>
+				<div class="confirm-delete-card delete-run-fav-card" role="presentation" tabindex="-1" onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.stopPropagation()}>
+					<p id="delete-run-fav-dialog-title" class="confirm-delete-title">Delete Run</p>
+					<p class="confirm-delete-msg">This run includes favorited generations. What do you want to do?</p>
+					<div class="delete-run-fav-actions">
+						<button
+							type="button"
+							class="confirm-delete-btn danger"
+							onclick={async () => { await confirmDeleteRunGroup('non_favorites'); }}
+						>Delete non-favorites only</button>
+						<button
+							type="button"
+							class="confirm-delete-btn danger"
+							onclick={async () => { await confirmDeleteRunGroup('all'); }}
+						>Delete all (including favorites)</button>
+						<button
+							type="button"
+							class="confirm-delete-btn secondary"
+							onclick={() => { deleteRunGroupPending = null; }}
+						>Cancel</button>
+					</div>
+				</div>
+			</div>
+		{:else}
+			{@const deleteRunMessage = mainMsg}
+			<ConfirmDeleteDialog
+				open={true}
+				title="Delete Run with all of its generations"
+				message={deleteRunMessage}
+				confirmLabel="Delete Run"
+				onConfirm={async (dontShowAgain) => {
+					if (dontShowAgain) setSkipDeleteConfirmCookie('delete_run', true);
+					await confirmDeleteRunGroup('all');
+				}}
+				onCancel={() => { deleteRunGroupPending = null; }}
+			/>
+		{/if}
 	{/if}
 
 	{#if deleteConfirmPending}
@@ -4472,5 +4573,70 @@
 			overflow-y: auto;
 			-webkit-overflow-scrolling: touch;
 		}
+	}
+
+	/* Delete run with favorites dialog (matches ConfirmDeleteDialog look) */
+	.confirm-delete-overlay {
+		position: fixed;
+		inset: 0;
+		background: rgba(0, 0, 0, 0.5);
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		z-index: 1000;
+	}
+	.confirm-delete-card.delete-run-fav-card {
+		background: var(--surface);
+		border: 1px solid var(--border);
+		border-radius: 8px;
+		padding: 0.75rem 1rem;
+		max-width: 22rem;
+		width: calc(100% - 2rem);
+		box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+	}
+	.confirm-delete-card .confirm-delete-title {
+		margin: 0 0 0.35rem 0;
+		font-size: 0.95rem;
+		font-weight: 600;
+		color: var(--text);
+	}
+	.confirm-delete-card .confirm-delete-msg {
+		margin: 0 0 0.75rem 0;
+		font-size: 0.85rem;
+		line-height: 1.35;
+		color: var(--muted);
+		white-space: pre-line;
+	}
+	.delete-run-fav-actions {
+		display: flex;
+		flex-direction: column;
+		gap: 0.5rem;
+		margin-top: 0.5rem;
+	}
+	.delete-run-fav-actions .confirm-delete-btn {
+		padding: 0.35rem 0.75rem;
+		border-radius: 6px;
+		font-size: 0.85rem;
+		font-weight: 500;
+		cursor: pointer;
+		border: 1px solid transparent;
+	}
+	.delete-run-fav-actions .confirm-delete-btn.secondary {
+		background: var(--surface);
+		color: var(--text);
+		border-color: var(--border);
+	}
+	.delete-run-fav-actions .confirm-delete-btn.secondary:hover {
+		background: color-mix(in srgb, var(--accent) 15%, var(--surface));
+		border-color: var(--accent);
+	}
+	.delete-run-fav-actions .confirm-delete-btn.danger {
+		background: var(--error, #c55);
+		color: white;
+		border-color: var(--error, #c55);
+	}
+	.delete-run-fav-actions .confirm-delete-btn.danger:hover {
+		background: var(--error-hover, #e55);
+		border-color: var(--error-hover, #e55);
 	}
 </style>
