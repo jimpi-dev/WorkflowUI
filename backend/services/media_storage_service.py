@@ -17,6 +17,7 @@ from domain.run import Run
 from repositories.sqlite import SqliteProjectRepository, SqliteRunRepository, SqliteWorkflowAppRepository
 from services.png_metadata import inject_workflowui_chunk
 from services.mp3_metadata import inject_workflowui_metadata as inject_workflowui_metadata_mp3
+from services.mp4_metadata import inject_workflowui_metadata as inject_workflowui_metadata_mp4
 from services.workflowui_metadata import build_workflowui_metadata_payload, workflowui_metadata_to_json_string
 
 _RUN_LOCKS: dict[str, threading.Lock] = {}
@@ -343,6 +344,8 @@ class MediaStorageService:
                             view_type = (img.get("type") or "output").strip().lower()
                             if view_type == "audio":
                                 data = inject_workflowui_metadata_mp3(data, json_str)
+                            elif view_type == "video":
+                                data = inject_workflowui_metadata_mp4(data, json_str)
                             else:
                                 data = inject_workflowui_chunk(data, json_str)
                     out_path.write_bytes(data)
@@ -454,9 +457,7 @@ class MediaStorageService:
         if not embed_effective:
             return False
         view_type = (img.get("type") or "output").strip().lower()
-        if view_type == "video":
-            return False
-        return view_type in ("audio", "image", "output")
+        return view_type in ("audio", "image", "output", "video")
 
     def _fetch_remote_image_bytes(self, run: Run, img: dict) -> bytes:
         comfy_url = _normalize_comfy_url(run.comfyui_url or "")

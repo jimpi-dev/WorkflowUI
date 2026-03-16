@@ -12,6 +12,7 @@ from services.workflow_convert import convert_workflow_via_comfy, is_api_format_
 logger = logging.getLogger(__name__)
 from services.png_metadata import read_workflowui_chunk
 from services.mp3_metadata import read_workflowui_metadata as read_workflowui_metadata_mp3
+from services.mp4_metadata import read_workflowui_metadata as read_workflowui_metadata_mp4
 from version import ENGINE_VERSION
 
 from dependencies import get_db, COMFY_URL
@@ -48,7 +49,13 @@ def _import_from_workflowui_payload(payload: dict, db):
         app = app_repo.get_app_by_id(app_id)
         version = workflow_repo.get_workflow_version(wv_id)
         if app and version:
-            out = {"action": "open", "app_slug": app.slug}
+            definition = workflow_repo.get_workflow_definition(version.workflow_id) if version else None
+            out = {
+                "action": "open",
+                "app_slug": app.slug,
+                "app_title": app.title if app else None,
+                "workflow_name": definition.name if definition else None,
+            }
             if payload.get("input_snapshot") is not None:
                 out["input_snapshot"] = payload["input_snapshot"]
             return out
@@ -77,7 +84,14 @@ def _import_from_workflowui_payload(payload: dict, db):
     computed_hash = (parsed_manifest.workflow_hash if parsed_manifest and parsed_manifest.workflow_hash else graph_hash(graph))
     existing_app = app_repo.get_app_by_workflow_graph_hash(computed_hash)
     if existing_app:
-        out = {"action": "open", "app_slug": existing_app.slug}
+        version = workflow_repo.get_workflow_version(existing_app.workflow_version_id) if existing_app.workflow_version_id else None
+        definition = workflow_repo.get_workflow_definition(version.workflow_id) if version else None
+        out = {
+            "action": "open",
+            "app_slug": existing_app.slug,
+            "app_title": existing_app.title,
+            "workflow_name": definition.name if definition else None,
+        }
         if payload.get("input_snapshot") is not None:
             out["input_snapshot"] = payload["input_snapshot"]
         return out
@@ -127,6 +141,7 @@ def _import_from_workflowui_payload(payload: dict, db):
         "workflow_version_id": result.workflow_version_id,
         "app_id": new_app_id,
         "app_slug": resolved_slug,
+        "app_title": app_title,
         "workflow_name": wf_name,
         "resolved_workflow_name": resolved_name,
         "resolved_slug": resolved_slug,
@@ -261,6 +276,8 @@ def post_import_from_file(file: UploadFile = File(..., alias="file"), db=Depends
         raw = read_workflowui_chunk(content)
     elif content_type in ("audio/mpeg", "audio/mp3") or filename_lower.endswith(".mp3"):
         raw = read_workflowui_metadata_mp3(content)
+    elif content_type.startswith("video/") or filename_lower.endswith(".mp4"):
+        raw = read_workflowui_metadata_mp4(content)
     if not raw or not raw.strip():
         return {"action": "ignored", "reason": "no_workflowui_metadata"}
     try:

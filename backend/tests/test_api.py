@@ -1,3 +1,4 @@
+import json
 import time
 from unittest.mock import patch, MagicMock
 
@@ -6,6 +7,8 @@ import requests
 
 from conftest import SAMPLE_WORKFLOW_GRAPH
 from services.comfyui_info import WORKFLOWUI_PLUGIN_MIN_VERSION
+from services.mp4_metadata import inject_workflowui_metadata, read_workflowui_metadata
+from tests.test_mp4_metadata import _minimal_mp4_bytes
 
 
 def test_get_workflow_definitions_empty(client):
@@ -1054,6 +1057,26 @@ def test_import_from_workflowui_payload_restored_when_hash_is_new(client):
     apps = client.get("/apps").json()
     assert len(apps) >= 1
     assert any(a["slug"] == out["app_slug"] for a in apps)
+
+
+def test_import_from_file_mp4_with_workflowui_metadata(client):
+    """POST /import/from-file with an MP4 containing WorkflowUI metadata restores or opens the app."""
+    other_graph = {**SAMPLE_WORKFLOW_GRAPH, "99": {"class_type": "EmptyLatentImage", "inputs": {"width": 512}}}
+    payload = _workflowui_payload("Mp4ImportWorkflow", other_graph, "mp4-import-app")
+    mp4_bytes = _minimal_mp4_bytes()
+    mp4_with_meta = inject_workflowui_metadata(mp4_bytes, json.dumps(payload, separators=(",", ":")))
+    assert read_workflowui_metadata(mp4_with_meta) is not None
+    r = client.post(
+        "/import/from-file",
+        files={"file": ("output.mp4", mp4_with_meta, "video/mp4")},
+    )
+    assert r.status_code == 200
+    data = r.json()
+    assert data.get("action") in ("open", "restored")
+    assert data.get("app_slug") or data.get("resolved_slug")
+    if data["action"] == "restored":
+        assert "workflow_id" in data
+        assert "workflow_version_id" in data
 
 
 def test_run_table_diagnostics(client):
