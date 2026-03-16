@@ -4,6 +4,7 @@
 	import { waitForAppToBeAvailable } from '$lib/api';
 	import { goto } from '$app/navigation';
 	import { createWorkflowDropdownBody } from '$lib/components/loraDropdownBody';
+	import { appBooting } from '$lib/stores/appBooting';
 
 	let { data }: { data: { embedWorkflowuiMetadataOnDownload?: boolean; embedWorkflowuiMetadataOnSave?: boolean; comfyuiWorkflows?: { id: string; label: string }[]; comfyuiWorkflowsError?: string | null } } = $props();
 
@@ -34,6 +35,16 @@
 	let imageImporting = $state(false);
 	let imageImportMessage = $state('');
 	let imageDropZoneDragOver = $state(false);
+
+	type PendingMediaImport = {
+		slug: string;
+		input_snapshot?: object;
+		appName: string;
+		workflowName: string;
+		isExisting: boolean;
+	};
+	let importConfirmOpen = $state(false);
+	let pendingMediaImport = $state<PendingMediaImport | null>(null);
 
 	let comfyuiSelectedId = $state<string>('');
 	let comfyuiImporting = $state(false);
@@ -250,8 +261,9 @@
 	function isWorkflowuiFile(file: File): boolean {
 		if (file.type.startsWith('image/')) return true;
 		if (file.type === 'audio/mpeg' || file.type === 'audio/mp3') return true;
+		if (file.type.startsWith('video/')) return true;
 		const n = file.name.toLowerCase();
-		return n.endsWith('.mp3');
+		return n.endsWith('.mp3') || n.endsWith('.mp4');
 	}
 
 	let imageFileInputRef: HTMLInputElement;
@@ -300,32 +312,42 @@
 			const data = await res.json().catch(() => ({}));
 			if (data.action === 'open' && data.app_slug) {
 				const slug = data.app_slug;
-				if (data.input_snapshot != null && typeof data.input_snapshot === 'object') {
-					try {
-						sessionStorage.setItem('workflowui_import_prefill', JSON.stringify({ slug, input_snapshot: data.input_snapshot }));
-					} catch {
-					}
-				}
-				await waitForAppToBeAvailable(slug);
-				await goto(`/app/${slug}`);
+				const appName = data.app_title ?? data.app_slug ?? 'App';
+				const workflowName = data.workflow_name ?? 'Workflow';
+				pendingMediaImport = {
+					slug,
+					input_snapshot:
+						data.input_snapshot != null && typeof data.input_snapshot === 'object'
+							? data.input_snapshot
+							: undefined,
+					appName,
+					workflowName,
+					isExisting: true,
+				};
+				importConfirmOpen = true;
 				return;
 			}
 			if (data.action === 'restored' && data.app_slug) {
 				const slug = data.resolved_slug ?? data.app_slug;
-				if (data.input_snapshot != null && typeof data.input_snapshot === 'object') {
-					try {
-						sessionStorage.setItem('workflowui_import_prefill', JSON.stringify({ slug, input_snapshot: data.input_snapshot }));
-					} catch {
-					}
-				}
-				await waitForAppToBeAvailable(slug);
-				await goto(`/app/${slug}`);
+				const appName = data.app_title ?? data.resolved_slug ?? data.app_slug ?? 'App';
+				const workflowName = data.workflow_name ?? data.resolved_workflow_name ?? 'Workflow';
+				pendingMediaImport = {
+					slug,
+					input_snapshot:
+						data.input_snapshot != null && typeof data.input_snapshot === 'object'
+							? data.input_snapshot
+							: undefined,
+					appName,
+					workflowName,
+					isExisting: false,
+				};
+				importConfirmOpen = true;
 				return;
 			}
 			if (data.action === 'ignored') {
 				imageImportMessage = data.reason === 'invalid_snapshot'
 					? 'Invalid or corrupted WorkflowUI metadata in this file.'
-					: 'No WorkflowUI metadata in this file. Save images or audio from WorkflowUI with metadata on download/save to restore later.';
+					: 'No WorkflowUI metadata in this file. Save images, audio, or video from WorkflowUI with metadata on download/save to restore later.';
 			} else {
 				imageImportMessage = 'Import failed. Try again.';
 			}
@@ -334,6 +356,31 @@
 		} finally {
 			imageImporting = false;
 		}
+	}
+
+	async function continueLoadingImportedApp() {
+		const p = pendingMediaImport;
+		importConfirmOpen = false;
+		pendingMediaImport = null;
+		if (!p) return;
+		if (p.input_snapshot != null) {
+			try {
+				sessionStorage.setItem(
+					'workflowui_import_prefill',
+					JSON.stringify({ slug: p.slug, input_snapshot: p.input_snapshot })
+				);
+			} catch {
+				// ignore
+			}
+		}
+		appBooting.set(true);
+		await waitForAppToBeAvailable(p.slug);
+		await goto(`/app/${p.slug}`);
+	}
+
+	function dismissImportConfirm() {
+		importConfirmOpen = false;
+		pendingMediaImport = null;
 	}
 
 	$effect(() => {
@@ -597,9 +644,9 @@
 					bind:this={imageFileInputRef}
 					disabled={imageImporting}
 					onchange={(e) => handleImageFile((e.target as HTMLInputElement).files)}
-					aria-label="Choose image or audio file (PNG or MP3)"
+					aria-label="Choose image, audio, or video file (PNG, MP3, or MP4)"
 				/>
-				<p class="media-restore-hint">PNG or MP3 saved from WorkflowUI with embedded metadata can reopen or restore that app.</p>
+				<p class="media-restore-hint">PNG, MP3, or MP4 saved from WorkflowUI with embedded metadata can reopen or restore that app.</p>
 				<p class="metadata-status" role="status">
 					Metadata on download: <strong>{data?.embedWorkflowuiMetadataOnDownload ? 'Yes' : 'No'}</strong>
 					· on save: <strong>{data?.embedWorkflowuiMetadataOnSave ? 'Yes' : 'No'}</strong>
@@ -623,6 +670,44 @@
 		</details>
 	</aside>
 
+	{#if importConfirmOpen && pendingMediaImport}
+		<div
+			class="import-confirm-backdrop"
+			role="dialog"
+			aria-modal="true"
+			aria-labelledby="import-confirm-title"
+			tabindex="-1"
+			onclick={dismissImportConfirm}
+			onkeydown={(e) => { if (e.key === 'Escape') dismissImportConfirm(); }}
+		>
+			<div class="import-confirm-dialog" role="presentation" tabindex="-1" onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.stopPropagation()}>
+				<h2 id="import-confirm-title" class="import-confirm-title">Import successful</h2>
+				<p class="import-confirm-desc">The following app and workflow were imported:</p>
+				<p class="import-confirm-status">
+					{#if pendingMediaImport.isExisting}
+						<strong>Existing app</strong> — this matched an existing app and will open it.
+					{:else}
+						<strong>New app</strong> — a new app was created from this import.
+					{/if}
+				</p>
+				<dl class="import-confirm-meta">
+					<dt>App</dt>
+					<dd>{pendingMediaImport.appName}</dd>
+					<dt>Workflow</dt>
+					<dd>{pendingMediaImport.workflowName}</dd>
+				</dl>
+				<div class="import-confirm-actions">
+					<button type="button" class="import-confirm-btn secondary" onclick={dismissImportConfirm}>
+						Don't load app now
+					</button>
+					<button type="button" class="import-confirm-btn primary" onclick={continueLoadingImportedApp}>
+						Continue loading imported app with values
+					</button>
+				</div>
+			</div>
+		</div>
+	{/if}
+
 	<div class="panel-right panel-scroll card">
 		{#if importState !== 'preview-ready' || !preview}
 			<div class="empty-state">
@@ -636,8 +721,8 @@
 				</div>
 				<h2>Preview your workflow</h2>
 				<ol class="empty-state-steps">
-					<li>Drop a workflow JSON file or paste it on the left.</li>
-					<li>Enter a name and click <strong>Analyze</strong>.</li>
+					<li>Drop a workflow JSON file, paste JSON on the left, or load one from the ComfyUI workflows list above.</li>
+					<li>Enter a name and click <strong>Analyze</strong> (or use <strong>Load workflow</strong> when importing directly from ComfyUI).</li>
 					<li>Review metadata and detected inputs/outputs here, then <strong>Create workflow</strong>.</li>
 				</ol>
 			</div>
@@ -1049,6 +1134,167 @@
 		font-size: 0.85rem;
 		color: var(--muted);
 		margin: 0 0 0.25rem 0;
+	}
+
+	.import-confirm-backdrop {
+		position: fixed;
+		inset: 0;
+		z-index: 2000;
+		background: rgba(0, 0, 0, 0.5);
+		backdrop-filter: blur(6px);
+		-webkit-backdrop-filter: blur(6px);
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		padding: 1rem;
+	}
+	.import-confirm-dialog {
+		background: var(--card-bg, var(--surface));
+		border-radius: 12px;
+		padding: 1.25rem 1.5rem;
+		max-width: min(720px, 96vw);
+		width: auto;
+		box-shadow: 0 20px 40px rgba(0, 0, 0, 0.25);
+	}
+	.import-confirm-title {
+		margin: 0 0 0.5rem 0;
+		font-size: 1.15rem;
+		font-weight: 600;
+	}
+	.import-confirm-desc {
+		margin: 0 0 0.75rem 0;
+		font-size: 0.95rem;
+		color: var(--text-muted, var(--muted));
+	}
+	.import-confirm-status {
+		margin: 0 0 0.75rem 0;
+		font-size: 0.9rem;
+		color: var(--text-muted, var(--muted));
+	}
+	.import-confirm-status strong {
+		color: var(--accent);
+	}
+	.import-confirm-meta {
+		display: grid;
+		grid-template-columns: auto minmax(0, 1fr);
+		gap: 0.25rem 1rem;
+		margin: 0 0 1.25rem 0;
+		font-size: 0.95rem;
+	}
+	.import-confirm-meta dt {
+		margin: 0;
+		font-weight: 600;
+		color: var(--text);
+	}
+	.import-confirm-meta dd {
+		margin: 0;
+		color: var(--text);
+		overflow-wrap: anywhere;
+	}
+	.import-confirm-actions {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.5rem;
+		justify-content: flex-end;
+	}
+	.import-confirm-btn {
+		padding: 0.5rem 1rem;
+		border-radius: 8px;
+		font-size: 0.9rem;
+		font-weight: 500;
+		cursor: pointer;
+		border: none;
+		transition: filter 0.15s ease, background 0.15s ease;
+	}
+	.import-confirm-btn.secondary {
+		background: color-mix(in srgb, var(--accent) 12%, var(--surface));
+		color: var(--text);
+	}
+	.import-confirm-btn.secondary:hover {
+		background: color-mix(in srgb, var(--accent) 18%, var(--surface));
+	}
+	.import-confirm-btn.primary {
+		background: var(--accent);
+		color: var(--accent-fg, #fff);
+	}
+	.import-confirm-btn.primary:hover {
+		filter: brightness(1.08);
+	}
+
+	.import-confirm-backdrop {
+		position: fixed;
+		inset: 0;
+		z-index: 2000;
+		background: rgba(0, 0, 0, 0.5);
+		backdrop-filter: blur(6px);
+		-webkit-backdrop-filter: blur(6px);
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		padding: 1rem;
+	}
+	.import-confirm-dialog {
+		background: var(--card-bg, var(--surface));
+		border-radius: 12px;
+		padding: 1.25rem 1.5rem;
+		max-width: 420px;
+		width: 100%;
+		box-shadow: 0 20px 40px rgba(0, 0, 0, 0.25);
+	}
+	.import-confirm-title {
+		margin: 0 0 0.5rem 0;
+		font-size: 1.15rem;
+		font-weight: 600;
+	}
+	.import-confirm-desc {
+		margin: 0 0 0.75rem 0;
+		font-size: 0.95rem;
+		color: var(--text-muted, var(--muted));
+	}
+	.import-confirm-meta {
+		display: grid;
+		grid-template-columns: auto 1fr;
+		gap: 0.25rem 1rem;
+		margin: 0 0 1.25rem 0;
+		font-size: 0.95rem;
+	}
+	.import-confirm-meta dt {
+		margin: 0;
+		font-weight: 600;
+		color: var(--text);
+	}
+	.import-confirm-meta dd {
+		margin: 0;
+		color: var(--text);
+	}
+	.import-confirm-actions {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.5rem;
+		justify-content: flex-end;
+	}
+	.import-confirm-btn {
+		padding: 0.5rem 1rem;
+		border-radius: 8px;
+		font-size: 0.9rem;
+		font-weight: 500;
+		cursor: pointer;
+		border: none;
+		transition: filter 0.15s ease, background 0.15s ease;
+	}
+	.import-confirm-btn.secondary {
+		background: color-mix(in srgb, var(--accent) 12%, var(--surface));
+		color: var(--text);
+	}
+	.import-confirm-btn.secondary:hover {
+		background: color-mix(in srgb, var(--accent) 18%, var(--surface));
+	}
+	.import-confirm-btn.primary {
+		background: var(--accent);
+		color: var(--accent-fg, #fff);
+	}
+	.import-confirm-btn.primary:hover {
+		filter: brightness(1.08);
 	}
 
 	.empty-state {
