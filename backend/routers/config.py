@@ -80,7 +80,7 @@ def _get_db_breakdown(db_path: str) -> dict[str, int]:
                 table_sizes.get("workflow_definition", 0) + table_sizes.get("workflow_version", 0)
             )
             breakdown["apps"] = table_sizes.get("workflow_app", 0)
-            breakdown["runs"] = table_sizes.get("run", 0)
+            breakdown["runs"] = table_sizes.get("run", 0) + table_sizes.get("generation", 0)
             breakdown["projects"] = table_sizes.get("project", 0)
             breakdown["presets"] = table_sizes.get("app_preset", 0)
             breakdown["comfyui"] = table_sizes.get("comfyui_version", 0)
@@ -90,7 +90,8 @@ def _get_db_breakdown(db_path: str) -> dict[str, int]:
                 ("workflows", "SELECT COALESCE(SUM(LENGTH(id)+LENGTH(name)+LENGTH(CAST(created_at AS TEXT))), 0) FROM workflow_definition"),
                 ("workflows", "SELECT COALESCE(SUM(LENGTH(original_graph_json)+LENGTH(detected_inputs_json)+LENGTH(detected_outputs_json)), 0) FROM workflow_version"),
                 ("apps", "SELECT COALESCE(SUM(LENGTH(ui_config_json)+LENGTH(COALESCE(default_inputs_json,''))+LENGTH(COALESCE(default_outputs_json,''))), 0) FROM workflow_app"),
-                ("runs", "SELECT COALESCE(SUM(LENGTH(COALESCE(images_json,''))+LENGTH(COALESCE(input_snapshot_json,''))+LENGTH(COALESCE(metadata_snapshot_json,''))), 0) FROM run"),
+                ("runs", "SELECT COALESCE(SUM(LENGTH(COALESCE(images_json,''))+LENGTH(COALESCE(media_json,''))+LENGTH(COALESCE(error,''))+LENGTH(COALESCE(deleted_outputs_json,''))), 0) FROM generation"),
+                ("runs", "SELECT COALESCE(SUM(LENGTH(COALESCE(input_snapshot_json,''))+LENGTH(COALESCE(metadata_snapshot_json,''))), 0) FROM run"),
                 ("projects", "SELECT COALESCE(SUM(LENGTH(COALESCE(metadata_json,''))+LENGTH(COALESCE(tags_json,''))), 0) FROM project"),
                 ("presets", "SELECT COALESCE(SUM(LENGTH(keys_json)+LENGTH(values_json)), 0) FROM app_preset"),
                 ("comfyui", "SELECT COALESCE(SUM(LENGTH(metadata_json)), 0) FROM comfyui_version"),
@@ -167,12 +168,12 @@ def get_version():
 def get_run_table_diagnostics(db=Depends(get_db)):
     db_path = db[0]
     columns = [
-        ("images_json", False),
-        ("media_json", False),
-        ("input_snapshot_json", True),
-        ("metadata_snapshot_json", True),
-        ("deleted_outputs_json", False),
-        ("error", False),
+        ("generation", "images_json", False),
+        ("generation", "media_json", False),
+        ("run", "input_snapshot_json", True),
+        ("run", "metadata_snapshot_json", True),
+        ("generation", "deleted_outputs_json", False),
+        ("generation", "error", False),
     ]
     result: dict[str, Any] = {
         "row_count": 0,
@@ -182,13 +183,13 @@ def get_run_table_diagnostics(db=Depends(get_db)):
     try:
         conn = sqlite3.connect(str(db_path), timeout=5)
         try:
-            row = conn.execute("SELECT COUNT(*) FROM run").fetchone()
+            row = conn.execute("SELECT COUNT(*) FROM generation").fetchone()
             result["row_count"] = row[0] if row else 0
             total = 0
-            for col_name, searchable in columns:
+            for table, col_name, searchable in columns:
                 try:
                     row = conn.execute(
-                        f"SELECT COALESCE(SUM(LENGTH(COALESCE({col_name}, ''))), 0) FROM run"
+                        f"SELECT COALESCE(SUM(LENGTH(COALESCE({col_name}, ''))), 0) FROM {table}"
                     ).fetchone()
                     bytes_val = row[0] if row else 0
                     result["columns"][col_name] = {
