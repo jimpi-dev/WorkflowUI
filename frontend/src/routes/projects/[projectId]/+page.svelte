@@ -335,6 +335,9 @@ import { get } from 'svelte/store';
 						remote_status: data.remote_status,
 						local_path: data.local_path
 					});
+					if (typeof window !== 'undefined') {
+						window.dispatchEvent(new CustomEvent('workflowui-refresh-storage'));
+					}
 				} else {
 					updateRunStorage(run.id, { local_storage_status: 'failed' });
 				}
@@ -365,6 +368,9 @@ import { get } from 'svelte/store';
 							remote_status: data.remote_status,
 							local_path: data.local_path
 						});
+						if (typeof window !== 'undefined') {
+							window.dispatchEvent(new CustomEvent('workflowui-refresh-storage'));
+						}
 					} else {
 						updateRunStorage(runId, { local_storage_status: 'failed' });
 					}
@@ -422,6 +428,9 @@ import { get } from 'svelte/store';
 							local_storage_status: data.local_storage_status,
 							local_path: data.local_path
 						});
+						if (typeof window !== 'undefined') {
+							window.dispatchEvent(new CustomEvent('workflowui-refresh-storage'));
+						}
 					} else {
 						updateRunStorage(run.id, { local_storage_status: 'failed' });
 					}
@@ -1561,6 +1570,9 @@ import { get } from 'svelte/store';
 							if (res.ok) {
 								if (data.updated_runs?.length) mergeUpdatedRuns(data.updated_runs);
 								updateRunStorage(runId, { local_storage_status: data.local_storage_status, local_path: data.local_path });
+								if (typeof window !== 'undefined') {
+									window.dispatchEvent(new CustomEvent('workflowui-refresh-storage'));
+								}
 							} else deleteError = typeof data?.detail === 'string' ? data.detail : data?.error ?? 'Delete failed';
 						} finally {
 							const next = new Set(deletingLocalImageKeys);
