@@ -91,7 +91,8 @@ CREATE TABLE IF NOT EXISTS generation (
     parent_run_id TEXT,
     parent_media_id TEXT,
     root_run_id TEXT,
-    deleted_at INTEGER NULL
+    deleted_at INTEGER NULL,
+    input_snapshot_json TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_comfyui_version_metadata_hash ON comfyui_version(metadata_hash);
