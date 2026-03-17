@@ -64,7 +64,7 @@ def _row_to_workflow_app(row: tuple) -> WorkflowApp:
 
 def _run_select_cols() -> str:
     return """g.id, r.project_id, r.workflow_version_id, r.app_id, g.status, g.created_at, g.prompt_id, g.seed,
-        g.images_json, g.media_json, g.execution_time, g.error, g.queue_position, r.input_snapshot_json, r.metadata_snapshot_json, r.run_group_id, r.comfyui_url, r.comfyui_version_id,
+        g.images_json, g.media_json, g.execution_time, g.error, g.queue_position, COALESCE(g.input_snapshot_json, r.input_snapshot_json), r.metadata_snapshot_json, r.run_group_id, r.comfyui_url, r.comfyui_version_id,
         g.local_storage_status, g.remote_status, g.local_path, g.deleted_outputs_json,
         g.parent_run_id, g.parent_media_id, g.root_run_id, g.deleted_at"""
 
@@ -874,8 +874,9 @@ class SqliteRunRepository:
                 """INSERT INTO generation
                    (id, run_id, status, created_at, prompt_id, seed, images_json, media_json,
                     execution_time, error, queue_position, local_storage_status, remote_status,
-                    local_path, deleted_outputs_json, parent_run_id, parent_media_id, root_run_id, deleted_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    local_path, deleted_outputs_json, parent_run_id, parent_media_id, root_run_id, deleted_at,
+                    input_snapshot_json)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     id,
                     group_id,
@@ -896,6 +897,7 @@ class SqliteRunRepository:
                     parent_media_id,
                     root_run_id,
                     None,
+                    input_snapshot_json,
                 ),
             )
             conn.commit()
