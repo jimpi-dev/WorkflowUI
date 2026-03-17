@@ -109,6 +109,12 @@ def get_project_detail(project_id: str, db=Depends(get_db)):
     app_ids = set()
     has_local_data = False
     has_remote_data = False
+    meta = safe_json_loads(proj.metadata_json, {}) if proj else {}
+    deleted_app_ids = []
+    if isinstance(meta, dict):
+        raw_deleted = meta.get("deleted_app_ids")
+        if isinstance(raw_deleted, list):
+            deleted_app_ids = [d for d in raw_deleted if isinstance(d, str) and d.strip()]
     for r in runs_list:
         if r.app_id:
             app_ids.add(r.app_id)
@@ -124,6 +130,8 @@ def get_project_detail(project_id: str, db=Depends(get_db)):
                             break
             except (json.JSONDecodeError, TypeError):
                 pass
+    for aid in deleted_app_ids:
+        app_ids.add(aid)
     apps_used = []
     for aid in app_ids:
         app = app_repo.get_app_by_id(aid)
@@ -270,6 +278,7 @@ def list_project_runs(
     since: int | None = None,
     until: int | None = None,
     meta_q: str | None = None,
+    deleted_app: bool | None = None,
     limit: int = 100,
     offset: int = 0,
     db=Depends(get_db),
@@ -287,6 +296,7 @@ def list_project_runs(
         since_ts=since,
         until_ts=until,
         meta_q=meta_q_trim,
+        deleted_app=deleted_app,
     )
     runs_list = run_repo.get_runs_by_project(
         project_id,
@@ -295,22 +305,40 @@ def list_project_runs(
         since_ts=since,
         until_ts=until,
         meta_q=meta_q_trim,
+        deleted_app=deleted_app,
         limit=limit,
         offset=offset,
     )
     out = []
+    logger.debug(
+        "list_project_runs: project_id=%s app_id=%s deleted_app=%s since=%s until=%s meta_q=%s limit=%s offset=%s base_count=%s",
+        project_id,
+        app_id,
+        deleted_app,
+        since,
+        until,
+        meta_q_trim,
+        limit,
+        offset,
+        len(runs_list),
+    )
     with state.queue_lock:
         mem = {rid: dict(r) if isinstance(r, dict) else {} for rid, r in state.runs.items()}
     for r in runs_list:
         app_slug = None
         app_title = None
         app_header_color = None
+        app_id_out = r.app_id
         if r.app_id:
             app = app_repo.get_app_by_id(r.app_id)
             if app:
                 app_slug = app.slug
                 app_title = app.title
                 app_header_color = app.header_color
+            else:
+                # Hide deleted app IDs from API consumers while keeping
+                # deleted-app detection available server-side.
+                app_id_out = None
         mem_run = mem.get(r.id) if mem else None
         status = mem_run.get("status", r.status) if mem_run else r.status
         error = mem_run.get("error", r.error) if mem_run else r.error
@@ -321,7 +349,7 @@ def list_project_runs(
             "id": r.id,
             "project_id": r.project_id,
             "workflow_version_id": r.workflow_version_id,
-            "app_id": r.app_id,
+            "app_id": app_id_out,
             "app_slug": app_slug,
             "app_title": app_title,
             "app_header_color": app_header_color,
@@ -344,6 +372,21 @@ def list_project_runs(
             "parent_media_id": r.parent_media_id,
             "root_run_id": r.root_run_id,
         })
+
+    # Debug sample of app_id values to verify deleted-app matching
+    logger.debug(
+        "list_project_runs: sample app ids (first 10): %s",
+        [
+            {
+                "id": item.get("id"),
+                "project_id": item.get("project_id"),
+                "app_id": repr(item.get("app_id")),
+                "app_slug": repr(item.get("app_slug")),
+                "app_title": repr(item.get("app_title")),
+            }
+            for item in out[:10]
+        ],
+    )
     return {"runs": out, "total": total}
 
 
@@ -485,6 +528,7 @@ def get_project_runs_stats(
     since: int | None = None,
     until: int | None = None,
     meta_q: str | None = None,
+    deleted_app: bool | None = None,
     db=Depends(get_db),
 ):
     _, _, _, run_repo, project_repo, _, _ = db
@@ -499,6 +543,7 @@ def get_project_runs_stats(
         since_ts=since,
         until_ts=until,
         meta_q=meta_q_trim,
+        deleted_app=deleted_app,
     )
     total_runs = run_repo.count_run_rows_by_project_filtered(
         project_id,
@@ -507,5 +552,6 @@ def get_project_runs_stats(
         since_ts=since,
         until_ts=until,
         meta_q=meta_q_trim,
+        deleted_app=deleted_app,
     )
     return {"total_runs": total_runs, "total_generations": total_generations}

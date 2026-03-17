@@ -1069,6 +1069,17 @@ class SqliteRunRepository:
         finally:
             conn.close()
 
+    def get_project_ids_for_app(self, app_id: str) -> list[str]:
+        conn = self._conn()
+        try:
+            rows = conn.execute(
+                "SELECT DISTINCT project_id FROM run WHERE app_id = ? AND (deleted_at IS NULL)",
+                (app_id,),
+            ).fetchall()
+            return [r[0] for r in rows]
+        finally:
+            conn.close()
+
     @staticmethod
     def _escape_like(s: str) -> str:
         return s.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
@@ -1083,6 +1094,7 @@ class SqliteRunRepository:
         since_ts: int | None = None,
         until_ts: int | None = None,
         meta_q: str | None = None,
+        deleted_app: bool | None = None,
         limit: int = 100,
         offset: int = 0,
     ) -> list[Run]:
@@ -1106,6 +1118,12 @@ class SqliteRunRepository:
                 pattern = f"%{self._escape_like(meta_q)}%"
                 base_sql += " AND (metadata_snapshot_json LIKE ? ESCAPE '\\' OR input_snapshot_json LIKE ? ESCAPE '\\')"
                 params.extend([pattern, pattern])
+            if deleted_app:
+                base_sql += (
+                    " AND (app_id IS NULL OR app_id = '' OR NOT EXISTS ("
+                    "SELECT 1 FROM workflow_app wa WHERE wa.id = run.app_id"
+                    "))"
+                )
 
             group_sql = (
                 "SELECT COALESCE(run_group_id, id) AS group_id"
@@ -1138,6 +1156,12 @@ class SqliteRunRepository:
             if meta_q:
                 run_sql += " AND (metadata_snapshot_json LIKE ? ESCAPE '\\' OR input_snapshot_json LIKE ? ESCAPE '\\')"
                 run_params.extend([pattern, pattern])
+            if deleted_app:
+                run_sql += (
+                    " AND (app_id IS NULL OR app_id = '' OR NOT EXISTS ("
+                    "SELECT 1 FROM workflow_app wa WHERE wa.id = run.app_id"
+                    "))"
+                )
             run_sql += f" AND COALESCE(run_group_id, id) IN ({placeholders}) ORDER BY created_at DESC"
             run_params.extend(group_ids)
             rows = conn.execute(run_sql, run_params).fetchall()
@@ -1168,6 +1192,7 @@ class SqliteRunRepository:
         since_ts: int | None = None,
         until_ts: int | None = None,
         meta_q: str | None = None,
+        deleted_app: bool | None = None,
     ) -> int:
         conn = self._conn()
         try:
@@ -1189,6 +1214,12 @@ class SqliteRunRepository:
                 pattern = f"%{self._escape_like(meta_q)}%"
                 sql += " AND (metadata_snapshot_json LIKE ? ESCAPE '\\' OR input_snapshot_json LIKE ? ESCAPE '\\')"
                 params.extend([pattern, pattern])
+            if deleted_app:
+                sql += (
+                    " AND (app_id IS NULL OR app_id = '' OR NOT EXISTS ("
+                    "SELECT 1 FROM workflow_app wa WHERE wa.id = run.app_id"
+                    "))"
+                )
             row = conn.execute(sql, params).fetchone()
             return row[0] if row else 0
         finally:
@@ -1203,6 +1234,7 @@ class SqliteRunRepository:
         since_ts: int | None = None,
         until_ts: int | None = None,
         meta_q: str | None = None,
+        deleted_app: bool | None = None,
     ) -> int:
         conn = self._conn()
         try:
@@ -1224,6 +1256,12 @@ class SqliteRunRepository:
                 pattern = f"%{self._escape_like(meta_q)}%"
                 sql += " AND (metadata_snapshot_json LIKE ? ESCAPE '\\' OR input_snapshot_json LIKE ? ESCAPE '\\')"
                 params.extend([pattern, pattern])
+            if deleted_app:
+                sql += (
+                    " AND (app_id IS NULL OR app_id = '' OR NOT EXISTS ("
+                    "SELECT 1 FROM workflow_app wa WHERE wa.id = run.app_id"
+                    "))"
+                )
             row = conn.execute(sql, params).fetchone()
             return row[0] if row else 0
         finally:

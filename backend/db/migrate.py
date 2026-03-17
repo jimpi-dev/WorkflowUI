@@ -130,6 +130,28 @@ def migrate(db_path: Path | str) -> None:
             conn.execute("DROP INDEX IF EXISTS idx_project_slug")
             conn.execute("ALTER TABLE project DROP COLUMN slug")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_run_project_id ON run(project_id)")
+
+        # Backfill app_id for legacy runs where it was never set, but there is a single
+        # unambiguous app for the workflow_version. This makes old runs show up correctly
+        # under the app (and, when the app is later removed, under the \"Deleted app\" filter).
+        if "app_id" in run_cols:
+            # For each workflow_version_id that has exactly one app, attach that app_id
+            # to any runs that currently have app_id NULL.
+            rows = conn.execute(
+                """
+                SELECT workflow_version_id, MIN(id) AS app_id, COUNT(*) AS app_count
+                FROM workflow_app
+                GROUP BY workflow_version_id
+                HAVING app_count = 1
+                """
+            ).fetchall()
+            for wf_version_id, app_id, app_count in rows:
+                if not wf_version_id or not app_id:
+                    continue
+                conn.execute(
+                    "UPDATE run SET app_id = ? WHERE app_id IS NULL AND workflow_version_id = ?",
+                    (app_id, wf_version_id),
+                )
         app_cols = _run_columns(conn, "workflow_app")
         if "comfyui_url" not in app_cols:
             conn.execute("ALTER TABLE workflow_app ADD COLUMN comfyui_url TEXT")
@@ -179,6 +201,17 @@ def migrate(db_path: Path | str) -> None:
         run_cols = _run_columns(conn, "run")
         if "comfyui_version_id" not in run_cols:
             conn.execute("ALTER TABLE run ADD COLUMN comfyui_version_id TEXT REFERENCES comfyui_version(id)")
+        # Ensure there are no orphaned app_id references on run rows: if a run.app_id
+        # does not correspond to any existing workflow_app.id, set app_id to NULL.
+        if "app_id" in run_cols:
+            conn.execute(
+                """
+                UPDATE run
+                SET app_id = NULL
+                WHERE app_id IS NOT NULL
+                  AND app_id NOT IN (SELECT id FROM workflow_app)
+                """
+            )
         if not conn.execute(
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name='saved_queue'"
         ).fetchone():
