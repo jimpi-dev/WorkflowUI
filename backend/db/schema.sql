@@ -64,22 +64,34 @@ CREATE TABLE IF NOT EXISTS run (
     project_id TEXT NOT NULL REFERENCES project(id),
     workflow_version_id TEXT NOT NULL REFERENCES workflow_version(id),
     app_id TEXT REFERENCES workflow_app(id),
+    created_at INTEGER NOT NULL,
+    input_snapshot_json TEXT,
+    metadata_snapshot_json TEXT,
+    run_group_id TEXT,
+    comfyui_url TEXT,
+    comfyui_version_id TEXT REFERENCES comfyui_version(id)
+);
+
+CREATE TABLE IF NOT EXISTS generation (
+    id TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL REFERENCES run(id) ON DELETE CASCADE,
     status TEXT NOT NULL,
     created_at INTEGER NOT NULL,
     prompt_id TEXT,
     seed INTEGER,
     images_json TEXT,
+    media_json TEXT,
     execution_time REAL,
     error TEXT,
     queue_position INTEGER,
-    input_snapshot_json TEXT,
-    metadata_snapshot_json TEXT,
-    run_group_id TEXT,
-    comfyui_url TEXT,
-    comfyui_version_id TEXT REFERENCES comfyui_version(id),
     local_storage_status TEXT DEFAULT 'none',
     remote_status TEXT DEFAULT 'unknown',
-    local_path TEXT
+    local_path TEXT,
+    deleted_outputs_json TEXT,
+    parent_run_id TEXT,
+    parent_media_id TEXT,
+    root_run_id TEXT,
+    deleted_at INTEGER NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_comfyui_version_metadata_hash ON comfyui_version(metadata_hash);
@@ -98,7 +110,9 @@ CREATE TABLE IF NOT EXISTS app_preset (
 );
 
 CREATE INDEX IF NOT EXISTS idx_run_app_id ON run(app_id);
-CREATE INDEX IF NOT EXISTS idx_run_prompt_id ON run(prompt_id);
+CREATE INDEX IF NOT EXISTS idx_generation_run_id ON generation(run_id);
+CREATE INDEX IF NOT EXISTS idx_generation_prompt_id ON generation(prompt_id);
+CREATE INDEX IF NOT EXISTS idx_generation_parent_run_id ON generation(parent_run_id);
 CREATE INDEX IF NOT EXISTS idx_app_preset_app_id ON app_preset(app_id);
 
 CREATE TABLE IF NOT EXISTS saved_queue (

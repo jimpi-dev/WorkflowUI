@@ -63,10 +63,10 @@ def _row_to_workflow_app(row: tuple) -> WorkflowApp:
 
 
 def _run_select_cols() -> str:
-    return """id, project_id, workflow_version_id, app_id, status, created_at, prompt_id, seed,
-        images_json, media_json, execution_time, error, queue_position, input_snapshot_json, metadata_snapshot_json, run_group_id, comfyui_url, comfyui_version_id,
-        local_storage_status, remote_status, local_path, deleted_outputs_json,
-        parent_run_id, parent_media_id, root_run_id, deleted_at"""
+    return """g.id, r.project_id, r.workflow_version_id, r.app_id, g.status, g.created_at, g.prompt_id, g.seed,
+        g.images_json, g.media_json, g.execution_time, g.error, g.queue_position, r.input_snapshot_json, r.metadata_snapshot_json, r.run_group_id, r.comfyui_url, r.comfyui_version_id,
+        g.local_storage_status, g.remote_status, g.local_path, g.deleted_outputs_json,
+        g.parent_run_id, g.parent_media_id, g.root_run_id, g.deleted_at"""
 
 
 def _row_to_run(row: tuple) -> Run:
@@ -835,28 +835,50 @@ class SqliteRunRepository:
         run_group_id: str | None = None,
         comfyui_url: str | None = None,
         comfyui_version_id: str | None = None,
-        local_storage_status: str | None = "none",
-        remote_status: str | None = "unknown",
-        local_path: str | None = None,
-        deleted_outputs_json: str | None = None,
         parent_run_id: str | None = None,
         parent_media_id: str | None = None,
         root_run_id: str | None = None,
     ) -> Run:
         conn = self._conn()
         try:
+            group_id = run_group_id or id
             conn.execute(
                 """INSERT INTO run
-                   (id, project_id, workflow_version_id, app_id, status, created_at, prompt_id, seed,
-                    images_json, media_json, execution_time, error, queue_position, input_snapshot_json, metadata_snapshot_json, run_group_id, comfyui_url, comfyui_version_id,
-                    local_storage_status, remote_status, local_path, deleted_outputs_json,
-                    parent_run_id, parent_media_id, root_run_id, deleted_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   (id, project_id, workflow_version_id, app_id, created_at,
+                    input_snapshot_json, metadata_snapshot_json, run_group_id, comfyui_url, comfyui_version_id)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(id) DO UPDATE SET
+                       project_id = excluded.project_id,
+                       workflow_version_id = excluded.workflow_version_id,
+                       app_id = excluded.app_id,
+                       input_snapshot_json = COALESCE(run.input_snapshot_json, excluded.input_snapshot_json),
+                       metadata_snapshot_json = COALESCE(run.metadata_snapshot_json, excluded.metadata_snapshot_json),
+                       run_group_id = COALESCE(run.run_group_id, excluded.run_group_id),
+                       comfyui_url = COALESCE(run.comfyui_url, excluded.comfyui_url),
+                       comfyui_version_id = COALESCE(run.comfyui_version_id, excluded.comfyui_version_id)
+                """,
                 (
-                    id,
+                    group_id,
                     project_id,
                     workflow_version_id,
                     app_id,
+                    created_at,
+                    input_snapshot_json,
+                    metadata_snapshot_json,
+                    run_group_id,
+                    comfyui_url,
+                    comfyui_version_id,
+                ),
+            )
+            conn.execute(
+                """INSERT INTO generation
+                   (id, run_id, status, created_at, prompt_id, seed, images_json, media_json,
+                    execution_time, error, queue_position, local_storage_status, remote_status,
+                    local_path, deleted_outputs_json, parent_run_id, parent_media_id, root_run_id, deleted_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    id,
+                    group_id,
                     status,
                     created_at,
                     prompt_id,
@@ -866,15 +888,10 @@ class SqliteRunRepository:
                     execution_time,
                     error,
                     queue_position,
-                    input_snapshot_json,
-                    metadata_snapshot_json,
-                    run_group_id,
-                    comfyui_url,
-                    comfyui_version_id,
-                    local_storage_status,
-                    remote_status,
-                    local_path,
-                    deleted_outputs_json,
+                    "none",
+                    "unknown",
+                    None,
+                    None,
                     parent_run_id,
                     parent_media_id,
                     root_run_id,
@@ -901,10 +918,10 @@ class SqliteRunRepository:
                 metadata_snapshot_json=metadata_snapshot_json,
                 comfyui_url=comfyui_url,
                 comfyui_version_id=comfyui_version_id,
-                local_storage_status=local_storage_status,
-                remote_status=remote_status,
-                local_path=local_path,
-                deleted_outputs_json=deleted_outputs_json,
+                local_storage_status="none",
+                remote_status="unknown",
+                local_path=None,
+                deleted_outputs_json=None,
                 parent_run_id=parent_run_id,
                 parent_media_id=parent_media_id,
                 root_run_id=root_run_id,
@@ -917,7 +934,7 @@ class SqliteRunRepository:
         conn = self._conn()
         try:
             row = conn.execute(
-                f"SELECT {_run_select_cols()} FROM run WHERE id = ?",
+                f"SELECT {_run_select_cols()} FROM generation g JOIN run r ON r.id = g.run_id WHERE g.id = ?",
                 (run_id,),
             ).fetchone()
             return _row_to_run(row) if row else None
@@ -968,7 +985,7 @@ class SqliteRunRepository:
         conn = self._conn()
         try:
             row = conn.execute(
-                f"SELECT {_run_select_cols()} FROM run WHERE prompt_id = ?",
+                f"SELECT {_run_select_cols()} FROM generation g JOIN run r ON r.id = g.run_id WHERE g.prompt_id = ?",
                 (prompt_id,),
             ).fetchone()
             return _row_to_run(row) if row else None
@@ -979,7 +996,7 @@ class SqliteRunRepository:
         conn = self._conn()
         try:
             rows = conn.execute(
-                f"SELECT {_run_select_cols()} FROM run WHERE parent_run_id = ? ORDER BY created_at DESC LIMIT ?",
+                f"SELECT {_run_select_cols()} FROM generation g JOIN run r ON r.id = g.run_id WHERE g.parent_run_id = ? ORDER BY g.created_at DESC LIMIT ?",
                 (parent_run_id, limit),
             ).fetchall()
             return [_row_to_run(r) for r in rows]
@@ -989,7 +1006,11 @@ class SqliteRunRepository:
     def delete_run(self, run_id: str) -> bool:
         conn = self._conn()
         try:
-            cur = conn.execute("DELETE FROM run WHERE id = ?", (run_id,))
+            cur = conn.execute("DELETE FROM generation WHERE id = ?", (run_id,))
+            if cur.rowcount > 0:
+                conn.execute(
+                    "DELETE FROM run WHERE id NOT IN (SELECT DISTINCT run_id FROM generation)"
+                )
             conn.commit()
             return cur.rowcount > 0
         finally:
@@ -1001,6 +1022,13 @@ class SqliteRunRepository:
         own = conn is None
         c = conn or self._conn()
         try:
+            run_ids = [
+                r[0]
+                for r in c.execute("SELECT id FROM run WHERE project_id = ?", (project_id,)).fetchall()
+            ]
+            if run_ids:
+                placeholders = ",".join("?" * len(run_ids))
+                c.execute(f"DELETE FROM generation WHERE run_id IN ({placeholders})", run_ids)
             cur = c.execute("DELETE FROM run WHERE project_id = ?", (project_id,))
             if own:
                 c.commit()
@@ -1015,7 +1043,7 @@ class SqliteRunRepository:
         conn = self._conn()
         try:
             rows = conn.execute(
-                f"SELECT {_run_select_cols()} FROM run WHERE images_json IS NOT NULL AND images_json != '' ORDER BY created_at DESC LIMIT ?",
+                f"SELECT {_run_select_cols()} FROM generation g JOIN run r ON r.id = g.run_id WHERE g.images_json IS NOT NULL AND g.images_json != '' ORDER BY g.created_at DESC LIMIT ?",
                 (limit,),
             ).fetchall()
             runs = [_row_to_run(r) for r in rows]
@@ -1048,7 +1076,7 @@ class SqliteRunRepository:
         conn = self._conn()
         try:
             rows = conn.execute(
-                f"SELECT {_run_select_cols()} FROM run WHERE app_id = ? ORDER BY created_at DESC LIMIT ?",
+                f"SELECT {_run_select_cols()} FROM generation g JOIN run r ON r.id = g.run_id WHERE r.app_id = ? ORDER BY g.created_at DESC LIMIT ?",
                 (app_id, limit),
             ).fetchall()
             return [_row_to_run(r) for r in rows]
@@ -1062,7 +1090,7 @@ class SqliteRunRepository:
         try:
             placeholders = ",".join("?" * len(app_ids))
             rows = conn.execute(
-                "SELECT app_id, MAX(created_at) FROM run WHERE app_id IN (" + placeholders + ") GROUP BY app_id",
+                "SELECT r.app_id, MAX(g.created_at) FROM generation g JOIN run r ON r.id = g.run_id WHERE r.app_id IN (" + placeholders + ") GROUP BY r.app_id",
                 app_ids,
             ).fetchall()
             return {r[0]: r[1] for r in rows}
@@ -1073,7 +1101,7 @@ class SqliteRunRepository:
         conn = self._conn()
         try:
             rows = conn.execute(
-                "SELECT DISTINCT project_id FROM run WHERE app_id = ? AND (deleted_at IS NULL)",
+                "SELECT DISTINCT r.project_id FROM generation g JOIN run r ON r.id = g.run_id WHERE r.app_id = ? AND (g.deleted_at IS NULL)",
                 (app_id,),
             ).fetchall()
             return [r[0] for r in rows]
@@ -1100,35 +1128,35 @@ class SqliteRunRepository:
     ) -> list[Run]:
         conn = self._conn()
         try:
-            base_sql = " FROM run WHERE project_id = ? AND (deleted_at IS NULL)"
+            base_sql = " FROM generation g JOIN run r ON r.id = g.run_id WHERE r.project_id = ? AND (g.deleted_at IS NULL)"
             params: list[Any] = [project_id]
             if app_id is not None:
-                base_sql += " AND app_id = ?"
+                base_sql += " AND r.app_id = ?"
                 params.append(app_id)
             if workflow_version_id is not None:
-                base_sql += " AND workflow_version_id = ?"
+                base_sql += " AND r.workflow_version_id = ?"
                 params.append(workflow_version_id)
             if since_ts is not None:
-                base_sql += " AND created_at >= ?"
+                base_sql += " AND g.created_at >= ?"
                 params.append(since_ts)
             if until_ts is not None:
-                base_sql += " AND created_at <= ?"
+                base_sql += " AND g.created_at <= ?"
                 params.append(until_ts)
             if meta_q:
                 pattern = f"%{self._escape_like(meta_q)}%"
-                base_sql += " AND (metadata_snapshot_json LIKE ? ESCAPE '\\' OR input_snapshot_json LIKE ? ESCAPE '\\')"
+                base_sql += " AND (r.metadata_snapshot_json LIKE ? ESCAPE '\\' OR r.input_snapshot_json LIKE ? ESCAPE '\\')"
                 params.extend([pattern, pattern])
             if deleted_app:
                 base_sql += (
-                    " AND (app_id IS NULL OR app_id = '' OR NOT EXISTS ("
-                    "SELECT 1 FROM workflow_app wa WHERE wa.id = run.app_id"
+                    " AND (r.app_id IS NULL OR r.app_id = '' OR NOT EXISTS ("
+                    "SELECT 1 FROM workflow_app wa WHERE wa.id = r.app_id"
                     "))"
                 )
 
             group_sql = (
-                "SELECT COALESCE(run_group_id, id) AS group_id"
+                "SELECT r.id AS group_id"
                 + base_sql
-                + " GROUP BY COALESCE(run_group_id, id) ORDER BY MAX(created_at) DESC LIMIT ? OFFSET ?"
+                + " GROUP BY r.id ORDER BY MAX(g.created_at) DESC LIMIT ? OFFSET ?"
             )
             group_params = list(params) + [limit, offset]
             group_rows = conn.execute(group_sql, group_params).fetchall()
@@ -1138,31 +1166,31 @@ class SqliteRunRepository:
 
             placeholders = ",".join("?" * len(group_ids))
             run_sql = (
-                f"SELECT {_run_select_cols()} FROM run WHERE project_id = ? AND (deleted_at IS NULL)"
+                f"SELECT {_run_select_cols()} FROM generation g JOIN run r ON r.id = g.run_id WHERE r.project_id = ? AND (g.deleted_at IS NULL)"
             )
             run_params: list[Any] = [project_id]
             if app_id is not None:
-                run_sql += " AND app_id = ?"
+                run_sql += " AND r.app_id = ?"
                 run_params.append(app_id)
             if workflow_version_id is not None:
-                run_sql += " AND workflow_version_id = ?"
+                run_sql += " AND r.workflow_version_id = ?"
                 run_params.append(workflow_version_id)
             if since_ts is not None:
-                run_sql += " AND created_at >= ?"
+                run_sql += " AND g.created_at >= ?"
                 run_params.append(since_ts)
             if until_ts is not None:
-                run_sql += " AND created_at <= ?"
+                run_sql += " AND g.created_at <= ?"
                 run_params.append(until_ts)
             if meta_q:
-                run_sql += " AND (metadata_snapshot_json LIKE ? ESCAPE '\\' OR input_snapshot_json LIKE ? ESCAPE '\\')"
+                run_sql += " AND (r.metadata_snapshot_json LIKE ? ESCAPE '\\' OR r.input_snapshot_json LIKE ? ESCAPE '\\')"
                 run_params.extend([pattern, pattern])
             if deleted_app:
                 run_sql += (
-                    " AND (app_id IS NULL OR app_id = '' OR NOT EXISTS ("
-                    "SELECT 1 FROM workflow_app wa WHERE wa.id = run.app_id"
+                    " AND (r.app_id IS NULL OR r.app_id = '' OR NOT EXISTS ("
+                    "SELECT 1 FROM workflow_app wa WHERE wa.id = r.app_id"
                     "))"
                 )
-            run_sql += f" AND COALESCE(run_group_id, id) IN ({placeholders}) ORDER BY created_at DESC"
+            run_sql += f" AND r.id IN ({placeholders}) ORDER BY g.created_at DESC"
             run_params.extend(group_ids)
             rows = conn.execute(run_sql, run_params).fetchall()
             runs = [_row_to_run(r) for r in rows]
@@ -1176,7 +1204,7 @@ class SqliteRunRepository:
         conn = self._conn()
         try:
             row = conn.execute(
-                """SELECT COUNT(DISTINCT COALESCE(run_group_id, id)) FROM run WHERE project_id = ? AND (deleted_at IS NULL)""",
+                """SELECT COUNT(DISTINCT r.id) FROM generation g JOIN run r ON r.id = g.run_id WHERE r.project_id = ? AND (g.deleted_at IS NULL)""",
                 (project_id,),
             ).fetchone()
             return row[0] if row else 0
@@ -1196,28 +1224,28 @@ class SqliteRunRepository:
     ) -> int:
         conn = self._conn()
         try:
-            sql = "SELECT COUNT(DISTINCT COALESCE(run_group_id, id)) FROM run WHERE project_id = ? AND (deleted_at IS NULL)"
+            sql = "SELECT COUNT(DISTINCT r.id) FROM generation g JOIN run r ON r.id = g.run_id WHERE r.project_id = ? AND (g.deleted_at IS NULL)"
             params: list[Any] = [project_id]
             if app_id is not None:
-                sql += " AND app_id = ?"
+                sql += " AND r.app_id = ?"
                 params.append(app_id)
             if workflow_version_id is not None:
-                sql += " AND workflow_version_id = ?"
+                sql += " AND r.workflow_version_id = ?"
                 params.append(workflow_version_id)
             if since_ts is not None:
-                sql += " AND created_at >= ?"
+                sql += " AND g.created_at >= ?"
                 params.append(since_ts)
             if until_ts is not None:
-                sql += " AND created_at <= ?"
+                sql += " AND g.created_at <= ?"
                 params.append(until_ts)
             if meta_q:
                 pattern = f"%{self._escape_like(meta_q)}%"
-                sql += " AND (metadata_snapshot_json LIKE ? ESCAPE '\\' OR input_snapshot_json LIKE ? ESCAPE '\\')"
+                sql += " AND (r.metadata_snapshot_json LIKE ? ESCAPE '\\' OR r.input_snapshot_json LIKE ? ESCAPE '\\')"
                 params.extend([pattern, pattern])
             if deleted_app:
                 sql += (
-                    " AND (app_id IS NULL OR app_id = '' OR NOT EXISTS ("
-                    "SELECT 1 FROM workflow_app wa WHERE wa.id = run.app_id"
+                    " AND (r.app_id IS NULL OR r.app_id = '' OR NOT EXISTS ("
+                    "SELECT 1 FROM workflow_app wa WHERE wa.id = r.app_id"
                     "))"
                 )
             row = conn.execute(sql, params).fetchone()
@@ -1238,28 +1266,28 @@ class SqliteRunRepository:
     ) -> int:
         conn = self._conn()
         try:
-            sql = "SELECT COUNT(*) FROM run WHERE project_id = ? AND (deleted_at IS NULL)"
+            sql = "SELECT COUNT(*) FROM generation g JOIN run r ON r.id = g.run_id WHERE r.project_id = ? AND (g.deleted_at IS NULL)"
             params: list[Any] = [project_id]
             if app_id is not None:
-                sql += " AND app_id = ?"
+                sql += " AND r.app_id = ?"
                 params.append(app_id)
             if workflow_version_id is not None:
-                sql += " AND workflow_version_id = ?"
+                sql += " AND r.workflow_version_id = ?"
                 params.append(workflow_version_id)
             if since_ts is not None:
-                sql += " AND created_at >= ?"
+                sql += " AND g.created_at >= ?"
                 params.append(since_ts)
             if until_ts is not None:
-                sql += " AND created_at <= ?"
+                sql += " AND g.created_at <= ?"
                 params.append(until_ts)
             if meta_q:
                 pattern = f"%{self._escape_like(meta_q)}%"
-                sql += " AND (metadata_snapshot_json LIKE ? ESCAPE '\\' OR input_snapshot_json LIKE ? ESCAPE '\\')"
+                sql += " AND (r.metadata_snapshot_json LIKE ? ESCAPE '\\' OR r.input_snapshot_json LIKE ? ESCAPE '\\')"
                 params.extend([pattern, pattern])
             if deleted_app:
                 sql += (
-                    " AND (app_id IS NULL OR app_id = '' OR NOT EXISTS ("
-                    "SELECT 1 FROM workflow_app wa WHERE wa.id = run.app_id"
+                    " AND (r.app_id IS NULL OR r.app_id = '' OR NOT EXISTS ("
+                    "SELECT 1 FROM workflow_app wa WHERE wa.id = r.app_id"
                     "))"
                 )
             row = conn.execute(sql, params).fetchone()
@@ -1276,9 +1304,17 @@ class SqliteRunRepository:
         c = conn or self._conn()
         try:
             placeholders = ",".join("?" * len(run_ids))
+            group_rows = c.execute(
+                f"SELECT DISTINCT r.id FROM generation g JOIN run r ON r.id = g.run_id WHERE g.id IN ({placeholders})",
+                run_ids,
+            ).fetchall()
+            group_ids = [r[0] for r in group_rows]
+            if not group_ids:
+                return 0
+            group_placeholders = ",".join("?" * len(group_ids))
             cur = c.execute(
-                f"UPDATE run SET project_id = ? WHERE id IN ({placeholders})",
-                [target_project_id] + run_ids,
+                f"UPDATE run SET project_id = ? WHERE id IN ({group_placeholders})",
+                [target_project_id] + group_ids,
             )
             if own:
                 c.commit()
@@ -1321,62 +1357,71 @@ class SqliteRunRepository:
         deleted_at: int | None = None,
         comfyui_version_id: str | None = None,
     ) -> None:
-        updates = []
-        params = []
+        gen_updates = []
+        gen_params = []
+        run_updates = []
+        run_params = []
         if status is not None:
-            updates.append("status = ?")
-            params.append(status)
+            gen_updates.append("status = ?")
+            gen_params.append(status)
         if prompt_id is not None:
-            updates.append("prompt_id = ?")
-            params.append(prompt_id)
+            gen_updates.append("prompt_id = ?")
+            gen_params.append(prompt_id)
         if seed is not None:
-            updates.append("seed = ?")
-            params.append(seed)
+            gen_updates.append("seed = ?")
+            gen_params.append(seed)
         if images_json is not None:
-            updates.append("images_json = ?")
-            params.append(images_json)
+            gen_updates.append("images_json = ?")
+            gen_params.append(images_json)
         if media_json is not None:
-            updates.append("media_json = ?")
-            params.append(media_json)
+            gen_updates.append("media_json = ?")
+            gen_params.append(media_json)
         if execution_time is not None:
-            updates.append("execution_time = ?")
-            params.append(execution_time)
+            gen_updates.append("execution_time = ?")
+            gen_params.append(execution_time)
         if error is not None:
-            updates.append("error = ?")
-            params.append(error)
+            gen_updates.append("error = ?")
+            gen_params.append(error)
         if queue_position is not None:
-            updates.append("queue_position = ?")
-            params.append(queue_position)
+            gen_updates.append("queue_position = ?")
+            gen_params.append(queue_position)
         if local_storage_status is not None:
-            updates.append("local_storage_status = ?")
-            params.append(local_storage_status)
+            gen_updates.append("local_storage_status = ?")
+            gen_params.append(local_storage_status)
         if remote_status is not None:
-            updates.append("remote_status = ?")
-            params.append(remote_status)
+            gen_updates.append("remote_status = ?")
+            gen_params.append(remote_status)
         if local_path is not None:
-            updates.append("local_path = ?")
-            params.append(local_path)
+            gen_updates.append("local_path = ?")
+            gen_params.append(local_path)
         if metadata_snapshot_json is not None:
-            updates.append("metadata_snapshot_json = ?")
-            params.append(metadata_snapshot_json)
+            run_updates.append("metadata_snapshot_json = ?")
+            run_params.append(metadata_snapshot_json)
         if deleted_outputs_json is not None:
-            updates.append("deleted_outputs_json = ?")
-            params.append(deleted_outputs_json)
+            gen_updates.append("deleted_outputs_json = ?")
+            gen_params.append(deleted_outputs_json)
         if deleted_at is not None:
-            updates.append("deleted_at = ?")
-            params.append(deleted_at)
+            gen_updates.append("deleted_at = ?")
+            gen_params.append(deleted_at)
         if comfyui_version_id is not None:
-            updates.append("comfyui_version_id = ?")
-            params.append(comfyui_version_id)
-        if not updates:
+            run_updates.append("comfyui_version_id = ?")
+            run_params.append(comfyui_version_id)
+        if not gen_updates and not run_updates:
             return
-        params.append(run_id)
         conn = self._conn()
         try:
-            conn.execute(
-                f"UPDATE run SET {', '.join(updates)} WHERE id = ?",
-                params,
-            )
+            if gen_updates:
+                gen_params.append(run_id)
+                conn.execute(
+                    f"UPDATE generation SET {', '.join(gen_updates)} WHERE id = ?",
+                    gen_params,
+                )
+            if run_updates:
+                run_params.append(run_id)
+                conn.execute(
+                    f"UPDATE run SET {', '.join(run_updates)} WHERE id = (SELECT run_id FROM generation WHERE id = ?)",
+                    run_params,
+                )
             conn.commit()
         finally:
             conn.close()
