@@ -66,6 +66,34 @@ def _get_db_size_bytes(db_path: str) -> int:
     return total
 
 
+def _get_local_storage_size_bytes(root_path: str) -> int:
+    """
+    Best-effort total size in bytes for the local media storage root directory.
+
+    This walks the directory tree rooted at ``root_path`` and sums file sizes.
+    Any filesystem errors are swallowed so that /config remains robust.
+    """
+    try:
+        path = Path(root_path).expanduser()
+        if not path.exists() or not path.is_dir():
+            return 0
+        total = 0
+        for p in path.rglob("*"):
+            try:
+                if p.is_file():
+                    total += p.stat().st_size
+            except FileNotFoundError:
+                # File vanished between discovery and stat; ignore.
+                continue
+            except OSError:
+                # Any other per-file error should not abort the entire walk.
+                continue
+        return total
+    except OSError:
+        # Any top-level OS error should not break /config; treat as 0 bytes.
+        return 0
+
+
 def _get_db_breakdown(db_path: str) -> dict[str, int]:
     breakdown: dict[str, int] = {}
     try:
@@ -137,6 +165,9 @@ def get_config(db=Depends(get_db)):
     comfyui_delete_supported, workflowui_plugin_available, workflowui_plugin_incompatible = get_workflowui_plugin_status(COMFY_URL)
     embed_cfg = get_workflowui_embed_config()
     frontend_version = _get_frontend_version()
+    # Always report the size of the media storage root folder if it exists,
+    # regardless of whether media storage is currently enabled.
+    local_storage_size = _get_local_storage_size_bytes(media_cfg.root_path)
     payload: dict[str, Any] = {
         "comfyui_url": COMFY_URL,
         "quick_runs_project_id": QUICK_RUNS_PROJECT_ID,
@@ -150,6 +181,8 @@ def get_config(db=Depends(get_db)):
             "rootPath": media_cfg.root_path,
             "deleteRemoteAfterSave": media_cfg.delete_remote_after_save,
         },
+        "localStorageSizeBytes": local_storage_size,
+        "localStorageRootPath": media_cfg.root_path,
         "embedWorkflowuiMetadataOnDownload": embed_cfg.embed_on_download,
         "embedWorkflowuiMetadataOnSave": embed_cfg.embed_on_save,
         "dbSizeBytes": _get_db_size_bytes(db_path),
