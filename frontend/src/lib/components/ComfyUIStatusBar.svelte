@@ -26,6 +26,8 @@ import { get } from 'svelte/store';
 	let dbSizeBytes = $state<number | null>(null);
 	let dbBreakdown = $state<Record<string, number> | null>(null);
 	let workflowuiPluginMinVersion = $state<string | null>(null);
+	let localStorageSizeBytes = $state<number | null>(null);
+	let localStorageRootPath = $state<string | null>(null);
 	/** Version from GET /config (frontend package.json); status bar uses this over build-time appConfig.version */
 	let configVersion = $state<string | null>(null);
 
@@ -34,6 +36,25 @@ import { get } from 'svelte/store';
 	const CONFIG_POLL_INTERVAL_MS = 60000;
 	let intervalId: ReturnType<typeof setInterval> | null = null;
 	let configIntervalId: ReturnType<typeof setInterval> | null = null;
+
+	function formatLocalStorageLabel(bytes: number | null): string {
+		if (bytes == null) return '—';
+		const KB = 1024;
+		const MB = 1_048_576;
+		const GB = 1_073_741_824;
+		if (bytes >= GB) return `${(bytes / GB).toFixed(2)} GB`;
+		if (bytes >= MB) return `${(bytes / MB).toFixed(1)} MB`;
+		if (bytes >= KB) return `${(bytes / KB).toFixed(1)} KB`;
+		return `${bytes} B`;
+	}
+
+	const localStorageTooltip = $derived.by(() => {
+		if (localStorageSizeBytes == null) {
+			return 'Size of local storage folder used for saved outputs from ComfyUI (unknown).';
+		}
+		const root = localStorageRootPath || 'media storage root';
+		return `Size of local storage folder (${root}) used for saved outputs from ComfyUI.`;
+	});
 
 	async function fetchConfig() {
 		const base = getApiBase() || '';
@@ -45,6 +66,14 @@ import { get } from 'svelte/store';
 			workflowuiPluginIncompatible = data.workflowuiPluginIncompatible === true;
 			dbSizeBytes = typeof data.dbSizeBytes === 'number' ? data.dbSizeBytes : null;
 			dbBreakdown = data.dbBreakdown && typeof data.dbBreakdown === 'object' ? data.dbBreakdown : null;
+			localStorageSizeBytes =
+				typeof data.localStorageSizeBytes === 'number'
+					? data.localStorageSizeBytes
+					: null;
+			localStorageRootPath =
+				typeof data.localStorageRootPath === 'string' && data.localStorageRootPath
+					? data.localStorageRootPath
+					: null;
 			workflowuiPluginMinVersion =
 				typeof data.workflowuiPluginMinVersion === 'string' && data.workflowuiPluginMinVersion
 					? data.workflowuiPluginMinVersion
@@ -56,6 +85,8 @@ import { get } from 'svelte/store';
 			workflowuiPluginIncompatible = false;
 			dbSizeBytes = null;
 			dbBreakdown = null;
+			localStorageSizeBytes = null;
+			localStorageRootPath = null;
 			workflowuiPluginMinVersion = null;
 			configVersion = null;
 		}
@@ -134,10 +165,16 @@ import { get } from 'svelte/store';
 
 	onMount(() => {
 		startPolling();
+		if (typeof window !== 'undefined') {
+			window.addEventListener('workflowui-refresh-storage', fetchConfig);
+		}
 	});
 
 	onDestroy(() => {
 		stopPolling();
+		if (typeof window !== 'undefined') {
+			window.removeEventListener('workflowui-refresh-storage', fetchConfig);
+		}
 	});
 </script>
 
@@ -249,12 +286,21 @@ import { get } from 'svelte/store';
 		<span class="console-btn-text">Console</span>
 	</button>
 	<span class="status-sep" aria-hidden="true">|</span>
-	<span class="status-item db-size">
-		<DbSizeBar
-			sizeBytes={dbSizeBytes}
-			breakdown={dbBreakdown}
-			onVacuumComplete={(bytes) => { dbSizeBytes = bytes; fetchConfig(); }}
-		/>
+	<span class="status-item storage-group" aria-label="Local storage and database usage">
+		<span class="storage-line storage-local" title={localStorageTooltip}>
+			Local storage: {formatLocalStorageLabel(localStorageSizeBytes)}
+		</span>
+		<span class="storage-line storage-db">
+			<span class="storage-db-label">Database:</span>
+			<DbSizeBar
+				sizeBytes={dbSizeBytes}
+				breakdown={dbBreakdown}
+				onVacuumComplete={(bytes) => {
+					dbSizeBytes = bytes;
+					fetchConfig();
+				}}
+			/>
+		</span>
 	</span>
 </div>
 
@@ -395,6 +441,22 @@ import { get } from 'svelte/store';
 		width: 14px;
 		height: 14px;
 		flex-shrink: 0;
+	}
+
+	.storage-group {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.35rem;
+	}
+
+	.storage-line {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.25rem;
+	}
+
+	.storage-db-label {
+		opacity: 0.8;
 	}
 
 	@media (max-width: 639px) {

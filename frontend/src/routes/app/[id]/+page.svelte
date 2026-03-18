@@ -776,16 +776,19 @@
         const apiBase = getApiBase() || '';
         for (const backendRunId of backendRunIds) {
             savingRunIds = new Set([...savingRunIds, backendRunId]);
-            try {
-                const res = await fetch(`${apiBase}/runs/${backendRunId}/save`, { method: 'POST' });
-                const data = await res.json().catch(() => ({}));
-                if (res.ok) {
-                    updateStorage(runId, backendRunId, {
-                        local_storage_status: data.local_storage_status,
-                        remote_status: data.remote_status,
-                        local_path: data.local_path
-                    });
-                }
+			try {
+				const res = await fetch(`${apiBase}/runs/${backendRunId}/save`, { method: 'POST' });
+				const data = await res.json().catch(() => ({}));
+				if (res.ok) {
+					updateStorage(runId, backendRunId, {
+						local_storage_status: data.local_storage_status,
+						remote_status: data.remote_status,
+						local_path: data.local_path
+					});
+					if (typeof window !== 'undefined') {
+						window.dispatchEvent(new CustomEvent('workflowui-refresh-storage'));
+					}
+				}
             } catch {
                 updateStorage(runId, backendRunId, { local_storage_status: 'failed' });
             } finally {
