@@ -129,6 +129,7 @@ class RunRepository(Protocol):
     ) -> list[Run]: ...
     def get_runs_for_app(self, app_id: str, limit: int = 50) -> list[Run]: ...
     def get_last_run_timestamps_for_app_ids(self, app_ids: list[str]) -> dict[str, int]: ...
+    def get_project_ids_for_app(self, app_id: str) -> list[str]: ...
     def get_runs_by_project(
         self,
         project_id: str,
@@ -139,6 +140,7 @@ class RunRepository(Protocol):
         since_ts: int | None = None,
         until_ts: int | None = None,
         meta_q: str | None = None,
+        deleted_app: bool | None = None,
         limit: int = 100,
         offset: int = 0,
     ) -> list[Run]: ...
@@ -152,6 +154,7 @@ class RunRepository(Protocol):
         since_ts: int | None = None,
         until_ts: int | None = None,
         meta_q: str | None = None,
+        deleted_app: bool | None = None,
     ) -> int: ...
     def count_run_rows_by_project_filtered(
         self,
@@ -162,6 +165,7 @@ class RunRepository(Protocol):
         since_ts: int | None = None,
         until_ts: int | None = None,
         meta_q: str | None = None,
+        deleted_app: bool | None = None,
     ) -> int: ...
     def update_run(
         self,
