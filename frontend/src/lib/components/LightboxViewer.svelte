@@ -2,12 +2,14 @@
 	import { browser } from '$app/environment';
 	import { onMount, onDestroy, tick } from 'svelte';
 
-	export type LightboxItem = {
+export type LightboxItem = {
 		id: string;
 		url: string;
 		filename?: string;
 		mediaType?: 'image' | 'video' | 'audio';
 		remote_deleted?: boolean;
+		hasLocal?: boolean;
+		hasRemote?: boolean;
 		seed?: number;
 		executionTimeSec?: number;
 		outputIndex?: number;
@@ -29,7 +31,7 @@
 	const ZOOM_MAX = 6;
 	const SWIPE_THRESHOLD_PX = 50;
 
-	let {
+let {
 		open = false,
 		items = [],
 		index = 0,
@@ -42,6 +44,9 @@
 		isFavorite = undefined as ((item: LightboxItem) => boolean) | undefined,
 		onToggleSelection = undefined as ((item: LightboxItem) => void) | undefined,
 		isSelected = undefined as ((item: LightboxItem) => boolean) | undefined,
+		onDeleteLocal = undefined as ((item: LightboxItem) => void) | undefined,
+		onDeleteRemote = undefined as ((item: LightboxItem) => void) | undefined,
+		onDeleteBoth = undefined as ((item: LightboxItem) => void) | undefined,
 		showCloseLabel = true,
 		ariaTitle = 'Media viewer'
 	}: {
@@ -57,6 +62,9 @@
 		isFavorite?: (item: LightboxItem) => boolean;
 		onToggleSelection?: (item: LightboxItem) => void;
 		isSelected?: (item: LightboxItem) => boolean;
+		onDeleteLocal?: (item: LightboxItem) => void;
+		onDeleteRemote?: (item: LightboxItem) => void;
+		onDeleteBoth?: (item: LightboxItem) => void;
 		showCloseLabel?: boolean;
 		ariaTitle?: string;
 	} = $props();
@@ -585,10 +593,16 @@
 			{@const img = currentItem}
 			{@const hasSeed = img.seed !== undefined && img.seed !== null && String(img.seed).trim() !== ''}
 			{@const hasTime = img.executionTimeSec != null}
+			{@const hasFilename = !!img.filename}
 			{@const showMeta = !!onMetadata}
 			{@const showFav = !!onToggleFavorite && !!isFavorite}
 			{@const showSel = !!onToggleSelection && !!isSelected}
+			{@const hasRemote = img.hasRemote ?? !img.remote_deleted}
+			{@const hasLocal = img.hasLocal ?? true}
 			{@const showSend = !!onSendToApp && !img.remote_deleted}
+			{@const showDeleteLocal = !!onDeleteLocal && hasLocal}
+			{@const showDeleteRemote = !!onDeleteRemote && hasRemote}
+			{@const showDeleteBoth = !!onDeleteBoth && hasLocal && hasRemote}
 			<div class="lightbox-media-actions" role="toolbar" aria-label="Media actions">
 				<div class="lightbox-media-actions-left">
 					{#if showMeta}
@@ -622,6 +636,11 @@
 								<span class="lightbox-media-time">{Math.round(Number(img.executionTimeSec))} sec</span>
 							{/if}
 						</span>
+					{/if}
+					{#if hasFilename}
+						<div class="lightbox-media-filename" title={img.filename}>
+							{img.filename}
+						</div>
 					{/if}
 				</div>
 				<div class="lightbox-media-actions-right">
@@ -667,6 +686,76 @@
 								<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/></svg>
 							{/if}
 						</button>
+					{/if}
+					{#if showDeleteLocal || showDeleteRemote || showDeleteBoth}
+						<div class="lightbox-media-delete-group">
+							{#if showDeleteLocal}
+								<button
+									type="button"
+									class="lightbox-media-btn lightbox-media-delete lightbox-media-delete-local"
+									title="Delete local copy"
+									aria-label="Delete local copy"
+									onclick={(e) => {
+										e.stopPropagation();
+										onDeleteLocal?.(img);
+									}}
+								>
+									<span class="lightbox-media-delete-icon" aria-hidden="true">
+										<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+											<path d="M3 6h18" />
+											<path d="M8 6V4h8v2" />
+											<path d="M10 11v6" />
+											<path d="M14 11v6" />
+											<path d="M6 6l1 14h10l1-14" />
+										</svg>
+									</span>
+								</button>
+							{/if}
+							{#if showDeleteRemote}
+								<button
+									type="button"
+									class="lightbox-media-btn lightbox-media-delete lightbox-media-delete-remote"
+									title="Delete remote copy"
+									aria-label="Delete remote copy"
+									onclick={(e) => {
+										e.stopPropagation();
+										onDeleteRemote?.(img);
+									}}
+								>
+									<span class="lightbox-media-delete-icon" aria-hidden="true">
+										<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+											<path d="M3 6h18" />
+											<path d="M8 6V4h8v2" />
+											<path d="M10 11v6" />
+											<path d="M14 11v6" />
+											<path d="M6 6l1 14h10l1-14" />
+										</svg>
+									</span>
+								</button>
+							{/if}
+							{#if showDeleteBoth}
+								<button
+									type="button"
+									class="lightbox-media-btn lightbox-media-delete lightbox-media-delete-both"
+									title="Delete local and remote copies"
+									aria-label="Delete local and remote copies"
+									onclick={(e) => {
+										e.stopPropagation();
+										onDeleteBoth?.(img);
+									}}
+								>
+									<span class="lightbox-media-delete-icon" aria-hidden="true">
+										<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+											<path d="M3 6h18" />
+											<path d="M8 6V4h8v2" />
+											<path d="M10 11v6" />
+											<path d="M14 11v6" />
+											<path d="M6 6l1 14h10l1-14" />
+										</svg>
+									</span>
+								</button>
+							{/if}
+						</div>
 					{/if}
 					{#if onDownload}
 						<button
@@ -864,3 +953,35 @@
 		</div>
 	</div>
 {/if}
+
+<style>
+	.lightbox-media-delete-group {
+		display: inline-flex;
+		gap: 0.15rem;
+	}
+	.lightbox-media-delete {
+		padding: 0.25rem;
+	}
+	.lightbox-media-delete-icon svg {
+		width: 16px;
+		height: 16px;
+	}
+	.lightbox-media-delete-local {
+		color: var(--accent);
+	}
+	.lightbox-media-delete-remote {
+		color: var(--warning, #92400e);
+	}
+	.lightbox-media-delete-both {
+		color: var(--error, #b91c1c);
+	}
+	.lightbox-media-filename {
+		margin-top: 0.15rem;
+		font-size: 0.75rem;
+		color: var(--lightbox-muted, #9ca3af);
+		max-width: 100%;
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
+	}
+</style>

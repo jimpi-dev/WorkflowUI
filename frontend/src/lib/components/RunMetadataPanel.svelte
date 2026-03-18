@@ -91,6 +91,24 @@
 		imageLoadFailed = new Set([...imageLoadFailed, imageKey(index)]);
 	}
 
+	async function downloadPrimaryOutput() {
+		if (!run || !run.images?.length) return;
+		const img = run.images[0];
+		if (img.remote_deleted) return;
+		const url = imageUrl(img, run.id);
+		const res = await fetch(url);
+		if (!res.ok) return;
+		const blob = await res.blob();
+		const blobUrl = URL.createObjectURL(blob);
+		const a = document.createElement('a');
+		a.href = blobUrl;
+		a.download = img.filename || 'output';
+		document.body.appendChild(a);
+		a.click();
+		document.body.removeChild(a);
+		URL.revokeObjectURL(blobUrl);
+	}
+
 	function runMetaAsText(r: RunDetail): string {
 		const lines: string[] = [];
 		lines.push(`Run ID: ${r.id}`);
@@ -136,9 +154,41 @@
 							{#if run.images.length > 1}
 								<p class="image-card-more">+{run.images.length - 1} more output{run.images.length === 2 ? '' : 's'}</p>
 							{/if}
-							{#if projectId}
-								<button type="button" class="send-to-app-link send-to-app-btn" title="Send to App" onclick={() => sendToAppOutputIndex = 0}>Send to App</button>
-							{/if}
+							<div class="image-card-footer">
+								{#if run.images[0].filename}
+									<p class="image-card-filename" title={run.images[0].filename}>
+										{run.images[0].filename}
+									</p>
+								{/if}
+								<div class="image-card-actions">
+									<button
+										type="button"
+										class="thumb-overlay-btn image-card-icon-btn"
+										title="Download file"
+										aria-label="Download file"
+										onclick={downloadPrimaryOutput}
+									>
+										<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+											<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+											<path d="M7 10l5 5 5-5" />
+											<path d="M12 15V3" />
+										</svg>
+									</button>
+									{#if projectId}
+										<button
+											type="button"
+											class="thumb-overlay-btn image-card-icon-btn"
+											title="Send this output to app"
+											aria-label="Send this output to app"
+											onclick={() => sendToAppOutputIndex = 0}
+										>
+											<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+												<path d="M5 12h14M12 5l7 7-7 7" />
+											</svg>
+										</button>
+									{/if}
+								</div>
+							</div>
 						</div>
 					{/if}
 					<div class="meta-card">
@@ -191,6 +241,10 @@
 							{#if (run.images?.length ?? run.media?.length ?? 0) > 0}
 								<dt>Outputs</dt>
 								<dd>{(run.images ?? run.media ?? []).length} image{(run.images ?? run.media ?? []).length === 1 ? '' : 's'}</dd>
+							{/if}
+							{#if mode === 'output' && run.images?.[0]?.filename}
+								<dt>Filename</dt>
+								<dd>{run.images[0].filename}</dd>
 							{/if}
 							{#if run.prompt_id}
 								<dt>Prompt ID</dt>
@@ -424,6 +478,32 @@
 		font-size: 0.8rem;
 		color: var(--text-muted, var(--muted, #64748b));
 		border-top: 1px solid var(--border, rgba(30, 41, 59, 0.08));
+	}
+	.image-card-footer {
+		padding: 0.5rem 0.75rem 0.6rem;
+		border-top: 1px solid var(--border, rgba(30, 41, 59, 0.06));
+		display: flex;
+		flex-direction: column;
+		gap: 0.35rem;
+	}
+	.image-card-filename {
+		margin: 0;
+		font-size: 0.8rem;
+		color: var(--text-muted, var(--muted, #64748b));
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
+	}
+	.image-card-actions {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.4rem;
+		align-items: center;
+	}
+	.image-card-icon-btn {
+		width: 26px;
+		height: 26px;
+		padding: 0;
 	}
 	.meta-card {
 		background: var(--card-bg, var(--card, #ffffff));
