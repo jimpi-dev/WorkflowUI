@@ -282,6 +282,28 @@ import { get } from 'svelte/store';
 		});
 	}
 
+	/** Matches thumbnail visibility: remote-deleted slots only show if run still has local copies. */
+	function runHasDisplayableOutputs(run: ApiRun): boolean {
+		const imgs = run.images ?? [];
+		return imgs.some((item) => {
+			const rd = !!(item as { remote_deleted?: boolean }).remote_deleted;
+			if (!rd) return true;
+			return run.local_storage_status === 'saved' || run.local_storage_status === 'partial';
+		});
+	}
+
+	function pruneStaleRunFavorites(runsToCheck: ApiRun[]) {
+		const toRemove: string[] = [];
+		for (const r of runsToCheck) {
+			if (favorites.has(r.id) && !runHasDisplayableOutputs(r)) toRemove.push(r.id);
+		}
+		if (!toRemove.length) return;
+		const next = new Set(favorites);
+		for (const id of toRemove) next.delete(id);
+		favorites = next;
+		saveFavoritesMetadata([...next]).catch(() => {});
+	}
+
 	async function refetchStorageSizesForRunIds(
 		runIds: string[],
 		expectedProjectId?: string
@@ -569,7 +591,8 @@ import { get } from 'svelte/store';
 	}
 
 	function requestDeleteRunGroup(group: (typeof runGroups)[0]) {
-		const hasFav = group.runs.some((r) => favorites.has(r.id));
+		pruneStaleRunFavorites(group.runs);
+		const hasFav = group.runs.some((r) => favorites.has(r.id) && runHasDisplayableOutputs(r));
 		if (!hasFav && getSkipDeleteConfirmCookie('delete_run')) {
 			deleteRunGroup(group).catch(() => {});
 			return;
@@ -1467,19 +1490,20 @@ import { get } from 'svelte/store';
 		}
 	}
 
-	async function deleteBothImage(runId: string, imageIndex: number) {
+	async function deleteBothImage(runId: string, imageIndex: number): Promise<boolean> {
 		deleteError = null;
 		const key = `${runId}_${imageIndex}`;
 		deletingBothImageKeys = new Set([...deletingBothImageKeys, key]);
 		try {
 			const res = await fetch(`${apiBase}/runs/${runId}/delete-both-image/${imageIndex}`, { method: 'POST' });
 			const data = await res.json().catch(() => ({}));
+			if (data.updated_runs?.length) mergeUpdatedRuns(data.updated_runs);
 			if (res.ok) {
-				mergeUpdatedRuns(data.updated_runs);
 				refetchStorageSizesForRunIds([runId]);
-			} else {
-				deleteError = typeof data?.detail === 'string' ? data.detail : data?.error ?? 'Delete failed';
+				return true;
 			}
+			deleteError = typeof data?.detail === 'string' ? data.detail : data?.error ?? 'Delete failed';
+			return false;
 		} finally {
 			const next = new Set(deletingBothImageKeys);
 			next.delete(key);
@@ -1524,7 +1548,8 @@ import { get } from 'svelte/store';
 					}
 					refetchStorageSizesForRunIds(Array.from(byRun.keys()));
 				};
-				if (getSkipDeleteConfirmCookie('delete_remote')) {
+				// Always confirm when favorites are involved ("Don't ask again" must not skip that warning).
+				if (getSkipDeleteConfirmCookie('delete_remote') && !hasFav) {
 					await doDelete();
 					return;
 				}
@@ -1582,7 +1607,7 @@ import { get } from 'svelte/store';
 					}
 					refetchStorageSizesForRunIds(Array.from(byRun.keys()));
 				};
-				if (getSkipDeleteConfirmCookie('delete_local')) {
+				if (getSkipDeleteConfirmCookie('delete_local') && !hasFav) {
 					await doDelete();
 					return;
 				}
@@ -1625,8 +1650,8 @@ import { get } from 'svelte/store';
 								body: JSON.stringify({ indices })
 							});
 							const data = await res.json().catch(() => ({}));
+							if (data.updated_runs?.length) mergeUpdatedRuns(data.updated_runs);
 							if (res.ok) {
-								if (data.updated_runs?.length) mergeUpdatedRuns(data.updated_runs);
 								updateRunStorage(runId, { local_storage_status: data.local_storage_status, remote_status: data.remote_status });
 							} else deleteError = typeof data?.detail === 'string' ? data.detail : data?.error ?? 'Delete failed';
 						} finally {
@@ -1637,7 +1662,7 @@ import { get } from 'svelte/store';
 					}
 					refetchStorageSizesForRunIds(Array.from(byRun.keys()));
 				};
-				if (getSkipDeleteConfirmCookie('delete_all')) {
+				if (getSkipDeleteConfirmCookie('delete_all') && !hasFav) {
 					await doDelete();
 					return;
 				}
@@ -1658,10 +1683,22 @@ import { get } from 'svelte/store';
 		}
 	}
 
-	let lightboxOpen = $state(false);
-	let lightboxImages = $state<LightboxItem[]>([]);
-	let lightboxIndex = $state(0);
-	let lightboxGroupId = $state<string | null>(null);
+let lightboxOpen = $state(false);
+let lightboxImages = $state<LightboxItem[]>([]);
+let lightboxIndex = $state(0);
+let lightboxGroupId = $state<string | null>(null);
+let lightboxDeletePending = $state<
+	| null
+	| {
+			item: LightboxItem;
+			message: string;
+			confirmLabel: string;
+			action: DeleteConfirmKey;
+	  }
+>(null);
+	let lightboxFavoriteDeletePending = $state<null | { item: LightboxItem; kind: 'local' | 'remote' | 'both' }>(
+		null
+	);
 	let runsScrollEl = $state<HTMLDivElement | null>(null);
 	$effect(() => {
 		if (runsScrollEl) return;
@@ -1678,6 +1715,8 @@ import { get } from 'svelte/store';
 				const img = run.images![i];
 				const mt = mediaType(img);
 				const remote_deleted = !!(img as { remote_deleted?: boolean }).remote_deleted;
+				const hasLocal = run.local_storage_status === 'saved' || run.local_storage_status === 'partial';
+				const hasRemote = !remote_deleted;
 				list.push({
 					id: imageKey(run.id, i),
 					url: imageUrl(img, run.id),
@@ -1685,6 +1724,8 @@ import { get } from 'svelte/store';
 					filename: img.filename,
 					mediaType: mt,
 					remote_deleted,
+					hasLocal,
+					hasRemote,
 					seed: run.seed,
 					executionTimeSec: run.execution_time,
 					outputIndex: i,
@@ -1741,6 +1782,166 @@ import { get } from 'svelte/store';
 		a.click();
 		document.body.removeChild(a);
 		URL.revokeObjectURL(url);
+	}
+
+	function applyLightboxDeletion(item: LightboxItem) {
+		const currentId = item.id;
+		const currentIdx = lightboxImages.findIndex((x) => x.id === currentId);
+		const nextImages = lightboxImages.filter((x) => x.id !== currentId);
+		if (!nextImages.length) {
+			// Carousel empty after delete — if this run still has outputs, show them from the start.
+			const gid = lightboxGroupId;
+			const runId = item.runId;
+			if (gid && runId) {
+				const group = runGroups.find((g) => g.groupId === gid);
+				if (group) {
+					const forRun = buildGroupImageList(group).filter((img) => img.runId === runId);
+					if (forRun.length > 0) {
+						lightboxImages = forRun;
+						lightboxIndex = 0;
+						return;
+					}
+				}
+			}
+			lightboxImages = [];
+			lightboxIndex = 0;
+			closeLightbox();
+			return;
+		}
+		lightboxImages = nextImages;
+		// Stay on the slot that was "next" (same index), or previous item if we deleted the last.
+		const nextIndex =
+			currentIdx < 0
+				? 0
+				: currentIdx >= nextImages.length
+					? nextImages.length - 1
+					: currentIdx;
+		lightboxIndex = nextIndex;
+	}
+
+	async function deleteLightboxLocal(item: LightboxItem) {
+		const runId = item.runId;
+		const index = item.outputIndex;
+		if (!runId || index == null) return;
+	const hadRemote = item.hasRemote ?? !item.remote_deleted;
+		await deleteLocalImage(runId, index);
+	if (!hadRemote) {
+		// This was the last copy (local-only); remove from lightbox.
+		applyLightboxDeletion(item);
+		return;
+	}
+	const currentIdx = lightboxImages.findIndex((x) => x.id === item.id);
+	if (currentIdx !== -1) {
+		const updated: LightboxItem = { ...lightboxImages[currentIdx], hasLocal: false };
+		const next = [...lightboxImages];
+		next[currentIdx] = updated;
+		lightboxImages = next;
+	}
+	}
+
+	async function deleteLightboxRemote(item: LightboxItem) {
+		const runId = item.runId;
+		const index = item.outputIndex;
+		if (!runId || index == null) return;
+	const hadLocal = item.hasLocal ?? true;
+		await deleteRemoteImage(runId, index);
+	if (!hadLocal) {
+		// This was the last copy (remote-only); remove from lightbox.
+		applyLightboxDeletion(item);
+		return;
+	}
+	const currentIdx = lightboxImages.findIndex((x) => x.id === item.id);
+	if (currentIdx !== -1) {
+		const updated: LightboxItem = {
+			...lightboxImages[currentIdx],
+			hasRemote: false,
+			remote_deleted: true
+		};
+		const next = [...lightboxImages];
+		next[currentIdx] = updated;
+		lightboxImages = next;
+	}
+	}
+
+	async function deleteLightboxBoth(item: LightboxItem) {
+		const runId = item.runId;
+		const index = item.outputIndex;
+		if (!runId || index == null) return;
+		const ok = await deleteBothImage(runId, index);
+		if (ok) applyLightboxDeletion(item);
+	}
+
+	function proceedLightboxDeletePrompt(item: LightboxItem, kind: 'local' | 'remote' | 'both') {
+		const name = item.filename && item.filename.trim().length ? item.filename : null;
+		if (kind === 'local') {
+			if (getSkipDeleteConfirmCookie('delete_local')) {
+				deleteLightboxLocal(item).catch(() => {});
+				return;
+			}
+			const message = name
+				? `Delete this local file?\n\n'${name}' will be removed from local storage.`
+				: 'Delete this local file from local storage?';
+			lightboxDeletePending = {
+				item,
+				message,
+				confirmLabel: 'Delete local file',
+				action: 'delete_local'
+			};
+			return;
+		}
+		if (kind === 'remote') {
+			if (getSkipDeleteConfirmCookie('delete_remote')) {
+				deleteLightboxRemote(item).catch(() => {});
+				return;
+			}
+			const message = name
+				? `Delete this remote file?\n\n'${name}' will be removed from the ComfyUI server.`
+				: 'Delete this remote file from the ComfyUI server?';
+			lightboxDeletePending = {
+				item,
+				message,
+				confirmLabel: 'Delete remote file',
+				action: 'delete_remote'
+			};
+			return;
+		}
+		if (getSkipDeleteConfirmCookie('delete_all')) {
+			deleteLightboxBoth(item).catch(() => {});
+			return;
+		}
+		const message = name
+			? `Delete this file from local and remote storage?\n\n'${name}' will be removed from local storage and the ComfyUI server.`
+			: 'Delete this file from local storage and the ComfyUI server?';
+		lightboxDeletePending = {
+			item,
+			message,
+			confirmLabel: 'Delete local and remote',
+			action: 'delete_all'
+		};
+	}
+
+	function requestDeleteLightboxLocal(item: LightboxItem) {
+		if (item.runId && favorites.has(item.runId)) {
+			lightboxFavoriteDeletePending = { item, kind: 'local' };
+			return;
+		}
+		proceedLightboxDeletePrompt(item, 'local');
+	}
+
+	function requestDeleteLightboxRemote(item: LightboxItem) {
+		if (item.runId && favorites.has(item.runId)) {
+			lightboxFavoriteDeletePending = { item, kind: 'remote' };
+			return;
+		}
+		proceedLightboxDeletePrompt(item, 'remote');
+	}
+
+	function requestDeleteLightboxBoth(item: LightboxItem) {
+		if (item.runId && favorites.has(item.runId)) {
+			lightboxFavoriteDeletePending = { item, kind: 'both' };
+			return;
+		}
+		proceedLightboxDeletePrompt(item, 'both');
 	}
 	
 	let thumbDownloading = $state(false);
@@ -2787,7 +2988,7 @@ import { get } from 'svelte/store';
 		{@const group = deleteRunGroupPending}
 		{@const runIds = group.runs.map((r) => r.id)}
 		{@const n = runIds.length}
-		{@const hasFav = runIds.some((id) => favorites.has(id))}
+		{@const hasFav = group.runs.some((r) => favorites.has(r.id) && runHasDisplayableOutputs(r))}
 		{@const mainMsg = n > 1
 			? `Delete ${n} generations permanently? This cannot be undone.`
 			: 'Delete this prompt (and all its files) permanently? This cannot be undone.'}
@@ -2869,9 +3070,59 @@ import { get } from 'svelte/store';
 		onToggleSelection={lightboxGroupId ? (item) => toggleImageSelection(lightboxGroupId!, item.id) : undefined}
 		isSelected={lightboxGroupId ? (item) => isImageSelected(lightboxGroupId!, item.id) : undefined}
 		onSendToApp={(item) => { closeLightbox(); sendToAppRunId = item.runId!; sendToAppOutputIndex = item.outputIndex ?? 0; }}
+		onDeleteLocal={requestDeleteLightboxLocal}
+		onDeleteRemote={requestDeleteLightboxRemote}
+		onDeleteBoth={requestDeleteLightboxBoth}
 		showCloseLabel={false}
 		ariaTitle="Media viewer"
 	/>
+
+	{#if lightboxFavoriteDeletePending}
+		{@const fp = lightboxFavoriteDeletePending}
+		<ConfirmDeleteDialog
+			open={true}
+			showDontAskAgain={false}
+			title="Favorited generation"
+			message="This will delete a favorited generation. Are you sure to delete the file?"
+			confirmLabel="Continue"
+			onConfirm={() => {
+				const { item, kind } = fp;
+				lightboxFavoriteDeletePending = null;
+				// Defer so this click’s mouseup doesn’t hit the lightbox before the next dialog mounts.
+				requestAnimationFrame(() => proceedLightboxDeletePrompt(item, kind));
+			}}
+			onCancel={() => {
+				lightboxFavoriteDeletePending = null;
+			}}
+		/>
+	{/if}
+
+	{#if lightboxDeletePending}
+		{@const p = lightboxDeletePending}
+		<ConfirmDeleteDialog
+			open={true}
+			title="Delete file"
+			message={p.message}
+			confirmLabel={p.confirmLabel}
+			onConfirm={async (dontShowAgain) => {
+				if (dontShowAgain) setSkipDeleteConfirmCookie(p.action, true);
+				const item = p.item;
+				const action = p.action;
+				try {
+					if (action === 'delete_local') await deleteLightboxLocal(item);
+					else if (action === 'delete_remote') await deleteLightboxRemote(item);
+					else if (action === 'delete_all') await deleteLightboxBoth(item);
+				} finally {
+					// Close dialog only after delete finishes so the confirming click/mouseup
+					// cannot fall through to the lightbox (which would treat it as backdrop → close).
+					lightboxDeletePending = null;
+				}
+			}}
+			onCancel={() => {
+				lightboxDeletePending = null;
+			}}
+		/>
+	{/if}
 {/if}
 
 <style>

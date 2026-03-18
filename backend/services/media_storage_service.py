@@ -114,7 +114,12 @@ class MediaStorageService:
             return {"ok": False, "error": "No matching images to delete"}
         ok, explicit_error = self._delete_remote_images(run, selected)
         if ok:
-            updated_run_ids = self._apply_remote_deletion_to_all_runs(selected)
+            primary_changed = self._apply_remote_deletion_for_selected_indices(run_id, selected)
+            updated_run_ids = self._apply_remote_deletion_to_all_runs(
+                selected, skip_run_id=run_id
+            )
+            if primary_changed and run_id not in updated_run_ids:
+                updated_run_ids = [run_id, *updated_run_ids]
             return {"ok": True, "remote_status": "deleted", "updated_run_ids": updated_run_ids}
         self._run_repo.update_run(run_id, remote_status="exists")
         return {
@@ -188,6 +193,9 @@ class MediaStorageService:
                     updated_run_ids_list = [run_id]
                 else:
                     self._run_repo.update_run(run_id, media_json=json.dumps(media_updated))
+            # Always return run id for per-output local deletes so clients refresh (avoids stale thumbs after file removal)
+            if (image_index is not None or image_indices is not None) and not updated_run_ids_list:
+                updated_run_ids_list = [run_id]
             run = self._run_repo.get_run(run_id)
             if not run:
                 return {"ok": True, "local_storage_status": "none", "local_path": None, "updated_run_ids": updated_run_ids_list}
@@ -213,6 +221,118 @@ class MediaStorageService:
         finally:
             lock.release()
 
+    def _prune_outputs_after_remote_delete_unavailable(
+        self,
+        run_id: str,
+        attempted_indices: list[int],
+        remote_error: str | None,
+    ) -> dict[str, Any]:
+        """
+        Local files are already gone; Comfy /delete failed (404/405/etc.).
+        Remove output slots that have no local copy so DB/UI match reality.
+        The file may still exist on the Comfy server.
+        """
+        lock = _get_run_lock(run_id)
+        if not lock.acquire(blocking=False):
+            logger.warning(
+                "prune_after_remote_fail: could not lock run_id=%s; client refresh may be stale",
+                run_id,
+            )
+            return {"updated_run_ids": [run_id], "remote_delete_warning": remote_error}
+        try:
+            run = self._run_repo.get_run(run_id)
+            if not run:
+                return {"updated_run_ids": []}
+            images = json.loads(run.images_json) if run.images_json else []
+            if not images or not attempted_indices:
+                return {"updated_run_ids": [run_id], "remote_delete_warning": remote_error}
+            uniq = sorted({int(i) for i in attempted_indices if isinstance(i, int) and i >= 0})
+            to_remove: list[tuple[int, dict]] = []
+            for i in uniq:
+                if i >= len(images) or not isinstance(images[i], dict):
+                    continue
+                if self._has_local_copy(run, i):
+                    continue
+                ent = images[i]
+                to_remove.append((i, ent))
+                self._append_deleted_output_log(run, i, ent)
+            if not to_remove:
+                run2 = self._run_repo.get_run(run_id)
+                if not run2:
+                    return {"updated_run_ids": [run_id], "remote_delete_warning": remote_error}
+                st = self._compute_local_storage_status_from_remaining(run2)
+                self._run_repo.update_run(
+                    run_id,
+                    local_storage_status=st,
+                    local_path=str(self._resolve_run_dir(run2))
+                    if st in ("saved", "partial") and self._resolve_run_dir(run2)
+                    else None,
+                )
+                return {"updated_run_ids": [run_id], "remote_delete_warning": remote_error}
+
+            remove_set = {i for i, _ in to_remove}
+            media_updated = self._media_with_file_deleted(run, images, sorted(remove_set))
+            new_images = [img for j, img in enumerate(images) if j not in remove_set]
+            new_media = [m for j, m in enumerate(media_updated) if j not in remove_set]
+            deleted_outputs = json.loads(run.deleted_outputs_json) if run.deleted_outputs_json else []
+            master_seed = self._get_master_seed_from_run(run)
+            for i, ent in to_remove:
+                deleted_outputs.append(
+                    {
+                        "output_index": i,
+                        "seed": run.seed,
+                        "master_seed": master_seed,
+                        "filename": ent.get("filename"),
+                        "subfolder": ent.get("subfolder") or "",
+                        "type": (ent.get("type") or "output").strip().lower(),
+                        "deleted_at_ts": int(time.time() * 1000),
+                        "remote_delete_failed": True,
+                    }
+                )
+            run_dir = self._resolve_run_dir(run)
+            if run_dir:
+                self._rewrite_metadata_after_removing_outputs(run_dir, run, sorted(remove_set))
+
+            self._run_repo.update_run(
+                run_id,
+                images_json=json.dumps(new_images),
+                media_json=json.dumps(new_media) if new_media else None,
+                deleted_outputs_json=json.dumps(deleted_outputs),
+            )
+            run3 = self._run_repo.get_run(run_id)
+            if not run3:
+                return {"updated_run_ids": [run_id], "remote_delete_warning": remote_error}
+            rd = self._resolve_run_dir(run3)
+            st = self._compute_local_storage_status_from_remaining(run3)
+            if st == "none" and rd and rd.exists():
+                meta_path = self._get_run_metadata_path(rd, run3)
+                if meta_path:
+                    try:
+                        meta_path.unlink(missing_ok=True)
+                    except OSError:
+                        pass
+                try:
+                    if rd.exists() and not any(rd.iterdir()):
+                        rd.rmdir()
+                except OSError:
+                    pass
+                self._run_repo.update_run(run_id, local_storage_status="none", local_path=None)
+            else:
+                self._run_repo.update_run(
+                    run_id,
+                    local_storage_status=st,
+                    local_path=str(rd) if rd and st in ("saved", "partial") else None,
+                )
+            logger.info(
+                "Remote delete unavailable for run_id=%s; pruned %s output slot(s) from DB. %s",
+                run_id,
+                len(to_remove),
+                remote_error or "",
+            )
+            return {"updated_run_ids": [run_id], "remote_delete_warning": remote_error}
+        finally:
+            lock.release()
+
     def delete_both(
         self,
         run_id: str,
@@ -222,14 +342,41 @@ class MediaStorageService:
         local_result = self.delete_local(run_id, image_index=image_index, image_indices=image_indices)
         if not local_result.get("ok"):
             return local_result
+        if image_indices is not None:
+            attempted = list(image_indices)
+        elif image_index is not None:
+            attempted = [image_index]
+        else:
+            run0 = self._run_repo.get_run(run_id)
+            imgs = json.loads(run0.images_json) if run0 and run0.images_json else []
+            attempted = list(range(len(imgs)))
         remote_result = self.delete_remote(
             run_id, image_index=image_index, image_indices=image_indices
         )
+        remote_ids = list(remote_result.get("updated_run_ids") or [])
+        if remote_result.get("ok"):
+            local_ids = list(local_result.get("updated_run_ids") or [run_id])
+            merged = list(dict.fromkeys([*remote_ids, *local_ids]))
+            if not merged:
+                merged = [run_id]
+            return {
+                "ok": True,
+                "local_storage_status": local_result.get("local_storage_status"),
+                "remote_status": remote_result.get("remote_status", "exists"),
+                "updated_run_ids": merged,
+            }
+        err = remote_result.get("error") or "Remote delete failed"
+        prune = self._prune_outputs_after_remote_delete_unavailable(run_id, attempted, err)
+        run_f = self._run_repo.get_run(run_id)
+        ls = run_f.local_storage_status if run_f else local_result.get("local_storage_status")
+        lp = run_f.local_path if run_f else local_result.get("local_path")
         return {
             "ok": True,
-            "local_storage_status": local_result.get("local_storage_status"),
-            "remote_status": remote_result.get("remote_status", "exists"),
-            "updated_run_ids": remote_result.get("updated_run_ids", []),
+            "local_storage_status": ls,
+            "local_path": lp,
+            "remote_status": "exists",
+            "updated_run_ids": prune.get("updated_run_ids") or [run_id],
+            "remote_delete_warning": prune.get("remote_delete_warning") or err,
         }
 
     def delete_run_full(self, run_id: str) -> dict[str, Any]:
@@ -625,7 +772,83 @@ class MediaStorageService:
                 media[i] = {**media[i], "file_deleted": True}
         return media
 
-    def _apply_remote_deletion_to_all_runs(self, selected: list[tuple[int, dict]]) -> list[str]:
+    def _apply_remote_deletion_for_selected_indices(
+        self, run_id: str, selected: list[tuple[int, dict]]
+    ) -> bool:
+        """
+        Update the initiating run after Comfy delete succeeds.
+        Required because list_runs_containing_image only scans the latest N runs;
+        older runs would never be updated otherwise.
+        """
+        run = self._run_repo.get_run(run_id)
+        if not run:
+            return False
+        try:
+            images = json.loads(run.images_json) if run.images_json else []
+        except Exception:
+            return False
+        if not images or not selected:
+            return False
+        to_remove: list[tuple[int, dict]] = []
+        to_mark: list[int] = []
+        for idx, img in selected:
+            if idx < 0 or idx >= len(images):
+                continue
+            ent = images[idx]
+            if not isinstance(ent, dict) or ent.get("remote_deleted"):
+                continue
+            if (ent.get("filename") or "") != (img.get("filename") or ""):
+                continue
+            if (ent.get("subfolder") or "") != (img.get("subfolder") or ""):
+                continue
+            if (ent.get("type") or "output").strip().lower() != (
+                (img.get("type") or "output").strip().lower()
+            ):
+                continue
+            if self._has_local_copy(run, idx):
+                to_mark.append(idx)
+            else:
+                to_remove.append((idx, ent))
+                self._append_deleted_output_log(run, idx, ent)
+        if not to_mark and not to_remove:
+            return False
+        updated = list(images)
+        for i in to_mark:
+            if 0 <= i < len(updated) and isinstance(updated[i], dict):
+                updated[i] = {**updated[i], "remote_deleted": True}
+        for i, _ in sorted(to_remove, key=lambda x: x[0], reverse=True):
+            if 0 <= i < len(updated):
+                updated.pop(i)
+        deleted_outputs = json.loads(run.deleted_outputs_json) if run.deleted_outputs_json else []
+        master_seed = self._get_master_seed_from_run(run)
+        for i, ent in to_remove:
+            deleted_outputs.append(
+                {
+                    "output_index": i,
+                    "seed": run.seed,
+                    "master_seed": master_seed,
+                    "filename": ent.get("filename"),
+                    "subfolder": ent.get("subfolder") or "",
+                    "type": (ent.get("type") or "output").strip().lower(),
+                    "deleted_at_ts": int(time.time() * 1000),
+                }
+            )
+        remove_set = {i for i, _ in to_remove}
+        indices_deleted = sorted(remove_set)
+        media_updated = self._media_with_file_deleted(run, images, indices_deleted)
+        new_media = [m for j, m in enumerate(media_updated) if j not in remove_set]
+        self._run_repo.update_run(
+            run_id,
+            images_json=json.dumps(updated),
+            media_json=json.dumps(new_media) if new_media else None,
+            remote_status="deleted",
+            deleted_outputs_json=json.dumps(deleted_outputs),
+        )
+        return True
+
+    def _apply_remote_deletion_to_all_runs(
+        self, selected: list[tuple[int, dict]], *, skip_run_id: str | None = None
+    ) -> list[str]:
         updated_run_ids: list[str] = []
         seen_files: set[tuple[str, str, str]] = set()
         for _idx, img in selected:
@@ -642,6 +865,8 @@ class MediaStorageService:
             filename, subfolder, typ = key
             runs_with_file = self._run_repo.list_runs_containing_image(filename, subfolder, typ)
             for r in runs_with_file:
+                if skip_run_id and r.id == skip_run_id:
+                    continue
                 try:
                     images = json.loads(r.images_json) if r.images_json else []
                 except Exception:
@@ -702,13 +927,23 @@ class MediaStorageService:
         ok = True
         error_405: str | None = None
         for idx, img in selected:
+            # ComfyUI's delete endpoint (provided by the WorkflowUI plugin) expects
+            # the "type" field to be one of MEDIA_TYPES = ("output", "input", "temp").
+            # Our run metadata may use view-oriented types like "video" or "audio",
+            # so normalize these to a valid folder type before calling /delete.
+            raw_type = img.get("type")
+            view_type = (raw_type or "output").strip().lower()
+            if view_type in ("video", "audio", "image"):
+                folder_type = "output"
+            else:
+                folder_type = view_type or "output"
             try:
                 res = requests.post(
                     f"{base}/delete",
                     json={
                         "filename": img.get("filename"),
                         "subfolder": img.get("subfolder"),
-                        "type": img.get("type"),
+                        "type": folder_type,
                     },
                     timeout=15,
                 )

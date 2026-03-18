@@ -26,7 +26,8 @@
 		width: 100%;
 		height: 100%;
 		pointer-events: none;
-		z-index: 3;
+		/* Above media, below overlay controls (star, checkbox); see ThumbnailOverlay */
+		z-index: 1;
 	}
 
 	.favorite-sash-ribbon {
@@ -44,6 +45,7 @@
 		justify-content: center;
 		box-shadow: 0 0 10px rgba(0, 0, 0, 0.55);
 		border-radius: 0 0 4px 0;
+		pointer-events: none;
 	}
 
 	.favorite-sash-ribbon svg {
@@ -61,4 +63,3 @@
 		}
 	}
 </style>
-

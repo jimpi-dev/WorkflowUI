@@ -4,6 +4,7 @@
 		title = 'Confirm deletion',
 		message = '',
 		confirmLabel = 'Delete',
+		showDontAskAgain = true,
 		onConfirm = () => {},
 		onCancel = () => {}
 	}: {
@@ -11,6 +12,7 @@
 		title?: string;
 		message?: string;
 		confirmLabel?: string;
+		showDontAskAgain?: boolean;
 		onConfirm?: (dontShowAgain: boolean) => void | Promise<void>;
 		onCancel?: () => void;
 	} = $props();
@@ -48,10 +50,12 @@
 		<div class="confirm-delete-card" role="presentation" tabindex="-1" onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.stopPropagation()}>
 			<p id="confirm-delete-dialog-title" class="confirm-delete-title">{title}</p>
 			<p class="confirm-delete-msg">{message}</p>
-			<label class="confirm-delete-checkbox">
-				<input type="checkbox" bind:checked={dontShowAgain} class="confirm-delete-checkbox-input" />
-				<span>Don't ask again</span>
-			</label>
+			{#if showDontAskAgain}
+				<label class="confirm-delete-checkbox">
+					<input type="checkbox" bind:checked={dontShowAgain} class="confirm-delete-checkbox-input" />
+					<span>Don't ask again</span>
+				</label>
+			{/if}
 			<div class="confirm-delete-actions">
 				<button type="button" class="confirm-delete-btn secondary" onclick={handleCancel}>Cancel</button>
 				<button type="button" class="confirm-delete-btn danger" onclick={handleConfirm}>{confirmLabel}</button>
@@ -68,7 +72,8 @@
 		display: flex;
 		align-items: center;
 		justify-content: center;
-		z-index: 1000;
+		/* Above lightbox (.lightbox is z-index 9999) and other app overlays */
+		z-index: 110000;
 	}
 	.confirm-delete-card {
 		background: var(--surface);

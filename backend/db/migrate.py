@@ -249,6 +249,9 @@ def migrate(db_path: Path | str) -> None:
         if "deleted_at" not in gen_cols:
             conn.execute("ALTER TABLE generation ADD COLUMN deleted_at INTEGER NULL")
         gen_cols = _run_columns(conn, "generation")
+        if "input_snapshot_json" not in gen_cols:
+            conn.execute("ALTER TABLE generation ADD COLUMN input_snapshot_json TEXT")
+        gen_cols = _run_columns(conn, "generation")
         if "media_json" in gen_cols:
             for row in conn.execute("SELECT id, images_json FROM generation WHERE images_json IS NOT NULL AND images_json != ''").fetchall():
                 rid, imgs_json = row[0], row[1]
