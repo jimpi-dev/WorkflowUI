@@ -12,6 +12,7 @@ from services.workflow_analyzer import _normalize_to_api_format as normalize_wor
 
 from dependencies import get_db
 from routers.import_ import _find_available_slug
+from services.run_serialization import safe_json_loads
 
 MEDIA_INPUT_TYPES = frozenset({"image", "video", "audio"})
 logger = logging.getLogger(__name__)
@@ -283,13 +284,38 @@ def patch_app(slug: str, body: dict, db=Depends(get_db)):
 
 @router.delete("/apps/{slug}")
 def delete_app(slug: str, db=Depends(get_db)):
-    _, _, app_repo, _, _, preset_repo, _ = db
+    _, workflow_repo, app_repo, run_repo, project_repo, preset_repo, _ = db
     app = app_repo.get_app_by_slug(slug)
     if not app:
         raise HTTPException(status_code=404, detail="App not found")
-    for p in preset_repo.list_by_app_id(app.id):
-        preset_repo.delete(p.id)
-    app_repo.delete_app_by_id(app.id)
+
+    # Track the deleted app on any projects that referenced it so project detail
+    # can still show it as "removed" after runs are nulled.
+    project_ids = run_repo.get_project_ids_for_app(app.id)
+    if project_ids:
+        for pid in project_ids:
+            proj = project_repo.get_project(pid)
+            if not proj:
+                continue
+            meta = safe_json_loads(proj.metadata_json, {}) or {}
+            if not isinstance(meta, dict):
+                meta = {}
+            deleted_ids = meta.get("deleted_app_ids")
+            if not isinstance(deleted_ids, list):
+                deleted_ids = []
+            if app.id not in deleted_ids:
+                deleted_ids.append(app.id)
+            meta["deleted_app_ids"] = deleted_ids
+            project_repo.update_project(pid, metadata_json=json.dumps(meta))
+
+    def _delete_app(conn):
+        # Null out app_id on runs and remove the app + presets in one transaction.
+        run_repo.null_app_ids([app.id], conn=conn)
+        for p in preset_repo.list_by_app_id(app.id):
+            preset_repo.delete(p.id)
+        app_repo.delete_app_by_id(app.id, conn=conn)
+
+    workflow_repo.run_in_transaction(_delete_app)
     return Response(status_code=204)
 
 

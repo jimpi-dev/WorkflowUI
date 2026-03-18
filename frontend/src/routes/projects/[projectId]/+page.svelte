@@ -1,7 +1,8 @@
 <script lang="ts">
-	import { getApiBase } from '$lib/config';
-	import { goto, invalidate } from '$app/navigation';
-	import { page } from '$app/stores';
+import { getApiBase } from '$lib/config';
+import { goto, invalidate } from '$app/navigation';
+import { page } from '$app/stores';
+import { get } from 'svelte/store';
 	import { browser } from '$app/environment';
 	import { onMount, onDestroy, tick, untrack } from 'svelte';
 	import { getThumbSizeCookie, setThumbSizeCookie, getNotesCollapsedCookie, setNotesCollapsedCookie, getLeftPanelCollapsedCookie, setLeftPanelCollapsedCookie, getSkipDeleteConfirmCookie, setSkipDeleteConfirmCookie, type ThumbSize, type DeleteConfirmKey } from '$lib/cookie';
@@ -72,6 +73,7 @@
 	let totalGroups = $state<number>(0);
 	let statsTotalRuns = $state<number | null>(null);
 	let statsTotalGenerations = $state<number | null>(null);
+	const DELETED_APP_FILTER_ID = '__deleted__';
 	let filterAppId = $state<string>('');
 	let filterFromDate = $state<string>('');
 	let filterToDate = $state<string>('');
@@ -132,6 +134,9 @@
 	});
 
 	const filterActive = $derived(!!(filterAppId.trim() || filterFromDate.trim() || filterToDate.trim() || filterMetaQ.trim() || filterFavoritesOnly));
+	const runsRenderKey = $derived(
+		`${data.projectId}|${filterAppId}|${filterFromDate}|${filterToDate}|${filterMetaQ}|${filterFavoritesOnly}`
+	);
 
 	const runGroups = $derived.by(() => {
 		let list = runs;
@@ -139,6 +144,12 @@
 			list = list.filter((r) => favorites.has(r.id));
 		} else if (filterFavoritesOnly) {
 			list = [];
+		}
+		// For concrete apps, filter by app_id on the client as well.
+		// For deleted apps we rely on the backend's deleted_app=true
+		// filter and do not re-filter here.
+		if (filterAppId.trim() && filterAppId !== DELETED_APP_FILTER_ID) {
+			list = list.filter((r) => r.app_id === filterAppId.trim());
 		}
 		const byGroup = new Map<string, ApiRun[]>();
 		for (const r of list) {
@@ -173,7 +184,9 @@
 			const error = sorted.find((r) => r.error)?.error ?? null;
 			const comfyui_unreachable_warning = sorted.find((r) => r.comfyui_unreachable_warning)?.comfyui_unreachable_warning ?? null;
 			const latent_resolution = sorted.find((r) => r.latent_resolution)?.latent_resolution ?? null;
-			const app_removed = !!(first.app_id && first.app_slug == null && first.app_title == null);
+			const app_removed = sorted.some(
+				(r) => r.app_id && r.app_slug == null && r.app_title == null
+			);
 			const app_header_color = first.app_header_color ?? null;
 			groups.push({
 				groupId,
@@ -195,12 +208,14 @@
 		return groups;
 	});
 
+	const visibleRunGroups = $derived.by(() => runGroups);
+
 	const displayRunsCount = $derived(
-		filterFavoritesOnly ? runGroups.length : (statsTotalGenerations ?? totalGroups)
+		filterFavoritesOnly ? visibleRunGroups.length : (statsTotalGenerations ?? totalGroups)
 	);
 
 	const displayGenerationsCount = $derived(
-		filterFavoritesOnly ? runGroups.reduce((n, g) => n + g.runs.length, 0) : (statsTotalRuns ?? 0)
+		filterFavoritesOnly ? visibleRunGroups.reduce((n, g) => n + g.runs.length, 0) : (statsTotalRuns ?? 0)
 	);
 
 	const loadedGroupCount = $derived.by(() => {
@@ -217,6 +232,30 @@
 			if (r.app_id) countByAppId.set(r.app_id, (countByAppId.get(r.app_id) ?? 0) + 1);
 		}
 		return [...apps].sort((a, b) => (countByAppId.get(b.id) ?? 0) - (countByAppId.get(a.id) ?? 0));
+	});
+
+	const appFilterOptions = $derived.by(() => {
+		const options =
+			appsUsedSortedByRuns
+				.map((app) => ({
+					id: app.id,
+					title: (app.title ?? '').trim()
+				}))
+				.filter((app) => app.id && app.title) ?? [];
+
+		const withDeleted = [
+			{
+				id: DELETED_APP_FILTER_ID,
+				title: 'Deleted app (removed)'
+			},
+			...options
+		];
+		const selected = filterAppId?.trim();
+		if (selected && !withDeleted.some((opt) => opt.id === selected)) {
+			const label = selected === DELETED_APP_FILTER_ID ? 'Deleted app (removed)' : 'Selected app';
+			return [{ id: selected, title: label }, ...withDeleted];
+		}
+		return withDeleted;
 	});
 
 	$effect(() => {
@@ -840,10 +879,25 @@
 	);
 
 	const RUNS_PAGE_SIZE = 20;
+	let runsInitialSeq = 0;
+	let runsAppendSeq = 0;
+	let statsRequestSeq = 0;
+	let activeRunsQueryKey = '';
+	let runsAbortController: AbortController | null = null;
+	let statsAbortController: AbortController | null = null;
 
-	async function loadRuns(offset: number = 0) {
+	async function loadRuns(offset: number = 0, queryKey?: string) {
 		const projectIdWeFetch = data.projectId;
 		const isInitial = offset === 0;
+		const requestId = isInitial ? ++runsInitialSeq : ++runsAppendSeq;
+		const key = queryKey ?? activeRunsQueryKey;
+		if (isInitial) {
+			activeRunsQueryKey = key;
+			runsAppendSeq = 0;
+			if (runsAbortController) runsAbortController.abort();
+		}
+		const controller = new AbortController();
+		runsAbortController = controller;
 		if (isInitial) {
 			loading = true;
 			allGroupsRevealed = false;
@@ -854,7 +908,13 @@
 			const q = new URLSearchParams();
 			q.set('limit', String(RUNS_PAGE_SIZE));
 			q.set('offset', String(offset));
-			if (filterAppId.trim()) q.set('app_id', filterAppId.trim());
+			// Ask backend to filter by deleted apps when that option is selected,
+			// otherwise filter by concrete app_id when provided.
+			if (filterAppId === DELETED_APP_FILTER_ID) {
+				q.set('deleted_app', '1');
+			} else if (filterAppId.trim()) {
+				q.set('app_id', filterAppId.trim());
+			}
 			if (filterFromDate.trim()) {
 				const fromMs = new Date(filterFromDate.trim()).setHours(0, 0, 0, 0);
 				q.set('since', String(fromMs));
@@ -865,8 +925,11 @@
 			}
 			if (filterMetaQ.trim()) q.set('meta_q', filterMetaQ.trim());
 			const url = `${apiBase}/projects/${projectIdWeFetch}/runs?${q.toString()}`;
-			const res = await fetch(url);
-			if (data.projectId !== projectIdWeFetch) return;
+			console.debug('[projects runs] loadRuns url', url);
+			const res = await fetch(url, { signal: controller.signal });
+			if (data.projectId !== projectIdWeFetch || key !== activeRunsQueryKey) return;
+			if (isInitial && requestId !== runsInitialSeq) return;
+			if (!isInitial && requestId !== runsAppendSeq) return;
 			if (!res.ok) {
 				if (isInitial) {
 					runs = [];
@@ -875,7 +938,14 @@
 				return;
 			}
 			const raw = await res.json();
-			if (data.projectId !== projectIdWeFetch) return;
+			console.debug(
+				'[projects runs] loadRuns response',
+				{ status: res.status, ok: res.ok },
+				Array.isArray(raw?.runs) ? raw.runs.length : Array.isArray(raw) ? raw.length : null
+			);
+			if (data.projectId !== projectIdWeFetch || key !== activeRunsQueryKey) return;
+			if (isInitial && requestId !== runsInitialSeq) return;
+			if (!isInitial && requestId !== runsAppendSeq) return;
 			const mapRun = (r: ApiRun) => ({ ...r, run_group_id: r.run_group_id ?? null });
 			if (raw && typeof raw === 'object' && Array.isArray(raw.runs)) {
 				const newRuns = raw.runs.map(mapRun);
@@ -894,14 +964,19 @@
 				runs = Array.isArray(raw) ? raw.map(mapRun) : [];
 				totalGroups = runs.length;
 			}
-		} catch {
-			if (data.projectId !== projectIdWeFetch) return;
+		} catch (e) {
+			if (e instanceof DOMException && e.name === 'AbortError') return;
+			if (data.projectId !== projectIdWeFetch || key !== activeRunsQueryKey) return;
+			if (isInitial && requestId !== runsInitialSeq) return;
+			if (!isInitial && requestId !== runsAppendSeq) return;
 			if (isInitial) {
 				runs = [];
 				totalGroups = 0;
 			}
 		} finally {
-			if (data.projectId === projectIdWeFetch) {
+			if (data.projectId === projectIdWeFetch && key === activeRunsQueryKey) {
+				if (isInitial && requestId !== runsInitialSeq) return;
+				if (!isInitial && requestId !== runsAppendSeq) return;
 				if (isInitial) loading = false;
 				else loadingMore = false;
 			}
@@ -915,8 +990,16 @@
 
 	async function loadStats() {
 		const projectIdWeFetch = data.projectId;
+		const requestId = ++statsRequestSeq;
+		if (statsAbortController) statsAbortController.abort();
+		const controller = new AbortController();
+		statsAbortController = controller;
 		const q = new URLSearchParams();
-		if (filterAppId.trim()) q.set('app_id', filterAppId.trim());
+		if (filterAppId === DELETED_APP_FILTER_ID) {
+			q.set('deleted_app', '1');
+		} else if (filterAppId.trim()) {
+			q.set('app_id', filterAppId.trim());
+		}
 		if (filterFromDate.trim()) {
 			q.set('since', String(new Date(filterFromDate.trim()).setHours(0, 0, 0, 0)));
 		}
@@ -925,14 +1008,15 @@
 		}
 		if (filterMetaQ.trim()) q.set('meta_q', filterMetaQ.trim());
 		try {
-			const res = await fetch(`${apiBase}/projects/${projectIdWeFetch}/runs/stats?${q.toString()}`);
-			if (data.projectId !== projectIdWeFetch || !res.ok) return;
+			const res = await fetch(`${apiBase}/projects/${projectIdWeFetch}/runs/stats?${q.toString()}`, { signal: controller.signal });
+			if (data.projectId !== projectIdWeFetch || requestId !== statsRequestSeq || !res.ok) return;
 			const raw = await res.json();
-			if (data.projectId !== projectIdWeFetch) return;
+			if (data.projectId !== projectIdWeFetch || requestId !== statsRequestSeq) return;
 			if (typeof raw.total_runs === 'number') statsTotalRuns = raw.total_runs;
 			if (typeof raw.total_generations === 'number') statsTotalGenerations = raw.total_generations;
-		} catch {
-			if (data.projectId === projectIdWeFetch) {
+		} catch (e) {
+			if (e instanceof DOMException && e.name === 'AbortError') return;
+			if (data.projectId === projectIdWeFetch && requestId === statsRequestSeq) {
 				statsTotalRuns = null;
 				statsTotalGenerations = null;
 			}
@@ -941,12 +1025,15 @@
 
 	$effect(() => {
 		const projectId = data.projectId;
+		// Re-load runs and stats whenever filters change, but do not
+		// mutate filterAppId here so the select binding remains stable.
 		filterAppId;
 		filterFromDate;
 		filterToDate;
 		filterMetaQ;
 		if (projectId && browser) {
-			loadRuns();
+			const key = `${filterAppId}|${filterFromDate}|${filterToDate}|${filterMetaQ}|${filterFavoritesOnly}`;
+			loadRuns(0, key);
 			loadStats();
 		}
 	});
@@ -979,7 +1066,7 @@
 		goto(`/app/${appSlug}?project=${data.projectId}&run_id=${encodeURIComponent(runId)}`);
 	}
 
-	const fromPath = $derived($page.url.searchParams.get('from') ?? '');
+	const fromPath = $derived(get(page).url.searchParams.get('from') ?? '');
 	function backLabel(path: string): string {
 		if (path.startsWith('/app/')) return 'Back to workflow';
 		if (path === '/workflows' || path.startsWith('/workflows/')) return 'Back to workflows';
@@ -1171,6 +1258,7 @@
 		};
 	}
 	function thumbSrc(thumbKey: string, url: string): string | undefined {
+		if (filterActive) return url;
 		return visibleThumbKeys[thumbKey] ? url : undefined;
 	}
 	
@@ -1180,7 +1268,7 @@
 	let _thumbRevealCount = 0;
 	$effect(() => {
 		if (!browser || loading || runGroups.length === 0) return;
-	
+
 		if (allGroupsRevealed && runGroups.length > _thumbRevealCount) allGroupsRevealed = false;
 		if (allGroupsRevealed) return;
 		const projectIdForBatch = data.projectId;
@@ -1209,6 +1297,20 @@
 		return () => clearTimeout(timeoutId);
 	});
 
+	$effect(() => {
+		if (!browser || loading) return;
+		if (!filterActive) return;
+		const groups = runGroups;
+		if (groups.length === 0) return;
+		const next: Record<string, boolean> = {};
+		for (const g of groups) {
+			for (const k of getThumbKeysForGroupId(g.groupId)) next[k] = true;
+		}
+		visibleThumbKeys = next;
+		_thumbRevealCount = groups.length;
+		allGroupsRevealed = true;
+	});
+
 	let _prevProjectId = $state<string | undefined>(undefined);
 	$effect(() => {
 		const projectId = data.projectId;
@@ -1230,6 +1332,20 @@
 			allGroupsRevealed = false;
 		}
 		_prevFilterFavoritesOnly = on;
+	});
+
+	let _prevFilterSignature = $state<string | undefined>(undefined);
+	$effect(() => {
+		const sig = `${filterAppId}|${filterFromDate}|${filterToDate}|${filterMetaQ}`;
+		if (_prevFilterSignature !== undefined && _prevFilterSignature !== sig) {
+			_thumbRevealCount = 0;
+			allGroupsRevealed = false;
+			visibleThumbKeys = {};
+			loadedThumbIds = {};
+			imagePreviewFailed = {};
+			thumbLoadFailed = new Set();
+		}
+		_prevFilterSignature = sig;
 	});
 	
 	$effect(() => {
@@ -1821,9 +1937,13 @@
 				</label>
 				<label class="filter-row">
 					<span class="filter-label">App</span>
-					<select class="filter-select" bind:value={filterAppId}>
+					<select
+						class="filter-select"
+						value={filterAppId}
+						onchange={(e) => { filterAppId = (e.currentTarget as HTMLSelectElement).value; }}
+					>
 						<option value="">All apps</option>
-						{#each data.project.apps_used ?? [] as app (app.id)}
+						{#each appFilterOptions as app (app.id)}
 							<option value={app.id}>{app.title}</option>
 						{/each}
 					</select>
@@ -1927,7 +2047,7 @@
 							{#if app.removed}
 								<span class="apps-used-removed-wrap" title="This app was deleted. No generated data was removed; run history is still available.">
 									<RunAppBadge
-										label="App removed"
+										label="Deleted App"
 										title="This app was deleted. No generated data was removed; run history is still available."
 										removed={true}
 									/>
@@ -2055,7 +2175,7 @@
 				</div>
 				{#if !loading}
 					<div class="runs-list-head-actions">
-						{#if runGroups.length > 0}
+						{#if visibleRunGroups.length > 0}
 						<div class="move-runs-actions">
 							<button
 								type="button"
@@ -2154,7 +2274,7 @@
 				<div class="runs-loading-wrap">
 					<PageLoadingIndicator />
 				</div>
-			{:else if !runGroups.length}
+			{:else if !visibleRunGroups.length}
 				{#if data.project.run_count === 0 && (data.appsForNew?.length ?? 0) > 0}
 					<div class="empty-project-state">
 						<div class="empty-project-icon" aria-hidden="true">
@@ -2187,7 +2307,8 @@
 				{/if}
 			{:else}
 				<div class="runs-scroll" bind:this={runsScrollEl}>
-					{#each runGroups as group (group.groupId)}
+					{#key runsRenderKey}
+					{#each visibleRunGroups as group (group.groupId)}
 						{@const storageSummary = getGroupStorageSummary(group)}
 						{@const savingGroup = savingGroupIds.has(group.groupId)}
 						{@const deletingGroup = deletingGroupIds.has(group.groupId)}
@@ -2256,7 +2377,7 @@
 									<span class="run-dot"></span>
 									<RunAppBadge
 										appHeaderColor={group.app_header_color ?? undefined}
-										label={group.app_removed ? 'App removed' : (group.app_title ?? group.app_slug ?? 'App')}
+										label={group.app_removed ? 'Deleted App' : (group.app_title ?? group.app_slug ?? 'App')}
 										title={group.app_removed ? 'App was deleted. No generated data was removed; run history is still available.' : (group.app_title ?? group.app_slug ?? '')}
 										removed={group.app_removed}
 									/>
@@ -2588,6 +2709,7 @@
 							{/if}
 						</section>
 					{/each}
+					{/key}
 					{#if loadedGroupCount < totalGroups && totalGroups > 0}
 						<div
 							class="load-more-sentinel"
