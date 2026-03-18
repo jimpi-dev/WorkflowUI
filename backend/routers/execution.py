@@ -14,6 +14,7 @@ from services.workflowui_metadata import (
 )
 from services.png_metadata import inject_workflowui_chunk
 from services.mp3_metadata import inject_workflowui_metadata as inject_workflowui_metadata_mp3
+from services.mp4_metadata import inject_workflowui_metadata as inject_workflowui_metadata_mp4
 
 from dependencies import COMFY_URL, INPUT_DATA_DIR, get_db, get_media_storage_service, get_run_queue_state
 
@@ -358,4 +359,6 @@ def get_image(
                     content = inject_workflowui_chunk(content, json_str)
                 elif type == "audio" and (content[:3] == b"ID3" or (len(content) >= 2 and content[0] == 0xFF and (content[1] & 0xE0) == 0xE0)):
                     content = inject_workflowui_metadata_mp3(content, json_str)
+                elif type == "video":
+                    content = inject_workflowui_metadata_mp4(content, json_str)
     return Response(content=content, media_type=media_type)

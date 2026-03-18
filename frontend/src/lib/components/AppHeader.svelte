@@ -6,6 +6,7 @@
 	import { QUICK_RUNS_PROJECT_ID } from '$lib/constants';
 	import { appConfig, getApiBase } from '$lib/config';
 	import { waitForAppToBeAvailable } from '$lib/api';
+	import { appBooting } from '$lib/stores/appBooting';
 	import { headerAppContext } from '$lib/stores/headerAppContext';
 	import { presetHeaderStore, togglePresetHeaderCreation, requestOpenPresetList } from '$lib/stores/presetHeader';
 	import { projectSelectorOpen } from '$lib/stores/projectSelectorOpen';
@@ -46,7 +47,37 @@
 	}
 
 	function handleKeydown(e: KeyboardEvent) {
+		if (importDialogOpen && e.key === 'Escape') {
+			importDialogOpen = false;
+			pendingImport = null;
+			return;
+		}
 		if (menuOpen && e.key === 'Escape') closeMenu();
+	}
+
+	async function continueLoadingImportedApp() {
+		const p = pendingImport;
+		importDialogOpen = false;
+		pendingImport = null;
+		if (!p) return;
+		if (p.input_snapshot != null) {
+			try {
+				sessionStorage.setItem(
+					'workflowui_import_prefill',
+					JSON.stringify({ slug: p.slug, input_snapshot: p.input_snapshot })
+				);
+			} catch {
+				// ignore
+			}
+		}
+		appBooting.set(true);
+		await waitForAppToBeAvailable(p.slug);
+		await goto(`/app/${p.slug}`);
+	}
+
+	function dismissImportDialog() {
+		importDialogOpen = false;
+		pendingImport = null;
 	}
 
 	let downloadingWorkflow = $state(false);
@@ -55,17 +86,29 @@
 	let dropZoneLoading = $state(false);
 	let dropZoneDragOver = $state(false);
 
+	type PendingImport = {
+		slug: string;
+		input_snapshot?: object;
+		appName: string;
+		workflowName: string;
+		isExisting: boolean;
+	};
+	let importDialogOpen = $state(false);
+	let pendingImport = $state<PendingImport | null>(null);
+
 	function isWorkflowuiFile(file: File): boolean {
 		if (file.type.startsWith('image/')) return true;
 		if (file.type === 'audio/mpeg' || file.type === 'audio/mp3') return true;
-		return file.name.toLowerCase().endsWith('.mp3');
+		if (file.type.startsWith('video/')) return true;
+		const n = file.name.toLowerCase();
+		return n.endsWith('.mp3') || n.endsWith('.mp4');
 	}
 
 	async function handleDropZoneFile(files: FileList | null) {
 		const file = files?.[0];
 		if (!file) return;
 		if (!isWorkflowuiFile(file)) {
-			dropZoneMessage = 'Drop a PNG or MP3 saved from WorkflowUI.';
+			dropZoneMessage = 'Drop a PNG, MP3, or MP4 saved from WorkflowUI.';
 			return;
 		}
 		dropZoneMessage = '';
@@ -78,33 +121,43 @@
 			const data = await res.json().catch(() => ({}));
 			if (data.action === 'open' && data.app_slug) {
 				const slug = data.app_slug;
-				if (data.input_snapshot != null && typeof data.input_snapshot === 'object') {
-					try {
-						sessionStorage.setItem('workflowui_import_prefill', JSON.stringify({ slug, input_snapshot: data.input_snapshot }));
-					} catch {
-					}
-				}
-				await waitForAppToBeAvailable(slug);
-				await goto(`/app/${slug}`);
+				const appName = data.app_title ?? data.app_slug ?? 'App';
+				const workflowName = data.workflow_name ?? 'Workflow';
+				pendingImport = {
+					slug,
+					input_snapshot:
+						data.input_snapshot != null && typeof data.input_snapshot === 'object'
+							? data.input_snapshot
+							: undefined,
+					appName,
+					workflowName,
+					isExisting: true,
+				};
+				importDialogOpen = true;
 				return;
 			}
 			if (data.action === 'restored' && data.app_slug) {
 				const slug = data.resolved_slug ?? data.app_slug;
-				if (data.input_snapshot != null && typeof data.input_snapshot === 'object') {
-					try {
-						sessionStorage.setItem('workflowui_import_prefill', JSON.stringify({ slug, input_snapshot: data.input_snapshot }));
-					} catch {
-					}
-				}
-				await waitForAppToBeAvailable(slug);
-				await goto(`/app/${slug}`);
+				const appName = data.app_title ?? data.resolved_slug ?? data.app_slug ?? 'App';
+				const workflowName = data.workflow_name ?? data.resolved_workflow_name ?? 'Workflow';
+				pendingImport = {
+					slug,
+					input_snapshot:
+						data.input_snapshot != null && typeof data.input_snapshot === 'object'
+							? data.input_snapshot
+							: undefined,
+					appName,
+					workflowName,
+					isExisting: false,
+				};
+				importDialogOpen = true;
 				return;
 			}
 			if (data.action === 'ignored') {
 				dropZoneMessage =
 					data.reason === 'invalid_snapshot'
 						? 'Invalid or corrupted WorkflowUI metadata in this file.'
-						: 'No WorkflowUI metadata in this file. Save images or audio from WorkflowUI with metadata on download/save to restore.';
+						: 'No WorkflowUI metadata in this file. Save images, audio, or video from WorkflowUI with metadata on download/save to restore.';
 			} else {
 				dropZoneMessage = 'Import failed. Try again.';
 			}
@@ -257,6 +310,43 @@
 		<a href="/workflows" class:active={$page.url.pathname === '/workflows' || $page.url.pathname.startsWith('/workflows/')} onclick={closeMenu}>Workflows</a>
 		<a href="/import" class:active={$page.url.pathname === '/import'} onclick={closeMenu}>Import</a>
 	</nav>
+	{#if importDialogOpen && pendingImport}
+		<div
+			class="import-confirm-backdrop"
+			role="dialog"
+			aria-modal="true"
+			aria-labelledby="import-confirm-title"
+			tabindex="-1"
+			onclick={dismissImportDialog}
+			onkeydown={(e) => { if (e.key === 'Escape') dismissImportDialog(); }}
+		>
+			<div class="import-confirm-dialog" role="presentation" tabindex="-1" onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.stopPropagation()}>
+				<h2 id="import-confirm-title" class="import-confirm-title">Import successful</h2>
+				<p class="import-confirm-desc">The following app and workflow were imported:</p>
+				<p class="import-confirm-status">
+					{#if pendingImport.isExisting}
+						<strong>Existing app</strong> — this matched an existing app and will open it.
+					{:else}
+						<strong>New app</strong> — a new app was created from this import.
+					{/if}
+				</p>
+				<dl class="import-confirm-meta">
+					<dt>App</dt>
+					<dd>{pendingImport.appName}</dd>
+					<dt>Workflow</dt>
+					<dd>{pendingImport.workflowName}</dd>
+				</dl>
+				<div class="import-confirm-actions">
+					<button type="button" class="import-confirm-btn secondary" onclick={dismissImportDialog}>
+						Don't load app now
+					</button>
+					<button type="button" class="import-confirm-btn primary" onclick={continueLoadingImportedApp}>
+						Continue loading imported app with values
+					</button>
+				</div>
+			</div>
+		</div>
+	{/if}
 	{#if $headerAppContext.workflowId && $headerAppContext.displayName}
 		<div class="header-subtitle-row">
 			<div class="header-subtitle-divider" aria-hidden="true"></div>
@@ -686,6 +776,91 @@
 		margin: 0;
 		max-width: 240px;
 		text-align: right;
+	}
+
+	.import-confirm-backdrop {
+		position: fixed;
+		inset: 0;
+		z-index: 2000;
+		background: rgba(0, 0, 0, 0.5);
+		backdrop-filter: blur(6px);
+		-webkit-backdrop-filter: blur(6px);
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		padding: 1rem;
+	}
+	.import-confirm-dialog {
+		background: var(--card-bg, var(--surface));
+		border-radius: 12px;
+		padding: 1.25rem 1.5rem;
+		max-width: min(720px, 96vw);
+		width: auto;
+		box-shadow: 0 20px 40px rgba(0, 0, 0, 0.25);
+	}
+	.import-confirm-title {
+		margin: 0 0 0.5rem 0;
+		font-size: 1.15rem;
+		font-weight: 600;
+	}
+	.import-confirm-desc {
+		margin: 0 0 0.75rem 0;
+		font-size: 0.95rem;
+		color: var(--text-muted, var(--muted));
+	}
+	.import-confirm-status {
+		margin: 0 0 0.75rem 0;
+		font-size: 0.9rem;
+		color: var(--text-muted, var(--muted));
+	}
+	.import-confirm-status strong {
+		color: var(--accent);
+	}
+	.import-confirm-meta {
+		display: grid;
+		grid-template-columns: auto minmax(0, 1fr);
+		gap: 0.25rem 1rem;
+		margin: 0 0 1.25rem 0;
+		font-size: 0.95rem;
+	}
+	.import-confirm-meta dt {
+		margin: 0;
+		font-weight: 600;
+		color: var(--text);
+	}
+	.import-confirm-meta dd {
+		margin: 0;
+		color: var(--text);
+		overflow-wrap: anywhere;
+	}
+	.import-confirm-actions {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.5rem;
+		justify-content: flex-end;
+	}
+	.import-confirm-btn {
+		padding: 0.5rem 1rem;
+		border-radius: 8px;
+		font-size: 0.9rem;
+		font-weight: 500;
+		cursor: pointer;
+		border: none;
+		transition: filter 0.15s ease, background 0.15s ease;
+	}
+	.import-confirm-btn.secondary {
+		background: color-mix(in srgb, var(--accent) 12%, var(--surface));
+		color: var(--text);
+	}
+	.import-confirm-btn.secondary:hover {
+		background: color-mix(in srgb, var(--accent) 18%, var(--surface));
+	}
+	.import-confirm-btn.primary {
+		background: var(--accent);
+		color: var(--accent-fg, #fff);
+	}
+	.import-confirm-btn.primary:hover {
+		filter: brightness(1.08);
 	}
 
 	.logo-divider-wrap {
