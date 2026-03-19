@@ -131,7 +131,7 @@ Edit before starting or rebuilding the frontend.
 
 | Option | Description |
 |--------|-------------|
-| `backendUrl` | Backend API base URL (e.g. `http://localhost:8000`). Empty = same origin (e.g. behind reverse proxy). |
+| `backendUrl` | Backend API base URL (e.g. `http://localhost:8000`). Empty = same origin (e.g. behind reverse proxy). Can be overridden at dev/runtime via `BACKEND_URL` env. |
 
 After changing `app.config.json`, restart the dev server or run `npm run build` in `frontend/`.
 
@@ -148,6 +148,17 @@ Optional. Copy from `.env.example`:
 | `INPUT_DATA_DIR` | Directory for uploaded media (default: `input_data`).                                                                                               |
 | `WORKFLOWUI_EMBED_METADATA_ON_DOWNLOAD` | Append metadata when user downloads image from UI. This settings can be turned on/off on App-Level.                                                 |
 | `WORKFLOWUI_EMBED_METADATA_ON_SAVE` | Append metadata when saving run to local storage (using save icon). This settings can be turned on/off on App-Level.                                                                               |
+| `WORKFLOWUI_CORS_ORIGINS` | Optional. Comma-separated list of allowed frontend origins for CORS (e.g. `http://localhost:5173,http://127.0.0.1:5173`). Defaults to these two when unset. |
+
+### Changing dev ports without CORS issues
+
+- The helper scripts `start.ps1` (Windows) and `start.sh` (Linux/macOS) define backend and frontend dev ports at the top of the file (`BackendPort`/`BACKEND_PORT` and `FrontendPort`/`FRONTEND_PORT`).
+- When you change these values and run the script:
+  - The backend is started on the chosen backend port and gets `WORKFLOWUI_CORS_ORIGINS` set to match the frontend origin(s) on that port.
+  - The frontend dev server (Vite/SvelteKit) is started on the chosen frontend port and receives:
+    - `BACKEND_URL=http://localhost:<BackendPort>` so proxy/API calls hit the correct backend.
+    - `FRONTEND_PORT`/`PORT` to bind Vite to the desired port.
+- This means any user cloning the repo can adjust only those two variables in the start script and avoid CORS errors when using non-default dev ports.
 
 ## Tech stack
 
