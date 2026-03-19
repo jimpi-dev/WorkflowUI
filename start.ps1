@@ -8,6 +8,8 @@ if (-not $RootDir) { $RootDir = Get-Location }
 $BackendPort = 8000
 $FrontendPort = 5173
 
+$corsOrigins = "http://localhost:$FrontendPort,http://127.0.0.1:$FrontendPort"
+
 function Stop-ProcessOnPort {
     param ([int]$Port)
     $conn = Get-NetTCPConnection -LocalPort $Port -ErrorAction SilentlyContinue
@@ -28,12 +30,12 @@ Stop-ProcessOnPort -Port $FrontendPort
 Start-Sleep -Seconds 1
 
 Write-Host "Starting backend (FastAPI) on port $BackendPort with APP_ENV=production ..."
-Start-Process powershell -ArgumentList "-NoExit", "-Command", "cd '$RootDir\backend'; `$env:APP_ENV='production'; uvicorn main:app --reload --port $BackendPort"
+Start-Process powershell -ArgumentList "-NoExit", "-Command", "cd '$RootDir\backend'; `$env:APP_ENV='production'; `$env:WORKFLOWUI_CORS_ORIGINS='$corsOrigins'; uvicorn main:app --reload --port $BackendPort"
 
 Start-Sleep -Seconds 2
 
 Write-Host "Starting frontend (SvelteKit) on port $FrontendPort ..."
-Start-Process powershell -ArgumentList "-NoExit", "-Command", "cd '$RootDir\frontend'; npm run dev"
+Start-Process powershell -ArgumentList "-NoExit", "-Command", "cd '$RootDir\frontend'; `$env:BACKEND_URL='http://localhost:$BackendPort'; `$env:FRONTEND_PORT='$FrontendPort'; npm run dev -- --port $FrontendPort"
 
 Write-Host ""
 Write-Host "Backend:  http://localhost:$BackendPort"
