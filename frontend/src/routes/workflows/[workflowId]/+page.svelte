@@ -2,6 +2,7 @@
 	import { goto, invalidate } from '$app/navigation';
 	import { getApiBase } from '$lib/config';
 	import { browser } from '$app/environment';
+	import { appBooting } from '$lib/stores/appBooting';
 
 	let { data } = $props();
 	const workflow = $derived(data?.workflow ?? null);
@@ -35,6 +36,12 @@
 	let deleteAppError = $state<string | null>(null);
 	let deleteAppLoading = $state(false);
 	let downloadingAppSlug = $state<string | null>(null);
+
+	function openApp(slug: string) {
+		if (!slug) return;
+		appBooting.set(true);
+		goto(`/app/${slug}`);
+	}
 
 	async function downloadAppWorkflowWithDefaults(appSlug: string) {
 		if (!appSlug || downloadingAppSlug) return;
@@ -263,7 +270,7 @@
 							{/if}
 						</div>
 						<button type="button" class="button secondary small" onclick={() => goto(`/apps/${app.slug}/edit`)}>Edit</button>
-						<button type="button" class="button small" onclick={() => goto(`/app/${app.slug}`)}>Open</button>
+						<button type="button" class="button small" onclick={() => openApp(app.slug)}>Open</button>
 						<button
 							type="button"
 							class="button secondary small"

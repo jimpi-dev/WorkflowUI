@@ -77,12 +77,25 @@ _SPA_PATH_PREFIXES = ("app", "apps", "projects", "workflows", "import")
 
 
 def _is_spa_document_request(path: str, sec_fetch_dest: str, accept: str) -> bool:
-    if sec_fetch_dest != "document" and "text/html" not in (accept or ""):
-        return False
     path = (path or "").strip("/")
     if not path:
         return True
-    return path in _SPA_PATH_PREFIXES or any(path.startswith(p + "/") for p in _SPA_PATH_PREFIXES)
+
+    is_spa_path = path in _SPA_PATH_PREFIXES or any(path.startswith(p + "/") for p in _SPA_PATH_PREFIXES)
+    if not is_spa_path:
+        return False
+
+    # Primary signal for browser navigations.
+    if sec_fetch_dest == "document" or "text/html" in (accept or ""):
+        return True
+
+    # Fallback for proxy/container setups where browser intent headers are altered.
+    # For known SPA paths without a file extension, serve index.html.
+    leaf = path.rsplit("/", 1)[-1]
+    if "." not in leaf:
+        return True
+
+    return False
 
 
 class SPAFallbackMiddleware(BaseHTTPMiddleware):
