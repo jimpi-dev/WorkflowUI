@@ -1097,4 +1097,15 @@
 	.queue-badge-warning {
 		color: var(--warning);
 	}
+
+	@media (max-width: 639px) {
+		.queue-panel {
+			border-left: none;
+			box-shadow: none;
+		}
+		.queue-panel-resize-handle,
+		.queue-panel-collapse-tab {
+			display: none;
+		}
+	}
 </style>

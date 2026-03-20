@@ -292,4 +292,8 @@ select:focus {
         padding: 0.35rem 0.5rem 0.5rem;
         gap: 1rem;
     }
+    /* Mobile tap-target baseline (~44px) */
+    button {
+        min-height: 44px;
+    }
 }

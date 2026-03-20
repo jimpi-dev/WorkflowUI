@@ -1,10 +1,13 @@
 <script lang="ts">
+	import { onMount } from 'svelte';
 	import { getApiBase } from '$lib/config';
+	import { browser } from '$app/environment';
 	import SendToAppDialog from '$lib/components/SendToAppDialog.svelte';
 
 	let { data } = $props();
 
 	let sendToAppOutputIndex = $state<number | null>(null);
+	let isMobile = $state(false);
 
 	const apiBase = getApiBase() || '';
 
@@ -21,6 +24,24 @@
 	function markImageLoadFailed(index: number) {
 		imageLoadFailed = new Set([...imageLoadFailed, imageKey(index)]);
 	}
+
+	onMount(() => {
+		if (!browser) return;
+		const mq = window.matchMedia('(max-width: 639px)');
+		const update = () => {
+			isMobile = mq.matches;
+		};
+		update();
+		// Safari < 14 fallback
+		if (typeof mq.addEventListener === 'function') mq.addEventListener('change', update);
+		// @ts-expect-error - legacy listener
+		else mq.addListener(update);
+		return () => {
+			if (typeof mq.removeEventListener === 'function') mq.removeEventListener('change', update);
+			// @ts-expect-error - legacy listener
+			else mq.removeListener(update);
+		};
+	});
 </script>
 
 {#if !data.run}
@@ -109,8 +130,10 @@
 					</dl>
 				{/if}
 				{#if data.run.metadata_snapshot && Object.keys(data.run.metadata_snapshot).length > 0}
-					<h3>Metadata snapshot</h3>
-					<pre class="json-block">{JSON.stringify(data.run.metadata_snapshot, null, 2)}</pre>
+					<details class="json-accordion json-accordion--always-summary" open={!isMobile}>
+						<summary>Metadata snapshot</summary>
+						<pre class="json-block">{JSON.stringify(data.run.metadata_snapshot, null, 2)}</pre>
+					</details>
 				{/if}
 				{#if data.run.deleted_outputs?.length}
 					<h3>Deleted outputs</h3>
@@ -143,7 +166,10 @@
 				<h2>Input snapshot</h2>
 				<p class="hint">Exactly what was used for this run (stored at execution).</p>
 				{#if data.run.input_snapshot}
-					<pre class="json-block">{JSON.stringify(data.run.input_snapshot, null, 2)}</pre>
+					<details class="json-accordion" open={!isMobile}>
+						<summary>Input snapshot JSON</summary>
+						<pre class="json-block">{JSON.stringify(data.run.input_snapshot, null, 2)}</pre>
+					</details>
 				{:else}
 					<p class="muted">No input snapshot stored.</p>
 				{/if}
@@ -370,5 +396,50 @@
 	}
 	.back-link:hover {
 		color: var(--accent);
+	}
+
+	.json-accordion {
+		margin: 1rem 0 0.5rem 0;
+		border-radius: 10px;
+		border: 1px solid var(--border);
+		background: rgba(0, 0, 0, 0.08);
+		overflow: hidden;
+	}
+	.json-accordion[open] {
+		/* Keep desktop close to the prior layout (JSON pre already has its own styling). */
+		border: none;
+		background: transparent;
+	}
+	.meta-card .json-accordion {
+		background: transparent;
+	}
+	.json-accordion summary {
+		list-style: none;
+		cursor: pointer;
+		padding: 0.75rem 1rem 0.35rem 1rem;
+		color: var(--text-muted);
+		font-size: 0.95rem;
+		font-weight: 600;
+	}
+	.json-accordion summary::-webkit-details-marker {
+		display: none;
+	}
+	.json-accordion[open] > summary {
+		/* On desktop we open by default and hide the summary line to preserve prior layout. */
+		display: none;
+	}
+	.json-accordion--always-summary[open] > summary {
+		display: block;
+	}
+
+	@media (max-width: 639px) {
+		.two-panel {
+			grid-template-columns: 1fr;
+			gap: 1rem;
+		}
+		.left-panel,
+		.right-panel {
+			overflow-y: visible;
+		}
 	}
 </style>
