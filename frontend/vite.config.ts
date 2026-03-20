@@ -79,6 +79,7 @@ export default defineConfig({
 	server: {
 		port: devPort,
 		proxy: {
+			'/api': proxyTarget,
 			// Only proxy API paths that do NOT overlap with SvelteKit frontend routes.
 			// /workflow uses bypass so /workflows (frontend route) is never proxied — avoids JSON on reload.
 			'/workflow': {
