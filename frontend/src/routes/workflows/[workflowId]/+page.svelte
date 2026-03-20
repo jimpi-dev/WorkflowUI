@@ -12,7 +12,15 @@
 		const v = workflow?.versions ?? [];
 		if (!v.length) return;
 		const currentValid = selectedVersionId != null && v.some((x: { id: string }) => x.id === selectedVersionId);
-		if (!currentValid) selectedVersionId = v[0].id;
+		if (!currentValid) {
+			const versionsDesc = [...v].sort(
+				(a: { version?: number }, b: { version?: number }) => (b.version ?? 0) - (a.version ?? 0)
+			);
+			const preferredVersion =
+				versionsDesc.find((x: { apps?: unknown[] }) => Array.isArray(x.apps) && x.apps.length > 0) ??
+				versionsDesc[0];
+			selectedVersionId = preferredVersion?.id ?? v[0].id;
+		}
 	});
 	const selectedVersion = $derived(versions.find((v) => v.id === selectedVersionId) ?? versions[0]);
 	const apps = $derived(selectedVersion?.apps ?? []);
