@@ -242,10 +242,15 @@
 	}
 
 	function isCompatibleWithSendFrom(a: AppSummary): boolean {
-		if (!sendFromRun || !sendFromOutput) return true;
+		// When we can't resolve the media kind for the "send from" context
+		// (e.g. `/runs/:runId` failed after Ctrl+R), don't aggressively filter
+		// apps down to an assumed kind. Otherwise the list can go empty until
+		// a backend restart.
+		if (!sendFromRun || sendFromOutput == null) return true;
 		const kinds = a.supported_input_kinds;
 		if (!kinds || kinds.length === 0) return true;
-		const kind = sendFromMediaKind ?? 'image';
+		if (!sendFromMediaKind) return true; // unknown kind -> don't filter
+		const kind = sendFromMediaKind;
 		return kinds.some((k) => (k ?? '').toLowerCase() === kind.toLowerCase());
 	}
 
