@@ -3,6 +3,7 @@
 	import { getApiBase } from '$lib/config';
 	import { waitForAppToBeAvailable } from '$lib/api';
 	import { goto } from '$app/navigation';
+	import { browser } from '$app/environment';
 	import { createWorkflowDropdownBody } from '$lib/components/loraDropdownBody';
 	import { appBooting } from '$lib/stores/appBooting';
 
@@ -27,6 +28,7 @@
 		workflow_ui_link_node_id?: string;
 	} | null>(null);
 	let creating = $state(false);
+	let isMobile = $state(browser && typeof window !== 'undefined' ? window.matchMedia('(max-width: 639px)').matches : false);
 
 	let forceNewVersion = $state(false);
 	let useWorkflowUILink = $state(true);
@@ -739,8 +741,9 @@
 				<dd>{preview.detected_outputs?.length ?? 0}</dd>
 			</dl>
 
-			<h3>Detected inputs</h3>
-			<div class="table-wrap">
+			<details class="import-accordion" open={!isMobile}>
+				<summary>Detected inputs</summary>
+				<div class="table-wrap">
 				<table class="compact-table">
 					<thead>
 						<tr>
@@ -767,10 +770,12 @@
 						{/each}
 					</tbody>
 				</table>
-			</div>
+				</div>
+			</details>
 
-			<h3>Detected outputs</h3>
-			<div class="table-wrap">
+			<details class="import-accordion" open={!isMobile}>
+				<summary>Detected outputs</summary>
+				<div class="table-wrap">
 				<table class="compact-table">
 					<thead>
 						<tr>
@@ -791,12 +796,15 @@
 						{/each}
 					</tbody>
 				</table>
-			</div>
+				</div>
+			</details>
 
 			<!-- Actions: schema choice, force version, Create (moved from left) -->
 			<div class="sticky-actions">
 				{#if preview.has_workflow_ui_link}
-					<div class="schema-choice-section">
+					<details class="import-accordion import-accordion--schema-choice" open={!isMobile}>
+						<summary>Schema options</summary>
+						<div class="schema-choice-section">
 						<div class="schema-choice-banner">
 							<p class="schema-choice-banner-headline">WorkflowUI Link node detected</p>
 							<p class="schema-choice-banner-subtext">This workflow contains a WorkflowUI Link node. You can use it as a shorthand for app creation—it exposes only the fields you defined in ComfyUI.</p>
@@ -845,7 +853,8 @@
 							</button>
 						</div>
 						<p class="schema-cross-hint">You can import the same workflow again later with the other option to switch schema source.</p>
-					</div>
+						</div>
+					</details>
 				{/if}
 				{#if !preview.is_new_workflow && !preview.is_new_version}
 					<label class="force-version-wrap">
@@ -1465,6 +1474,35 @@
 	h3 {
 		font-size: 1rem;
 		margin: 1rem 0 0.5rem;
+	}
+	.import-accordion {
+		margin: 1rem 0 0.5rem;
+		border-radius: 10px;
+		border: 1px solid var(--border);
+		background: rgba(0, 0, 0, 0.05);
+		overflow: hidden;
+	}
+	.import-accordion[open] {
+		/* Desktop: keep the original “just show the tables” feel. */
+		border: none;
+		background: transparent;
+	}
+	.import-accordion > summary {
+		list-style: none;
+		cursor: pointer;
+		min-height: 44px;
+		padding: 0.75rem 1rem;
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		font-weight: 600;
+		color: var(--text);
+	}
+	.import-accordion > summary::-webkit-details-marker {
+		display: none;
+	}
+	.import-accordion[open] > summary {
+		display: none;
 	}
 	.table-wrap {
 		overflow: auto;

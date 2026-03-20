@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { goto, invalidate } from '$app/navigation';
 	import { getApiBase } from '$lib/config';
+	import { browser } from '$app/environment';
 
 	let { data } = $props();
 	const workflow = $derived(data?.workflow ?? null);
@@ -20,6 +21,7 @@
 	);
 	let showDeleteModal = $state(false);
 	let deleting = $state(false);
+	let isMobile = $state(browser && typeof window !== 'undefined' ? window.matchMedia('(max-width: 639px)').matches : false);
 
 	let appToDelete = $state<{ slug: string; title: string } | null>(null);
 	let deleteAppError = $state<string | null>(null);
@@ -150,10 +152,13 @@
 
 			<section class="section">
 				{#if selectedVersion}
-					<dl class="meta-dl">
-						<dt>Hash</dt>
-						<dd class="hash">{selectedVersion.graph_hash.slice(0, 12)}…</dd>
-					</dl>
+					<details class="workflow-more-meta" open={!isMobile}>
+						<summary>More</summary>
+						<dl class="meta-dl">
+							<dt>Hash</dt>
+							<dd class="hash">{selectedVersion.graph_hash.slice(0, 12)}…</dd>
+						</dl>
+					</details>
 					<div class="action-buttons">
 						<button
 							type="button"
@@ -168,12 +173,17 @@
 							onclick={downloadWorkflowJson}
 							disabled={downloading}
 						>{downloading ? 'Downloading…' : 'Download as JSON'}</button>
-						<button
-							type="button"
-							class="btn-danger"
-							title="Remove this workflow and its apps. Projects and runs are kept."
-							onclick={() => (showDeleteModal = true)}
-						>Delete workflow</button>
+						<details class="workflow-more-delete" open={!isMobile}>
+							<summary>More</summary>
+							<button
+								type="button"
+								class="btn-danger"
+								title="Remove this workflow and its apps. Projects and runs are kept."
+								onclick={() => (showDeleteModal = true)}
+							>
+								Delete workflow
+							</button>
+						</details>
 					</div>
 				{/if}
 			</section>
@@ -329,6 +339,41 @@
 		display: flex;
 		flex-wrap: wrap;
 		gap: 0.5rem;
+	}
+
+	.workflow-more-meta {
+		display: block;
+	}
+	.workflow-more-delete {
+		display: inline-flex;
+	}
+	.workflow-more-meta > summary,
+	.workflow-more-delete > summary {
+		list-style: none;
+		cursor: pointer;
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		padding: 0.6rem 1rem;
+		border-radius: 8px;
+		border: 1px solid var(--border);
+		background: var(--surface);
+		color: var(--text);
+		font-weight: 500;
+		min-height: 44px;
+	}
+	.workflow-more-meta > summary::-webkit-details-marker,
+	.workflow-more-delete > summary::-webkit-details-marker {
+		display: none;
+	}
+	.workflow-more-meta[open],
+	.workflow-more-delete[open] {
+		/* Desktop: details starts open, so we avoid extra wrapper spacing. */
+		display: contents;
+	}
+	.workflow-more-meta[open] > summary,
+	.workflow-more-delete[open] > summary {
+		display: none;
 	}
 	.btn-secondary {
 		display: inline-block;
