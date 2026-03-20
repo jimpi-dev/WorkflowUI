@@ -76,7 +76,7 @@ STATIC_DIR = Path(__file__).resolve().parent / "static"
 _SPA_PATH_PREFIXES = ("app", "apps", "projects", "workflows", "import")
 
 
-def _is_spa_document_request(path: str, sec_fetch_dest: str, accept: str) -> bool:
+def _is_spa_document_request(path: str, sec_fetch_dest: str, sec_fetch_mode: str, accept: str) -> bool:
     path = (path or "").strip("/")
     if not path:
         return True
@@ -85,14 +85,8 @@ def _is_spa_document_request(path: str, sec_fetch_dest: str, accept: str) -> boo
     if not is_spa_path:
         return False
 
-    # Primary signal for browser navigations.
-    if sec_fetch_dest == "document" or "text/html" in (accept or ""):
-        return True
-
-    # Fallback for proxy/container setups where browser intent headers are altered.
-    # For known SPA paths without a file extension, serve index.html.
-    leaf = path.rsplit("/", 1)[-1]
-    if "." not in leaf:
+    # Signals that this is an actual browser page navigation, not API fetch().
+    if sec_fetch_dest == "document" or sec_fetch_mode == "navigate" or "text/html" in (accept or ""):
         return True
 
     return False
@@ -105,9 +99,10 @@ class SPAFallbackMiddleware(BaseHTTPMiddleware):
         if API_PREFIX and (request.url.path or "").startswith(API_PREFIX):
             return await call_next(request)
         sec_fetch_dest = request.headers.get("sec-fetch-dest", "")
+        sec_fetch_mode = request.headers.get("sec-fetch-mode", "")
         accept = request.headers.get("accept", "")
         path = (request.url.path or "").strip("/")
-        if not _is_spa_document_request(path, sec_fetch_dest, accept):
+        if not _is_spa_document_request(path, sec_fetch_dest, sec_fetch_mode, accept):
             return await call_next(request)
         index_path = STATIC_DIR / "index.html"
         if not index_path.is_file():
