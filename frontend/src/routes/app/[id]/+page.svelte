@@ -1807,7 +1807,8 @@
             background: var(--surface);
             border-bottom: 1px solid var(--border);
             position: sticky;
-            top: 0;
+            /* AppHeader is sticky at the top on mobile; offset tabs below it. */
+            top: 5.8rem;
             z-index: 30;
         }
         .app-mobile-tab {

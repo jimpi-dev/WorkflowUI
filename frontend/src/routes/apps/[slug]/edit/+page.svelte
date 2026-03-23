@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
 	import { getApiBase } from '$lib/config';
+	import { browser } from '$app/environment';
 	import FieldCard from '$lib/components/app-builder/FieldCard.svelte';
 	import OutputCard from '$lib/components/app-builder/OutputCard.svelte';
 	import {
@@ -44,6 +45,7 @@
 	let tagInput = $state('');
 	let embedMetadataOnDownload = $state(true);
 	let embedMetadataOnSave = $state(true);
+	let isMobile = $state(browser && typeof window !== 'undefined' ? window.matchMedia('(max-width: 639px)').matches : false);
 	const SUPPORTED_KIND_OPTIONS = ['image', 'video', 'audio'] as const;
 	let activeTab = $state<'inputs' | 'outputs'>('inputs');
 	let filterQuery = $state('');
@@ -445,48 +447,54 @@
 					{/if}
 				</div>
 			</section>
-			<section class="section">
-				<p class="field-label">WorkflowUI metadata</p>
-				<p class="field-help">When enabled, workflow and app data are embedded so users can restore from the Import page.</p>
-				<label class="toggle-label" for="app-embed-download-edit">
-					<span class="toggle-wrap">
-						<input id="app-embed-download-edit" type="checkbox" bind:checked={embedMetadataOnDownload} class="toggle-input" />
-						<span class="toggle-track" aria-hidden="true"></span>
-					</span>
-					<span class="toggle-label-text">Embed metadata when user downloads images</span>
-				</label>
-				<label class="toggle-label" for="app-embed-save-edit">
-					<span class="toggle-wrap">
-						<input id="app-embed-save-edit" type="checkbox" bind:checked={embedMetadataOnSave} class="toggle-input" />
-						<span class="toggle-track" aria-hidden="true"></span>
-					</span>
-					<span class="toggle-label-text">Embed metadata when saving to local storage</span>
-				</label>
-			</section>
-			<section class="section">
-				<span class="field-label">Send-to-App: accepted input types</span>
-				<p class="field-help">When someone uses "Send to App" from a run output, only apps that accept that media type are shown. Leave all unchecked to accept any type.</p>
-				<div class="supported-kinds-wrap">
-					{#each SUPPORTED_KIND_OPTIONS as kind}
-						<label class="toggle-label supported-kind-label">
-							<span class="toggle-wrap">
-								<input
-									type="checkbox"
-									class="toggle-input"
-									checked={supportedInputKinds.includes(kind)}
-									onchange={(e) => {
-										const checked = (e.currentTarget as HTMLInputElement).checked;
-										if (checked) supportedInputKinds = [...supportedInputKinds, kind];
-										else supportedInputKinds = supportedInputKinds.filter((k) => k !== kind);
-									}}
-								/>
-								<span class="toggle-track" aria-hidden="true"></span>
-							</span>
-							<span class="toggle-label-text">{kind}</span>
-						</label>
-					{/each}
-				</div>
-			</section>
+			<details class="advanced-accordion" open={!isMobile}>
+				<summary>WorkflowUI metadata</summary>
+				<section class="section">
+					<p class="field-label">WorkflowUI metadata</p>
+					<p class="field-help">When enabled, workflow and app data are embedded so users can restore from the Import page.</p>
+					<label class="toggle-label" for="app-embed-download-edit">
+						<span class="toggle-wrap">
+							<input id="app-embed-download-edit" type="checkbox" bind:checked={embedMetadataOnDownload} class="toggle-input" />
+							<span class="toggle-track" aria-hidden="true"></span>
+						</span>
+						<span class="toggle-label-text">Embed metadata when user downloads images</span>
+					</label>
+					<label class="toggle-label" for="app-embed-save-edit">
+						<span class="toggle-wrap">
+							<input id="app-embed-save-edit" type="checkbox" bind:checked={embedMetadataOnSave} class="toggle-input" />
+							<span class="toggle-track" aria-hidden="true"></span>
+						</span>
+						<span class="toggle-label-text">Embed metadata when saving to local storage</span>
+					</label>
+				</section>
+			</details>
+			<details class="advanced-accordion" open={!isMobile}>
+				<summary>Supported kinds (Send to App)</summary>
+				<section class="section">
+					<span class="field-label">Send-to-App: accepted input types</span>
+					<p class="field-help">When someone uses "Send to App" from a run output, only apps that accept that media type are shown. Leave all unchecked to accept any type.</p>
+					<div class="supported-kinds-wrap">
+						{#each SUPPORTED_KIND_OPTIONS as kind}
+							<label class="toggle-label supported-kind-label">
+								<span class="toggle-wrap">
+									<input
+										type="checkbox"
+										class="toggle-input"
+										checked={supportedInputKinds.includes(kind)}
+										onchange={(e) => {
+											const checked = (e.currentTarget as HTMLInputElement).checked;
+											if (checked) supportedInputKinds = [...supportedInputKinds, kind];
+											else supportedInputKinds = supportedInputKinds.filter((k) => k !== kind);
+										}}
+									/>
+									<span class="toggle-track" aria-hidden="true"></span>
+								</span>
+								<span class="toggle-label-text">{kind}</span>
+							</label>
+						{/each}
+					</div>
+				</section>
+			</details>
 			{#if appDraft}
 				<section class="section">
 					<label class="toggle-label" for="app-ignore-load-image-default">
@@ -508,26 +516,29 @@
 				</section>
 			{/if}
 			{#if appDraft && visibleSeedInputs.length > 0}
-				<section class="section">
-					<label for="master-seed-select" class="field-label">Master seed for generation</label>
-					<p class="master-seed-help">
-						Only this seed is changed by &quot;Queue for generation (N×)&quot; and &quot;Random seed (N×)&quot;. Other seed fields keep their form values.
-					</p>
-					<select
-						id="master-seed-select"
-						class="master-seed-select"
-						value={appDraft.masterSeedInputKey ?? ''}
-						onchange={(e) => {
-							const v = (e.currentTarget as HTMLSelectElement).value;
-							setMasterSeedInputKey(appDraft!, v != null && v.trim() !== '' ? v.trim() : null);
-						}}
-					>
-						<option value="">— First seed input (default) —</option>
-						{#each visibleSeedInputs as seedInput}
-							<option value={seedInput.key!}>{seedInput.label ?? seedInput.key}</option>
-						{/each}
-					</select>
-				</section>
+				<details class="advanced-accordion" open={!isMobile}>
+					<summary>Master seed for generation</summary>
+					<section class="section">
+						<label for="master-seed-select" class="field-label">Master seed for generation</label>
+						<p class="master-seed-help">
+							Only this seed is changed by &quot;Queue for generation (N×)&quot; and &quot;Random seed (N×)&quot;. Other seed fields keep their form values.
+						</p>
+						<select
+							id="master-seed-select"
+							class="master-seed-select"
+							value={appDraft.masterSeedInputKey ?? ''}
+							onchange={(e) => {
+								const v = (e.currentTarget as HTMLSelectElement).value;
+								setMasterSeedInputKey(appDraft!, v != null && v.trim() !== '' ? v.trim() : null);
+							}}
+						>
+							<option value="">— First seed input (default) —</option>
+							{#each visibleSeedInputs as seedInput}
+								<option value={seedInput.key!}>{seedInput.label ?? seedInput.key}</option>
+							{/each}
+						</select>
+					</section>
+				</details>
 			{/if}
 			{#if copyError}
 				<p class="error-text">{copyError}</p>
@@ -1276,5 +1287,33 @@
 	}
 	.copy-app-dialog-btn.primary:hover:not(:disabled) {
 		filter: brightness(1.1);
+	}
+	.advanced-accordion {
+		display: block;
+	}
+	.advanced-accordion > summary {
+		list-style: none;
+		cursor: pointer;
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 0.75rem;
+		width: 100%;
+		min-height: 44px;
+		padding: 0.6rem 0.75rem;
+		background: var(--surface);
+		border: 1px solid var(--border);
+		border-radius: 8px;
+		font-weight: 600;
+		color: var(--text);
+	}
+	.advanced-accordion > summary::-webkit-details-marker {
+		display: none;
+	}
+	.advanced-accordion[open] {
+		display: contents;
+	}
+	.advanced-accordion[open] > summary {
+		display: none;
 	}
 </style>
