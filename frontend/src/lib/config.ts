@@ -18,7 +18,10 @@ export const appConfig: {
 			};
 
 export function getApiBase(): string {
-	return appConfig.backendUrl || '';
+	const configured = (appConfig.backendUrl || '').trim();
+	// When frontend and backend are served from the same origin (e.g. Docker image),
+	// route API calls under /api to avoid clashes with SPA routes like /projects/*.
+	return configured || '/api';
 }
 
 export const COMFYUI_MAX_SEED = 2 ** 50;

@@ -26,6 +26,8 @@ import { get } from 'svelte/store';
 	let dbSizeBytes = $state<number | null>(null);
 	let dbBreakdown = $state<Record<string, number> | null>(null);
 	let workflowuiPluginMinVersion = $state<string | null>(null);
+	let localStorageSizeBytes = $state<number | null>(null);
+	let localStorageRootPath = $state<string | null>(null);
 	/** Version from GET /config (frontend package.json); status bar uses this over build-time appConfig.version */
 	let configVersion = $state<string | null>(null);
 
@@ -34,6 +36,25 @@ import { get } from 'svelte/store';
 	const CONFIG_POLL_INTERVAL_MS = 60000;
 	let intervalId: ReturnType<typeof setInterval> | null = null;
 	let configIntervalId: ReturnType<typeof setInterval> | null = null;
+
+	function formatLocalStorageLabel(bytes: number | null): string {
+		if (bytes == null) return '—';
+		const KB = 1024;
+		const MB = 1_048_576;
+		const GB = 1_073_741_824;
+		if (bytes >= GB) return `${(bytes / GB).toFixed(2)} GB`;
+		if (bytes >= MB) return `${(bytes / MB).toFixed(1)} MB`;
+		if (bytes >= KB) return `${(bytes / KB).toFixed(1)} KB`;
+		return `${bytes} B`;
+	}
+
+	const localStorageTooltip = $derived.by(() => {
+		if (localStorageSizeBytes == null) {
+			return 'Size of local storage folder used for saved outputs from ComfyUI (unknown).';
+		}
+		const root = localStorageRootPath || 'media storage root';
+		return `Size of local storage folder (${root}) used for saved outputs from ComfyUI.`;
+	});
 
 	async function fetchConfig() {
 		const base = getApiBase() || '';
@@ -45,6 +66,14 @@ import { get } from 'svelte/store';
 			workflowuiPluginIncompatible = data.workflowuiPluginIncompatible === true;
 			dbSizeBytes = typeof data.dbSizeBytes === 'number' ? data.dbSizeBytes : null;
 			dbBreakdown = data.dbBreakdown && typeof data.dbBreakdown === 'object' ? data.dbBreakdown : null;
+			localStorageSizeBytes =
+				typeof data.localStorageSizeBytes === 'number'
+					? data.localStorageSizeBytes
+					: null;
+			localStorageRootPath =
+				typeof data.localStorageRootPath === 'string' && data.localStorageRootPath
+					? data.localStorageRootPath
+					: null;
 			workflowuiPluginMinVersion =
 				typeof data.workflowuiPluginMinVersion === 'string' && data.workflowuiPluginMinVersion
 					? data.workflowuiPluginMinVersion
@@ -56,6 +85,8 @@ import { get } from 'svelte/store';
 			workflowuiPluginIncompatible = false;
 			dbSizeBytes = null;
 			dbBreakdown = null;
+			localStorageSizeBytes = null;
+			localStorageRootPath = null;
 			workflowuiPluginMinVersion = null;
 			configVersion = null;
 		}
@@ -134,10 +165,16 @@ import { get } from 'svelte/store';
 
 	onMount(() => {
 		startPolling();
+		if (typeof window !== 'undefined') {
+			window.addEventListener('workflowui-refresh-storage', fetchConfig);
+		}
 	});
 
 	onDestroy(() => {
 		stopPolling();
+		if (typeof window !== 'undefined') {
+			window.removeEventListener('workflowui-refresh-storage', fetchConfig);
+		}
 	});
 </script>
 
@@ -249,12 +286,21 @@ import { get } from 'svelte/store';
 		<span class="console-btn-text">Console</span>
 	</button>
 	<span class="status-sep" aria-hidden="true">|</span>
-	<span class="status-item db-size">
-		<DbSizeBar
-			sizeBytes={dbSizeBytes}
-			breakdown={dbBreakdown}
-			onVacuumComplete={(bytes) => { dbSizeBytes = bytes; fetchConfig(); }}
-		/>
+	<span class="status-item storage-group" aria-label="Local storage and database usage">
+		<span class="storage-line storage-local" title={localStorageTooltip}>
+			Local storage: {formatLocalStorageLabel(localStorageSizeBytes)}
+		</span>
+		<span class="storage-line storage-db">
+			<span class="storage-db-label">Database:</span>
+			<DbSizeBar
+				sizeBytes={dbSizeBytes}
+				breakdown={dbBreakdown}
+				onVacuumComplete={(bytes) => {
+					dbSizeBytes = bytes;
+					fetchConfig();
+				}}
+			/>
+		</span>
 	</span>
 </div>
 
@@ -397,36 +443,72 @@ import { get } from 'svelte/store';
 		flex-shrink: 0;
 	}
 
+	.storage-group {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.35rem;
+	}
+
+	.storage-line {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.25rem;
+	}
+
+	.storage-db-label {
+		opacity: 0.8;
+	}
+
 	@media (max-width: 639px) {
 		.status-bar {
-			flex-wrap: wrap;
+			flex-wrap: nowrap;
 			justify-content: flex-start;
 			gap: 0.25rem 0.5rem;
 			padding: 0.25rem 0.75rem;
 			padding-bottom: calc(0.5rem + env(safe-area-inset-bottom, 0));
 			min-height: 28px;
+			overflow-x: auto;
+			scrollbar-width: none;
+		}
+		.status-bar::-webkit-scrollbar {
+			display: none;
 		}
 		.status-item {
-			white-space: normal;
+			white-space: nowrap;
 		}
-		.github-link {
-			display: none;
+		/* Reorder so VRAM/GPU/CPU stay on the left, and the right-side buttons are adjacent:
+		   Queue (left) then Console (right). */
+		.vram,
+		.gpu,
+		.cpu {
+			order: 1;
 		}
-		.status-sep:has(+ .github-link) {
-			display: none;
+		.status-queue-btn.queue-trigger {
+			order: 2;
+			margin-left: auto;
 		}
-		.plugin-state-text {
-			display: none;
+		.status-console-btn {
+			order: 3;
 		}
-		.plugin-state-dot {
-			width: 10px;
-			height: 10px;
+		.status-queue-btn,
+		.status-console-btn {
+			flex-shrink: 0;
 		}
-		.console-btn-text {
+		.status-sep,
+		.app-info,
+		.github-link,
+		.plugin-state,
+		.storage-group,
+		.ram,
+		.status-loading,
+		.status-error {
 			display: none;
 		}
 		.queue-btn-text {
 			display: none;
+		}
+		.console-btn-text {
+			display: inline;
 		}
 	}
 </style>

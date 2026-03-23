@@ -66,6 +66,34 @@ def _get_db_size_bytes(db_path: str) -> int:
     return total
 
 
+def _get_local_storage_size_bytes(root_path: str) -> int:
+    """
+    Best-effort total size in bytes for the local media storage root directory.
+
+    This walks the directory tree rooted at ``root_path`` and sums file sizes.
+    Any filesystem errors are swallowed so that /config remains robust.
+    """
+    try:
+        path = Path(root_path).expanduser()
+        if not path.exists() or not path.is_dir():
+            return 0
+        total = 0
+        for p in path.rglob("*"):
+            try:
+                if p.is_file():
+                    total += p.stat().st_size
+            except FileNotFoundError:
+                # File vanished between discovery and stat; ignore.
+                continue
+            except OSError:
+                # Any other per-file error should not abort the entire walk.
+                continue
+        return total
+    except OSError:
+        # Any top-level OS error should not break /config; treat as 0 bytes.
+        return 0
+
+
 def _get_db_breakdown(db_path: str) -> dict[str, int]:
     breakdown: dict[str, int] = {}
     try:
@@ -80,7 +108,7 @@ def _get_db_breakdown(db_path: str) -> dict[str, int]:
                 table_sizes.get("workflow_definition", 0) + table_sizes.get("workflow_version", 0)
             )
             breakdown["apps"] = table_sizes.get("workflow_app", 0)
-            breakdown["runs"] = table_sizes.get("run", 0)
+            breakdown["runs"] = table_sizes.get("run", 0) + table_sizes.get("generation", 0)
             breakdown["projects"] = table_sizes.get("project", 0)
             breakdown["presets"] = table_sizes.get("app_preset", 0)
             breakdown["comfyui"] = table_sizes.get("comfyui_version", 0)
@@ -90,7 +118,8 @@ def _get_db_breakdown(db_path: str) -> dict[str, int]:
                 ("workflows", "SELECT COALESCE(SUM(LENGTH(id)+LENGTH(name)+LENGTH(CAST(created_at AS TEXT))), 0) FROM workflow_definition"),
                 ("workflows", "SELECT COALESCE(SUM(LENGTH(original_graph_json)+LENGTH(detected_inputs_json)+LENGTH(detected_outputs_json)), 0) FROM workflow_version"),
                 ("apps", "SELECT COALESCE(SUM(LENGTH(ui_config_json)+LENGTH(COALESCE(default_inputs_json,''))+LENGTH(COALESCE(default_outputs_json,''))), 0) FROM workflow_app"),
-                ("runs", "SELECT COALESCE(SUM(LENGTH(COALESCE(images_json,''))+LENGTH(COALESCE(input_snapshot_json,''))+LENGTH(COALESCE(metadata_snapshot_json,''))), 0) FROM run"),
+                ("runs", "SELECT COALESCE(SUM(LENGTH(COALESCE(images_json,''))+LENGTH(COALESCE(media_json,''))+LENGTH(COALESCE(error,''))+LENGTH(COALESCE(deleted_outputs_json,''))), 0) FROM generation"),
+                ("runs", "SELECT COALESCE(SUM(LENGTH(COALESCE(input_snapshot_json,''))+LENGTH(COALESCE(metadata_snapshot_json,''))), 0) FROM run"),
                 ("projects", "SELECT COALESCE(SUM(LENGTH(COALESCE(metadata_json,''))+LENGTH(COALESCE(tags_json,''))), 0) FROM project"),
                 ("presets", "SELECT COALESCE(SUM(LENGTH(keys_json)+LENGTH(values_json)), 0) FROM app_preset"),
                 ("comfyui", "SELECT COALESCE(SUM(LENGTH(metadata_json)), 0) FROM comfyui_version"),
@@ -136,6 +165,9 @@ def get_config(db=Depends(get_db)):
     comfyui_delete_supported, workflowui_plugin_available, workflowui_plugin_incompatible = get_workflowui_plugin_status(COMFY_URL)
     embed_cfg = get_workflowui_embed_config()
     frontend_version = _get_frontend_version()
+    # Always report the size of the media storage root folder if it exists,
+    # regardless of whether media storage is currently enabled.
+    local_storage_size = _get_local_storage_size_bytes(media_cfg.root_path)
     payload: dict[str, Any] = {
         "comfyui_url": COMFY_URL,
         "quick_runs_project_id": QUICK_RUNS_PROJECT_ID,
@@ -149,6 +181,8 @@ def get_config(db=Depends(get_db)):
             "rootPath": media_cfg.root_path,
             "deleteRemoteAfterSave": media_cfg.delete_remote_after_save,
         },
+        "localStorageSizeBytes": local_storage_size,
+        "localStorageRootPath": media_cfg.root_path,
         "embedWorkflowuiMetadataOnDownload": embed_cfg.embed_on_download,
         "embedWorkflowuiMetadataOnSave": embed_cfg.embed_on_save,
         "dbSizeBytes": _get_db_size_bytes(db_path),
@@ -167,12 +201,12 @@ def get_version():
 def get_run_table_diagnostics(db=Depends(get_db)):
     db_path = db[0]
     columns = [
-        ("images_json", False),
-        ("media_json", False),
-        ("input_snapshot_json", True),
-        ("metadata_snapshot_json", True),
-        ("deleted_outputs_json", False),
-        ("error", False),
+        ("generation", "images_json", False),
+        ("generation", "media_json", False),
+        ("run", "input_snapshot_json", True),
+        ("run", "metadata_snapshot_json", True),
+        ("generation", "deleted_outputs_json", False),
+        ("generation", "error", False),
     ]
     result: dict[str, Any] = {
         "row_count": 0,
@@ -182,13 +216,13 @@ def get_run_table_diagnostics(db=Depends(get_db)):
     try:
         conn = sqlite3.connect(str(db_path), timeout=5)
         try:
-            row = conn.execute("SELECT COUNT(*) FROM run").fetchone()
+            row = conn.execute("SELECT COUNT(*) FROM generation").fetchone()
             result["row_count"] = row[0] if row else 0
             total = 0
-            for col_name, searchable in columns:
+            for table, col_name, searchable in columns:
                 try:
                     row = conn.execute(
-                        f"SELECT COALESCE(SUM(LENGTH(COALESCE({col_name}, ''))), 0) FROM run"
+                        f"SELECT COALESCE(SUM(LENGTH(COALESCE({col_name}, ''))), 0) FROM {table}"
                     ).fetchone()
                     bytes_val = row[0] if row else 0
                     result["columns"][col_name] = {

@@ -3,6 +3,7 @@
 	import { get } from 'svelte/store';
 	import { goto, invalidate } from '$app/navigation';
 	import { page } from '$app/stores';
+	import { browser } from '$app/environment';
 	import type { AppSummary, ProjectOption } from './+page';
 	import { QUICK_RUNS_PROJECT_ID } from '$lib/constants';
 	import { appBooting } from '$lib/stores/appBooting';
@@ -104,6 +105,7 @@
 	let sortBy = $state<SortKey>('used');
 	let tagFilters = $state<string[]>([]); // [] = all tags
 	let viewMode = $state<'grid' | 'list'>('grid');
+	let isMobile = $state(browser && typeof window !== 'undefined' ? window.matchMedia('(max-width: 639px)').matches : false);
 	let activeTab = $state<'my-apps' | 'browse'>('my-apps');
 	let openDropdownFor = $state<string | null>(null);
 	let projectFilter = $state('');
@@ -216,9 +218,11 @@
 		}
 	}
 
-	const projectsExcludingQuickRuns = $derived(
-		(data.projects ?? []).filter((p) => p.id !== QUICK_RUNS_PROJECT_ID)
-	);
+	const projectsExcludingQuickRuns = $derived.by(() => {
+		return [...(data.projects ?? [])]
+			.filter((p) => p.id !== QUICK_RUNS_PROJECT_ID)
+			.sort((a, b) => (a.name ?? '').localeCompare(b.name ?? '', undefined, { sensitivity: 'base' }));
+	});
 
 	const filteredProjectsForDropdown = $derived.by(() => {
 		const q = projectFilter.trim().toLowerCase();
@@ -240,10 +244,15 @@
 	}
 
 	function isCompatibleWithSendFrom(a: AppSummary): boolean {
-		if (!sendFromRun || !sendFromOutput) return true;
+		// When we can't resolve the media kind for the "send from" context
+		// (e.g. `/runs/:runId` failed after Ctrl+R), don't aggressively filter
+		// apps down to an assumed kind. Otherwise the list can go empty until
+		// a backend restart.
+		if (!sendFromRun || sendFromOutput == null) return true;
 		const kinds = a.supported_input_kinds;
 		if (!kinds || kinds.length === 0) return true;
-		const kind = sendFromMediaKind ?? 'image';
+		if (!sendFromMediaKind) return true; // unknown kind -> don't filter
+		const kind = sendFromMediaKind;
 		return kinds.some((k) => (k ?? '').toLowerCase() === kind.toLowerCase());
 	}
 
@@ -510,89 +519,99 @@
 					aria-label="Search apps"
 				/>
 			</div>
-			<select class="sort-select" bind:value={sortBy} aria-label="Sort by">
-				{#each sortOptions as opt}
-					<option value={opt.value}>{opt.label}</option>
-				{/each}
-			</select>
-			<div class="tag-filter">
-				<button
-					type="button"
-					class="tag-filter-trigger"
-					onclick={() => (tagFilterOpen = !tagFilterOpen)}
-					aria-haspopup="listbox"
-					aria-expanded={tagFilterOpen}
-					id="tag-filter-trigger"
-				>
-					<span class="tag-filter-trigger-main">
-						{#if !tagFilters.length}
-							<span class="tag-filter-summary-text">All tags</span>
-						{:else}
-							<span class="tag-filter-summary-text">
-								{tagFilters.length === 1 ? '1 tag' : `${tagFilters.length} tags`}
-							</span>
-							<span class="tag-filter-summary-chips" aria-hidden="true">
-								{#each tagFilters.slice(0, 3) as tag (tag)}
-									<span class="tag-chip tag-chip-small">{tag}</span>
-								{/each}
-								{#if tagFilters.length > 3}
-									<span class="tag-chip tag-chip-more">+{tagFilters.length - 3}</span>
-								{/if}
-							</span>
-						{/if}
-					</span>
-					<svg class="tag-filter-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
-						<path d="M6 9l6 6 6-6"/>
+			<details class="filters-more" open={!isMobile}>
+				<summary>
+					<span>Filters / More</span>
+					<svg class="filters-more-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+						<path d="M6 9l6 6 6-6" />
 					</svg>
-				</button>
-				{#if tagFilterOpen}
-					<div
-						class="tag-filter-menu"
-						role="listbox"
-						aria-multiselectable="true"
-						aria-label="Filter apps by tag"
-					>
+				</summary>
+				<div class="filters-more-content">
+					<select class="sort-select" bind:value={sortBy} aria-label="Sort by">
+						{#each sortOptions as opt}
+							<option value={opt.value}>{opt.label}</option>
+						{/each}
+					</select>
+					<div class="tag-filter">
 						<button
 							type="button"
-							class="tag-filter-option"
-							role="option"
-							aria-selected={!tagFilters.length}
-							onclick={() => (tagFilters = [])}
+							class="tag-filter-trigger"
+							onclick={() => (tagFilterOpen = !tagFilterOpen)}
+							aria-haspopup="listbox"
+							aria-expanded={tagFilterOpen}
+							id="tag-filter-trigger"
 						>
-							<span class="tag-filter-checkbox" aria-hidden="true">
+							<span class="tag-filter-trigger-main">
 								{#if !tagFilters.length}
-									<span class="tag-filter-checkbox-inner"></span>
+									<span class="tag-filter-summary-text">All tags</span>
+								{:else}
+									<span class="tag-filter-summary-text">
+										{tagFilters.length === 1 ? '1 tag' : `${tagFilters.length} tags`}
+									</span>
+									<span class="tag-filter-summary-chips" aria-hidden="true">
+										{#each tagFilters.slice(0, 3) as tag (tag)}
+											<span class="tag-chip tag-chip-small">{tag}</span>
+										{/each}
+										{#if tagFilters.length > 3}
+											<span class="tag-chip tag-chip-more">+{tagFilters.length - 3}</span>
+										{/if}
+									</span>
 								{/if}
 							</span>
-							<span class="tag-filter-option-text">
-								<span class="tag-filter-option-label">All tags</span>
-							</span>
+							<svg class="tag-filter-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+								<path d="M6 9l6 6 6-6"/>
+							</svg>
 						</button>
-						{#each allTags as tag (tag)}
-							<button
-								type="button"
-								class="tag-filter-option"
-								role="option"
-								aria-selected={tagFilters.includes(tag)}
-								onclick={() => {
-									const set = new Set(tagFilters);
-									if (set.has(tag)) set.delete(tag); else set.add(tag);
-									tagFilters = Array.from(set);
-								}}
+						{#if tagFilterOpen}
+							<div
+								class="tag-filter-menu"
+								role="listbox"
+								aria-multiselectable="true"
+								aria-label="Filter apps by tag"
 							>
-								<span class="tag-filter-checkbox" aria-hidden="true">
-									{#if tagFilters.includes(tag)}
-										<span class="tag-filter-checkbox-inner"></span>
-									{/if}
-								</span>
-								<span class="tag-filter-option-text">
-									<span class="tag-filter-option-label">{tag}</span>
-								</span>
-							</button>
-						{/each}
+								<button
+									type="button"
+									class="tag-filter-option"
+									role="option"
+									aria-selected={!tagFilters.length}
+									onclick={() => (tagFilters = [])}
+								>
+									<span class="tag-filter-checkbox" aria-hidden="true">
+										{#if !tagFilters.length}
+											<span class="tag-filter-checkbox-inner"></span>
+										{/if}
+									</span>
+									<span class="tag-filter-option-text">
+										<span class="tag-filter-option-label">All tags</span>
+									</span>
+								</button>
+								{#each allTags as tag (tag)}
+									<button
+										type="button"
+										class="tag-filter-option"
+										role="option"
+										aria-selected={tagFilters.includes(tag)}
+										onclick={() => {
+											const set = new Set(tagFilters);
+											if (set.has(tag)) set.delete(tag); else set.add(tag);
+											tagFilters = Array.from(set);
+										}}
+									>
+										<span class="tag-filter-checkbox" aria-hidden="true">
+											{#if tagFilters.includes(tag)}
+												<span class="tag-filter-checkbox-inner"></span>
+											{/if}
+										</span>
+										<span class="tag-filter-option-text">
+											<span class="tag-filter-option-label">{tag}</span>
+										</span>
+									</button>
+								{/each}
+							</div>
+						{/if}
 					</div>
-				{/if}
-			</div>
+				</div>
+			</details>
 			<div class="view-toggle" role="tablist" aria-label="View">
 				<button
 					type="button"
@@ -684,7 +703,7 @@
 							<div class="list-row">
 								<span class="card-badge list-badge" class:public={app.is_public}>{app.is_public ? 'Public' : 'Private'}</span>
 								{#if app.created_from_image_import}
-									<span class="badge-from-image" title="Created from workflow image import">From image</span>
+									<span class="badge-from-image" title="Created from imported file">Imported from file</span>
 								{/if}
 								<h3 class="app-name list-name">{app.title}</h3>
 								<span class="list-slug-desc">{#if app.description}{app.description}{:else}/{app.slug}{/if}</span>
@@ -754,7 +773,14 @@
 														<div class="open-with-list" role="group">
 															{#each filteredProjectsForDropdown as proj (proj.id)}
 																<button type="button" role="option" class="open-with-item" aria-selected="false" onclick={(e) => { e.stopPropagation(); openWithProject(app.slug, proj.id); }}>
-																	<span class="open-with-name">{proj.name}</span>
+																	<span class="open-with-name-wrap">
+																		<span
+																			class="open-with-color-dot"
+																			style={proj.header_color ? `background: ${proj.header_color}; border-color: color-mix(in srgb, ${proj.header_color} 70%, #000)` : ''}
+																			aria-hidden="true"
+																		></span>
+																		<span class="open-with-name">{proj.name}</span>
+																	</span>
 																	<span class="open-with-meta">{proj.run_count} runs</span>
 																</button>
 															{/each}
@@ -809,7 +835,7 @@
 						<div class="app-name-row">
 							<h3 class="app-name">{app.title}</h3>
 							{#if app.created_from_image_import}
-								<span class="badge-from-image" title="Created from workflow image import">From image</span>
+								<span class="badge-from-image" title="Created from imported file">Imported from file</span>
 							{/if}
 						</div>
 						{#if app.description}
@@ -892,7 +918,14 @@
 															openWithProject(app.slug, proj.id);
 														}}
 													>
-														<span class="open-with-name">{proj.name}</span>
+														<span class="open-with-name-wrap">
+															<span
+																class="open-with-color-dot"
+																style={proj.header_color ? `background: ${proj.header_color}; border-color: color-mix(in srgb, ${proj.header_color} 70%, #000)` : ''}
+																aria-hidden="true"
+															></span>
+															<span class="open-with-name">{proj.name}</span>
+														</span>
 														<span class="open-with-meta">{proj.run_count} runs</span>
 													</button>
 												{/each}
@@ -1176,6 +1209,51 @@
 		margin-top: 1rem;
 	}
 
+	.filters-more {
+		position: relative;
+		display: flex;
+		flex-direction: column;
+		gap: 0.5rem;
+	}
+	.filters-more > summary {
+		list-style: none;
+		cursor: pointer;
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 0.75rem;
+		width: 100%;
+		min-height: 44px;
+		padding: 0.45rem 0.6rem;
+		background: var(--surface);
+		border: 1px solid var(--border);
+		border-radius: 8px;
+		color: var(--text);
+		font-size: 0.85rem;
+		font-weight: 600;
+	}
+	.filters-more > summary::-webkit-details-marker {
+		display: none;
+	}
+	.filters-more[open] > summary {
+		display: none;
+	}
+	.filters-more-content {
+		display: flex;
+		flex-direction: row;
+		align-items: center;
+		gap: 0.5rem;
+		flex-wrap: nowrap;
+	}
+	.filters-more[open] .sort-select,
+	.filters-more[open] .tag-filter {
+		flex: 1 1 0;
+		min-width: 0;
+	}
+	.filters-more-chevron {
+		opacity: 0.75;
+	}
+
 	.search-wrap {
 		position: relative;
 		flex: 1;
@@ -1265,12 +1343,12 @@
 		justify-content: space-between;
 		gap: 0.5rem;
 		width: 100%;
-		padding: 0.45rem 0.6rem;
+		padding: 0.5rem 0.75rem;
 		background: var(--surface);
 		border: 1px solid var(--border);
 		border-radius: 8px;
 		color: var(--text);
-		font-size: 0.85rem;
+		font-size: 0.875rem;
 		cursor: pointer;
 		transition: border-color 0.2s, background 0.2s, box-shadow 0.2s;
 		text-align: left;
@@ -1295,7 +1373,7 @@
 
 	.tag-filter-summary-text {
 		white-space: nowrap;
-		font-size: 0.8rem;
+		font-size: inherit;
 	}
 
 	.tag-filter-summary-chips {
@@ -1902,6 +1980,9 @@
 		display: inline-flex;
 		align-items: center;
 		gap: 0.35rem;
+		background: linear-gradient(180deg, color-mix(in srgb, var(--surface) 86%, #fff 14%) 0%, var(--surface) 100%);
+		border-color: color-mix(in srgb, var(--border) 70%, var(--accent) 30%);
+		box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
 	}
 
 	.open-with-trigger .chevron {
@@ -1918,15 +1999,15 @@
 		top: 100%;
 		left: 0;
 		margin-top: 0.25rem;
-		min-width: 220px;
-		max-width: 300px;
-		max-height: 320px;
+		min-width: 260px;
+		max-width: 360px;
+		max-height: 360px;
 		display: flex;
 		flex-direction: column;
 		background: var(--card);
 		border: 1px solid var(--border);
-		border-radius: 8px;
-		box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+		border-radius: 12px;
+		box-shadow: 0 16px 40px rgba(0, 0, 0, 0.35);
 		z-index: 20;
 		overflow: hidden;
 	}
@@ -1941,9 +2022,9 @@
 		display: flex;
 		align-items: center;
 		gap: 0.5rem;
-		padding: 0.5rem 0.6rem;
+		padding: 0.6rem 0.7rem;
 		border-bottom: 1px solid var(--border);
-		background: var(--surface);
+		background: color-mix(in srgb, var(--surface) 90%, var(--accent) 10%);
 	}
 
 	.open-with-filter-icon {
@@ -1970,7 +2051,7 @@
 		flex: 1;
 		min-height: 0;
 		overflow-y: auto;
-		padding: 0.35rem 0;
+		padding: 0.4rem 0.4rem;
 	}
 
 	.open-with-empty {
@@ -1985,24 +2066,44 @@
 		justify-content: space-between;
 		gap: 0.5rem;
 		width: 100%;
-		padding: 0.5rem 0.75rem;
+		padding: 0.5rem 0.55rem;
 		background: transparent;
-		border: none;
-		border-radius: 0;
+		border: 1px solid transparent;
+		border-radius: 8px;
 		color: var(--text);
 		font-size: 0.85rem;
 		text-align: left;
 		cursor: pointer;
-		transition: background 0.15s;
+		transition: background 0.15s, border-color 0.15s, transform 0.15s;
 	}
 
 	.open-with-item:hover {
-		background: var(--accent-soft);
+		background: color-mix(in srgb, var(--accent) 12%, var(--surface));
+		border-color: color-mix(in srgb, var(--accent) 35%, var(--border));
+		transform: translateY(-1px);
 	}
 
 	.open-with-item:focus-visible {
 		outline: 2px solid var(--accent);
 		outline-offset: -2px;
+	}
+
+	.open-with-name-wrap {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.45rem;
+		flex: 1;
+		min-width: 0;
+	}
+
+	.open-with-color-dot {
+		width: 0.58rem;
+		height: 0.58rem;
+		border-radius: 999px;
+		flex-shrink: 0;
+		border: 1px solid color-mix(in srgb, var(--border) 70%, #000 30%);
+		background: color-mix(in srgb, var(--muted) 35%, transparent);
+		box-shadow: 0 0 0 1px color-mix(in srgb, var(--card) 70%, transparent);
 	}
 
 	.open-with-name {
@@ -2184,6 +2285,9 @@
 			flex-direction: column;
 			align-items: stretch;
 			gap: 0.5rem;
+		}
+		.apps-page .filters-more {
+			width: 100%;
 		}
 		.apps-page .search-wrap {
 			max-width: none;

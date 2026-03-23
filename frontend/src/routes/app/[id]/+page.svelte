@@ -698,6 +698,51 @@
         }
     }
 
+    /** True if this backend run still has at least one output that can be viewed (remote or local). */
+    function galleryBackendRunHasDisplayableMedia(run: (typeof runs)[0], backendRunId: string): boolean {
+        const imgs = run.images.filter((i) => i.backendRunId === backendRunId);
+        if (imgs.length === 0) return false;
+        const st = run.storageByBackend?.[backendRunId];
+        const hasLocal = st?.local_storage_status === 'saved' || st?.local_storage_status === 'partial';
+        return imgs.some((img) => !img.remote_deleted || hasLocal);
+    }
+
+    /** Remove favorite IDs that no longer have any viewable media (e.g. deleted on Comfy with no local copy). */
+    function pruneStaleOutputFavoritesForUiRun(run: (typeof runs)[0]) {
+        const prev = new Set(projectFavorites);
+        const next = new Set(projectFavorites);
+        let changed = false;
+        for (const bid of [...next]) {
+            if (!run.backendRunIds.includes(bid)) continue;
+            if (!galleryBackendRunHasDisplayableMedia(run, bid)) {
+                next.delete(bid);
+                changed = true;
+            }
+        }
+        if (!changed) return;
+        projectFavorites = next;
+        const projectId = currentProject?.id;
+        if (!projectId) return;
+        favoritesSaving = true;
+        const apiBase = getApiBase() || '';
+        const meta = { ...(projectMetadata ?? {}), favorites: [...next] };
+        fetch(`${apiBase}/projects/${projectId}`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ metadata: meta })
+        })
+            .then((res) => {
+                if (res.ok) projectMetadata = meta;
+                else projectFavorites = prev;
+            })
+            .catch(() => {
+                projectFavorites = prev;
+            })
+            .finally(() => {
+                favoritesSaving = false;
+            });
+    }
+
     function updateStorage(runId: string, backendRunId: string, patch: StorageState) {
         runs = runs.map(r =>
             r.id === runId
@@ -776,16 +821,19 @@
         const apiBase = getApiBase() || '';
         for (const backendRunId of backendRunIds) {
             savingRunIds = new Set([...savingRunIds, backendRunId]);
-            try {
-                const res = await fetch(`${apiBase}/runs/${backendRunId}/save`, { method: 'POST' });
-                const data = await res.json().catch(() => ({}));
-                if (res.ok) {
-                    updateStorage(runId, backendRunId, {
-                        local_storage_status: data.local_storage_status,
-                        remote_status: data.remote_status,
-                        local_path: data.local_path
-                    });
-                }
+			try {
+				const res = await fetch(`${apiBase}/runs/${backendRunId}/save`, { method: 'POST' });
+				const data = await res.json().catch(() => ({}));
+				if (res.ok) {
+					updateStorage(runId, backendRunId, {
+						local_storage_status: data.local_storage_status,
+						remote_status: data.remote_status,
+						local_path: data.local_path
+					});
+					if (typeof window !== 'undefined') {
+						window.dispatchEvent(new CustomEvent('workflowui-refresh-storage'));
+					}
+				}
             } catch {
                 updateStorage(runId, backendRunId, { local_storage_status: 'failed' });
             } finally {
@@ -1274,7 +1322,13 @@
                     onDeleteBothSelected={deleteBothSelected}
                     onDeleteRun={(runId, backendRunIds) => {
                         const run = runs.find((r) => r.id === runId);
-                        const hasFav = run?.images.some((img) => projectFavorites.has(img.backendRunId));
+                        if (run) pruneStaleOutputFavoritesForUiRun(run);
+                        const hasFav =
+                            run?.images.some(
+                                (img) =>
+                                    projectFavorites.has(img.backendRunId) &&
+                                    galleryBackendRunHasDisplayableMedia(run, img.backendRunId)
+                            ) ?? false;
                         if (hasFav) {
                             deleteRunPending = { runId, backendRunIds };
                             return;
@@ -1753,7 +1807,8 @@
             background: var(--surface);
             border-bottom: 1px solid var(--border);
             position: sticky;
-            top: 0;
+            /* AppHeader is sticky at the top on mobile; offset tabs below it. */
+            top: 5.8rem;
             z-index: 30;
         }
         .app-mobile-tab {

@@ -169,9 +169,15 @@
     .thumb-overlay-root > :global(*) {
         pointer-events: auto;
     }
+    /* FavoriteSash is full-bleed decorative; parent rule would re-enable hits and block checkbox */
+    .thumb-overlay-root > :global(.favorite-sash),
+    .thumb-overlay-root > :global(.favorite-sash *) {
+        pointer-events: none;
+    }
     .thumb-overlay-media {
         position: absolute;
         inset: 0;
+        z-index: 0;
         pointer-events: auto;
     }
     .thumb-overlay-media :global(img),
@@ -225,12 +231,14 @@
         position: absolute;
         top: 6px;
         left: 6px;
+        z-index: 2;
     }
 
     .thumb-overlay-ur {
         position: absolute;
         top: 6px;
         right: 6px;
+        z-index: 2;
         display: flex;
         gap: 6px;
         align-items: center;
@@ -283,6 +291,7 @@
         position: absolute;
         bottom: 6px;
         left: 6px;
+        z-index: 2;
         padding: 2px 6px;
         border-radius: 4px;
         background: rgba(0, 0, 0, 0.6);
@@ -314,6 +323,7 @@
         position: absolute;
         bottom: 6px;
         right: 6px;
+        z-index: 2;
         display: flex;
         gap: 6px;
         align-items: center;

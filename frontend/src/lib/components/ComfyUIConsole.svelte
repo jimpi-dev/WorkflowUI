@@ -17,7 +17,7 @@
 	const POLL_INTERVAL_HIDDEN_MS = 5000;
 	const DEFAULT_HEIGHT_PX = 240;
 
-	let { open = false, onclose } = $props();
+	let { open = false, onclose, mobileFullscreen = false } = $props();
 
 	let entries = $state<LogEntry[]>([]);
 	let error = $state<string | null>(null);
@@ -225,7 +225,7 @@
 	}
 </script>
 
-<div class="console-panel" role="region" aria-label="ComfyUI console output">
+<div class="console-panel" class:mobile-fullscreen={mobileFullscreen} role="region" aria-label="ComfyUI console output">
 	<div class="console-header">
 		<span class="console-title">ComfyUI Console</span>
 		<div class="console-header-right">
@@ -379,6 +379,11 @@
 		display: flex;
 		flex-direction: column;
 		flex-shrink: 0;
+	}
+	.console-panel.mobile-fullscreen {
+		height: 100dvh;
+		border-radius: 0;
+		border-top: none;
 	}
 	.console-header {
 		display: flex;
@@ -538,6 +543,10 @@
 		display: flex;
 		flex-direction: column;
 		min-height: 0;
+	}
+	.console-panel.mobile-fullscreen .console-body {
+		height: auto !important;
+		flex: 1;
 	}
 	.console-scroll {
 		overflow-y: auto;
