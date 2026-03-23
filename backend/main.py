@@ -43,6 +43,7 @@ def _load_cors_origins() -> list[str]:
 API_PREFIX = (os.environ.get("WORKFLOWUI_API_PREFIX") or "").strip()
 if API_PREFIX and not API_PREFIX.startswith("/"):
     API_PREFIX = "/" + API_PREFIX
+CANONICAL_API_PREFIX = "/api"
 
 
 @asynccontextmanager
@@ -63,38 +64,55 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(config.router, prefix=API_PREFIX, tags=["config"])
-app.include_router(runs.router, prefix=API_PREFIX, tags=["runs"])
-app.include_router(projects.router, prefix=API_PREFIX, tags=["projects"])
-app.include_router(comfyui.router, prefix=API_PREFIX, tags=["comfyui"])
-app.include_router(import_.router, prefix=API_PREFIX, tags=["import"])
-app.include_router(apps.router, prefix=API_PREFIX, tags=["apps"])
-app.include_router(workflows.router, prefix=API_PREFIX, tags=["workflows"])
-app.include_router(execution.router, prefix=API_PREFIX, tags=["execution"])
+def _include_api_routes(prefix: str) -> None:
+    app.include_router(config.router, prefix=prefix, tags=["config"])
+    app.include_router(runs.router, prefix=prefix, tags=["runs"])
+    app.include_router(projects.router, prefix=prefix, tags=["projects"])
+    app.include_router(comfyui.router, prefix=prefix, tags=["comfyui"])
+    app.include_router(import_.router, prefix=prefix, tags=["import"])
+    app.include_router(apps.router, prefix=prefix, tags=["apps"])
+    app.include_router(workflows.router, prefix=prefix, tags=["workflows"])
+    app.include_router(execution.router, prefix=prefix, tags=["execution"])
+
+
+_include_api_routes(API_PREFIX)
+if API_PREFIX != CANONICAL_API_PREFIX:
+    _include_api_routes(CANONICAL_API_PREFIX)
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 _SPA_PATH_PREFIXES = ("app", "apps", "projects", "workflows", "import")
 
 
-def _is_spa_document_request(path: str, sec_fetch_dest: str, accept: str) -> bool:
-    if sec_fetch_dest != "document" and "text/html" not in (accept or ""):
-        return False
+def _is_spa_document_request(path: str, sec_fetch_dest: str, sec_fetch_mode: str, accept: str) -> bool:
     path = (path or "").strip("/")
     if not path:
         return True
-    return path in _SPA_PATH_PREFIXES or any(path.startswith(p + "/") for p in _SPA_PATH_PREFIXES)
+
+    is_spa_path = path in _SPA_PATH_PREFIXES or any(path.startswith(p + "/") for p in _SPA_PATH_PREFIXES)
+    if not is_spa_path:
+        return False
+
+    # Signals that this is an actual browser page navigation, not API fetch().
+    if sec_fetch_dest == "document" or sec_fetch_mode == "navigate" or "text/html" in (accept or ""):
+        return True
+
+    return False
 
 
 class SPAFallbackMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request, call_next):
         if request.method != "GET":
             return await call_next(request)
-        if API_PREFIX and (request.url.path or "").startswith(API_PREFIX):
+        req_path = request.url.path or ""
+        if req_path.startswith(CANONICAL_API_PREFIX):
+            return await call_next(request)
+        if API_PREFIX and req_path.startswith(API_PREFIX):
             return await call_next(request)
         sec_fetch_dest = request.headers.get("sec-fetch-dest", "")
+        sec_fetch_mode = request.headers.get("sec-fetch-mode", "")
         accept = request.headers.get("accept", "")
         path = (request.url.path or "").strip("/")
-        if not _is_spa_document_request(path, sec_fetch_dest, accept):
+        if not _is_spa_document_request(path, sec_fetch_dest, sec_fetch_mode, accept):
             return await call_next(request)
         index_path = STATIC_DIR / "index.html"
         if not index_path.is_file():
