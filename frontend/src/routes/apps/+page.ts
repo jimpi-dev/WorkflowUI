@@ -20,6 +20,7 @@ export type ProjectOption = {
 	name: string;
 	slug?: string | null;
 	run_count: number;
+	header_color?: string | null;
 };
 
 export const load = async ({ fetch, url, depends }) => {

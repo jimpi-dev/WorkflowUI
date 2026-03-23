@@ -2,6 +2,7 @@
 	import { goto, invalidate } from '$app/navigation';
 	import { getApiBase } from '$lib/config';
 	import { browser } from '$app/environment';
+	import { appBooting } from '$lib/stores/appBooting';
 
 	let { data } = $props();
 	const workflow = $derived(data?.workflow ?? null);
@@ -12,7 +13,15 @@
 		const v = workflow?.versions ?? [];
 		if (!v.length) return;
 		const currentValid = selectedVersionId != null && v.some((x: { id: string }) => x.id === selectedVersionId);
-		if (!currentValid) selectedVersionId = v[0].id;
+		if (!currentValid) {
+			const versionsDesc = [...v].sort(
+				(a: { version?: number }, b: { version?: number }) => (b.version ?? 0) - (a.version ?? 0)
+			);
+			const preferredVersion =
+				versionsDesc.find((x: { apps?: unknown[] }) => Array.isArray(x.apps) && x.apps.length > 0) ??
+				versionsDesc[0];
+			selectedVersionId = preferredVersion?.id ?? v[0].id;
+		}
 	});
 	const selectedVersion = $derived(versions.find((v) => v.id === selectedVersionId) ?? versions[0]);
 	const apps = $derived(selectedVersion?.apps ?? []);
@@ -27,6 +36,12 @@
 	let deleteAppError = $state<string | null>(null);
 	let deleteAppLoading = $state(false);
 	let downloadingAppSlug = $state<string | null>(null);
+
+	function openApp(slug: string) {
+		if (!slug) return;
+		appBooting.set(true);
+		goto(`/app/${slug}`);
+	}
 
 	async function downloadAppWorkflowWithDefaults(appSlug: string) {
 		if (!appSlug || downloadingAppSlug) return;
@@ -255,7 +270,7 @@
 							{/if}
 						</div>
 						<button type="button" class="button secondary small" onclick={() => goto(`/apps/${app.slug}/edit`)}>Edit</button>
-						<button type="button" class="button small" onclick={() => goto(`/app/${app.slug}`)}>Open</button>
+						<button type="button" class="button small" onclick={() => openApp(app.slug)}>Open</button>
 						<button
 							type="button"
 							class="button secondary small"
