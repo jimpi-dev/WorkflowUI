@@ -874,17 +874,29 @@ import { get } from 'svelte/store';
 	}
 
 	let notesInitialized = false;
-	let notesCollapsed = $state(browser ? getNotesCollapsedCookie() : false);
+	let isMobile = $state(browser && typeof window !== 'undefined' ? window.matchMedia('(max-width: 639px)').matches : false);
+	let notesUserOpened = $state(false);
+
+	let notesCollapsed = $state(browser ? (isMobile ? true : getNotesCollapsedCookie()) : false);
 	$effect(() => {
 		if (data.project && !notesInitialized) {
 			const hasNotes = (data.project.metadata?.notes?.length ?? 0) > 0;
-			notesCollapsed = hasNotes ? false : (browser ? getNotesCollapsedCookie() : false);
+			// On mobile we collapse notes by default (unless the user opened it already during this session).
+			// On desktop we preserve the existing cookie-driven behavior.
+			notesCollapsed = hasNotes
+				? isMobile
+					? !notesUserOpened
+					: false
+				: browser
+					? getNotesCollapsedCookie()
+					: false;
 			notesInitialized = true;
 		}
 	});
 	function toggleNotesCollapsed() {
 		notesCollapsed = !notesCollapsed;
-		if (browser) setNotesCollapsedCookie(notesCollapsed);
+		if (isMobile && !notesCollapsed) notesUserOpened = true;
+		if (browser && !isMobile) setNotesCollapsedCookie(notesCollapsed);
 	}
 
 	let notesSearch = $state('');
@@ -1129,10 +1141,10 @@ import { get } from 'svelte/store';
 		leftPanelResizing = false;
 	}
 
-	let leftPanelCollapsed = $state(browser ? getLeftPanelCollapsedCookie() : false);
+	let leftPanelCollapsed = $state(browser ? (isMobile ? true : getLeftPanelCollapsedCookie()) : false);
 	function toggleLeftPanel() {
 		leftPanelCollapsed = !leftPanelCollapsed;
-		if (browser) setLeftPanelCollapsedCookie(leftPanelCollapsed);
+		if (browser && !isMobile) setLeftPanelCollapsedCookie(leftPanelCollapsed);
 	}
 
 	$effect(() => {

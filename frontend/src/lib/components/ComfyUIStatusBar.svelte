@@ -461,34 +461,54 @@ import { get } from 'svelte/store';
 
 	@media (max-width: 639px) {
 		.status-bar {
-			flex-wrap: wrap;
+			flex-wrap: nowrap;
 			justify-content: flex-start;
 			gap: 0.25rem 0.5rem;
 			padding: 0.25rem 0.75rem;
 			padding-bottom: calc(0.5rem + env(safe-area-inset-bottom, 0));
 			min-height: 28px;
+			overflow-x: auto;
+			scrollbar-width: none;
+		}
+		.status-bar::-webkit-scrollbar {
+			display: none;
 		}
 		.status-item {
-			white-space: normal;
+			white-space: nowrap;
 		}
-		.github-link {
-			display: none;
+		/* Reorder so VRAM/GPU/CPU stay on the left, and the right-side buttons are adjacent:
+		   Queue (left) then Console (right). */
+		.vram,
+		.gpu,
+		.cpu {
+			order: 1;
 		}
-		.status-sep:has(+ .github-link) {
-			display: none;
+		.status-queue-btn.queue-trigger {
+			order: 2;
+			margin-left: auto;
 		}
-		.plugin-state-text {
-			display: none;
+		.status-console-btn {
+			order: 3;
 		}
-		.plugin-state-dot {
-			width: 10px;
-			height: 10px;
+		.status-queue-btn,
+		.status-console-btn {
+			flex-shrink: 0;
 		}
-		.console-btn-text {
+		.status-sep,
+		.app-info,
+		.github-link,
+		.plugin-state,
+		.storage-group,
+		.ram,
+		.status-loading,
+		.status-error {
 			display: none;
 		}
 		.queue-btn-text {
 			display: none;
+		}
+		.console-btn-text {
+			display: inline;
 		}
 	}
 </style>

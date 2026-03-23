@@ -3,6 +3,7 @@
 	import { get } from 'svelte/store';
 	import { goto, invalidate } from '$app/navigation';
 	import { page } from '$app/stores';
+	import { browser } from '$app/environment';
 	import type { AppSummary, ProjectOption } from './+page';
 	import { QUICK_RUNS_PROJECT_ID } from '$lib/constants';
 	import { appBooting } from '$lib/stores/appBooting';
@@ -104,6 +105,7 @@
 	let sortBy = $state<SortKey>('used');
 	let tagFilters = $state<string[]>([]); // [] = all tags
 	let viewMode = $state<'grid' | 'list'>('grid');
+	let isMobile = $state(browser && typeof window !== 'undefined' ? window.matchMedia('(max-width: 639px)').matches : false);
 	let activeTab = $state<'my-apps' | 'browse'>('my-apps');
 	let openDropdownFor = $state<string | null>(null);
 	let projectFilter = $state('');
@@ -510,89 +512,97 @@
 					aria-label="Search apps"
 				/>
 			</div>
-			<select class="sort-select" bind:value={sortBy} aria-label="Sort by">
-				{#each sortOptions as opt}
-					<option value={opt.value}>{opt.label}</option>
-				{/each}
-			</select>
-			<div class="tag-filter">
-				<button
-					type="button"
-					class="tag-filter-trigger"
-					onclick={() => (tagFilterOpen = !tagFilterOpen)}
-					aria-haspopup="listbox"
-					aria-expanded={tagFilterOpen}
-					id="tag-filter-trigger"
-				>
-					<span class="tag-filter-trigger-main">
-						{#if !tagFilters.length}
-							<span class="tag-filter-summary-text">All tags</span>
-						{:else}
-							<span class="tag-filter-summary-text">
-								{tagFilters.length === 1 ? '1 tag' : `${tagFilters.length} tags`}
-							</span>
-							<span class="tag-filter-summary-chips" aria-hidden="true">
-								{#each tagFilters.slice(0, 3) as tag (tag)}
-									<span class="tag-chip tag-chip-small">{tag}</span>
-								{/each}
-								{#if tagFilters.length > 3}
-									<span class="tag-chip tag-chip-more">+{tagFilters.length - 3}</span>
-								{/if}
-							</span>
-						{/if}
-					</span>
-					<svg class="tag-filter-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
-						<path d="M6 9l6 6 6-6"/>
+			<details class="filters-more" open={!isMobile}>
+				<summary>
+					<span>Filters / More</span>
+					<svg class="filters-more-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+						<path d="M6 9l6 6 6-6" />
 					</svg>
-				</button>
-				{#if tagFilterOpen}
-					<div
-						class="tag-filter-menu"
-						role="listbox"
-						aria-multiselectable="true"
-						aria-label="Filter apps by tag"
+				</summary>
+				<select class="sort-select" bind:value={sortBy} aria-label="Sort by">
+					{#each sortOptions as opt}
+						<option value={opt.value}>{opt.label}</option>
+					{/each}
+				</select>
+				<div class="tag-filter">
+					<button
+						type="button"
+						class="tag-filter-trigger"
+						onclick={() => (tagFilterOpen = !tagFilterOpen)}
+						aria-haspopup="listbox"
+						aria-expanded={tagFilterOpen}
+						id="tag-filter-trigger"
 					>
-						<button
-							type="button"
-							class="tag-filter-option"
-							role="option"
-							aria-selected={!tagFilters.length}
-							onclick={() => (tagFilters = [])}
+						<span class="tag-filter-trigger-main">
+							{#if !tagFilters.length}
+								<span class="tag-filter-summary-text">All tags</span>
+							{:else}
+								<span class="tag-filter-summary-text">
+									{tagFilters.length === 1 ? '1 tag' : `${tagFilters.length} tags`}
+								</span>
+								<span class="tag-filter-summary-chips" aria-hidden="true">
+									{#each tagFilters.slice(0, 3) as tag (tag)}
+										<span class="tag-chip tag-chip-small">{tag}</span>
+									{/each}
+									{#if tagFilters.length > 3}
+										<span class="tag-chip tag-chip-more">+{tagFilters.length - 3}</span>
+									{/if}
+								</span>
+							{/if}
+						</span>
+						<svg class="tag-filter-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+							<path d="M6 9l6 6 6-6"/>
+						</svg>
+					</button>
+					{#if tagFilterOpen}
+						<div
+							class="tag-filter-menu"
+							role="listbox"
+							aria-multiselectable="true"
+							aria-label="Filter apps by tag"
 						>
-							<span class="tag-filter-checkbox" aria-hidden="true">
-								{#if !tagFilters.length}
-									<span class="tag-filter-checkbox-inner"></span>
-								{/if}
-							</span>
-							<span class="tag-filter-option-text">
-								<span class="tag-filter-option-label">All tags</span>
-							</span>
-						</button>
-						{#each allTags as tag (tag)}
 							<button
 								type="button"
 								class="tag-filter-option"
 								role="option"
-								aria-selected={tagFilters.includes(tag)}
-								onclick={() => {
-									const set = new Set(tagFilters);
-									if (set.has(tag)) set.delete(tag); else set.add(tag);
-									tagFilters = Array.from(set);
-								}}
+								aria-selected={!tagFilters.length}
+								onclick={() => (tagFilters = [])}
 							>
 								<span class="tag-filter-checkbox" aria-hidden="true">
-									{#if tagFilters.includes(tag)}
+									{#if !tagFilters.length}
 										<span class="tag-filter-checkbox-inner"></span>
 									{/if}
 								</span>
 								<span class="tag-filter-option-text">
-									<span class="tag-filter-option-label">{tag}</span>
+									<span class="tag-filter-option-label">All tags</span>
 								</span>
 							</button>
-						{/each}
-					</div>
-				{/if}
-			</div>
+							{#each allTags as tag (tag)}
+								<button
+									type="button"
+									class="tag-filter-option"
+									role="option"
+									aria-selected={tagFilters.includes(tag)}
+									onclick={() => {
+										const set = new Set(tagFilters);
+										if (set.has(tag)) set.delete(tag); else set.add(tag);
+										tagFilters = Array.from(set);
+									}}
+								>
+									<span class="tag-filter-checkbox" aria-hidden="true">
+										{#if tagFilters.includes(tag)}
+											<span class="tag-filter-checkbox-inner"></span>
+										{/if}
+									</span>
+									<span class="tag-filter-option-text">
+										<span class="tag-filter-option-label">{tag}</span>
+									</span>
+								</button>
+							{/each}
+						</div>
+					{/if}
+				</div>
+			</details>
 			<div class="view-toggle" role="tablist" aria-label="View">
 				<button
 					type="button"
@@ -684,7 +694,7 @@
 							<div class="list-row">
 								<span class="card-badge list-badge" class:public={app.is_public}>{app.is_public ? 'Public' : 'Private'}</span>
 								{#if app.created_from_image_import}
-									<span class="badge-from-image" title="Created from workflow image import">From image</span>
+									<span class="badge-from-image" title="Created from imported file">Imported from file</span>
 								{/if}
 								<h3 class="app-name list-name">{app.title}</h3>
 								<span class="list-slug-desc">{#if app.description}{app.description}{:else}/{app.slug}{/if}</span>
@@ -809,7 +819,7 @@
 						<div class="app-name-row">
 							<h3 class="app-name">{app.title}</h3>
 							{#if app.created_from_image_import}
-								<span class="badge-from-image" title="Created from workflow image import">From image</span>
+								<span class="badge-from-image" title="Created from imported file">Imported from file</span>
 							{/if}
 						</div>
 						{#if app.description}
@@ -1174,6 +1184,39 @@
 		align-items: center;
 		gap: 0.75rem;
 		margin-top: 1rem;
+	}
+
+	.filters-more {
+		position: relative;
+		display: flex;
+		flex-direction: column;
+		gap: 0.5rem;
+	}
+	.filters-more > summary {
+		list-style: none;
+		cursor: pointer;
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 0.75rem;
+		width: 100%;
+		min-height: 44px;
+		padding: 0.45rem 0.6rem;
+		background: var(--surface);
+		border: 1px solid var(--border);
+		border-radius: 8px;
+		color: var(--text);
+		font-size: 0.85rem;
+		font-weight: 600;
+	}
+	.filters-more > summary::-webkit-details-marker {
+		display: none;
+	}
+	.filters-more[open] > summary {
+		display: none;
+	}
+	.filters-more-chevron {
+		opacity: 0.75;
 	}
 
 	.search-wrap {
@@ -2184,6 +2227,16 @@
 			flex-direction: column;
 			align-items: stretch;
 			gap: 0.5rem;
+		}
+		.apps-page .filters-more {
+			width: 100%;
+		}
+		.apps-page .filters-more .sort-select {
+			width: 100%;
+			max-width: none;
+		}
+		.apps-page .filters-more .tag-filter {
+			min-width: 0;
 		}
 		.apps-page .search-wrap {
 			max-width: none;
