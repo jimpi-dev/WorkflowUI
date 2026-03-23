@@ -186,7 +186,7 @@
 						<div class="workflow-card-header">
 							<a class="table-link" href="/workflows/{wf.id}">{wf.name}</a>
 							{#if wf.created_from_image_import}
-								<span class="badge-from-image" title="Created from workflow image import">From image</span>
+								<span class="badge-from-image" title="Created from imported file">Imported from file</span>
 							{/if}
 							<span class="table-id">{wf.id.slice(0, 8)}…</span>
 						</div>
@@ -249,7 +249,7 @@
 								<td>
 									<a class="table-link" href="/workflows/{wf.id}">{wf.name}</a>
 									{#if wf.created_from_image_import}
-										<span class="badge-from-image" title="Created from workflow image import">From image</span>
+										<span class="badge-from-image" title="Created from imported file">Imported from file</span>
 									{/if}
 									<span class="table-id">{wf.id.slice(0, 8)}…</span>
 								</td>

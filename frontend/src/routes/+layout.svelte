@@ -13,11 +13,18 @@
 	import { consolePanelOpen } from '$lib/stores/consolePanelOpen';
 	import { queuePanelOpen } from '$lib/stores/queuePanelOpen';
 	import { queuePanelWidth } from '$lib/stores/queuePanelWidth';
-	import { onMount } from 'svelte';
+	import { tick, onMount } from 'svelte';
 	let { children } = $props();
 
 	let layoutEl: HTMLDivElement | null = $state(null);
 	let footerEl: HTMLElement | null = $state(null);
+	let isMobile = $state(false);
+	let mobileQueueMounted = $state(false);
+	let mobileQueueOpen = $state(false);
+	let mobileConsoleMounted = $state(false);
+	let mobileConsoleOpen = $state(false);
+	let mobileQueueTimeout: ReturnType<typeof setTimeout> | null = null;
+	let mobileConsoleTimeout: ReturnType<typeof setTimeout> | null = null;
 
 	let isAppRoute = $derived(
 		$page.url.pathname === '/app' || $page.url.pathname.startsWith('/app/')
@@ -41,6 +48,72 @@
 		ro.observe(footerEl);
 		return () => ro.disconnect();
 	});
+
+	onMount(() => {
+		if (typeof window === 'undefined') return;
+		const mql = window.matchMedia('(max-width: 639px)');
+		const update = () => {
+			isMobile = mql.matches;
+			if (!isMobile) {
+				mobileQueueMounted = false;
+				mobileQueueOpen = false;
+				mobileConsoleMounted = false;
+				mobileConsoleOpen = false;
+			}
+		};
+		update();
+		if ('addEventListener' in mql) mql.addEventListener('change', update);
+		else mql.addListener(update);
+		return () => {
+			if ('removeEventListener' in mql) mql.removeEventListener('change', update);
+			else mql.removeListener(update);
+		};
+	});
+
+	$effect(() => {
+		if (!isMobile) return;
+		if ($queuePanelOpen) {
+			if (mobileQueueTimeout) clearTimeout(mobileQueueTimeout);
+			mobileQueueMounted = true;
+			mobileQueueOpen = false;
+			// Trigger the transition to open state.
+			mobileQueueTimeout = setTimeout(async () => {
+				await tick();
+				mobileQueueOpen = true;
+				mobileQueueTimeout = null;
+			}, 0);
+		} else if (mobileQueueMounted) {
+			if (mobileQueueTimeout) clearTimeout(mobileQueueTimeout);
+			mobileQueueOpen = false;
+			mobileQueueTimeout = setTimeout(() => {
+				mobileQueueMounted = false;
+				mobileQueueOpen = false;
+				mobileQueueTimeout = null;
+			}, 220);
+		}
+	});
+
+	$effect(() => {
+		if (!isMobile) return;
+		if ($consolePanelOpen) {
+			if (mobileConsoleTimeout) clearTimeout(mobileConsoleTimeout);
+			mobileConsoleMounted = true;
+			mobileConsoleOpen = false;
+			mobileConsoleTimeout = setTimeout(async () => {
+				await tick();
+				mobileConsoleOpen = true;
+				mobileConsoleTimeout = null;
+			}, 0);
+		} else if (mobileConsoleMounted) {
+			if (mobileConsoleTimeout) clearTimeout(mobileConsoleTimeout);
+			mobileConsoleOpen = false;
+			mobileConsoleTimeout = setTimeout(() => {
+				mobileConsoleMounted = false;
+				mobileConsoleOpen = false;
+				mobileConsoleTimeout = null;
+			}, 220);
+		}
+	});
 </script>
 
 <svelte:head>
@@ -56,14 +129,42 @@
 			<main class="app-viewport">
 				{@render children()}
 			</main>
-			{#if $consolePanelOpen}
-				<ComfyUIConsole open={$consolePanelOpen} onclose={() => consolePanelOpen.set(false)} />
+			{#if isMobile}
+				{#if mobileConsoleMounted}
+					<div
+						class="console-mobile-backdrop"
+						class:console-mobile-backdrop--open={mobileConsoleOpen}
+						role="presentation"
+						onclick={() => consolePanelOpen.set(false)}
+					/>
+					<div class="console-mobile-sheet" class:console-mobile-sheet--open={mobileConsoleOpen}>
+						<ComfyUIConsole open={$consolePanelOpen} onclose={() => consolePanelOpen.set(false)} mobileFullscreen />
+					</div>
+				{/if}
+			{:else}
+				{#if $consolePanelOpen}
+					<ComfyUIConsole open={$consolePanelOpen} onclose={() => consolePanelOpen.set(false)} />
+				{/if}
 			{/if}
 		</div>
-		{#if $queuePanelOpen}
-			<aside class="queue-column" style="width: {$queuePanelWidth}px;">
-				<QueuePanel />
-			</aside>
+		{#if isMobile}
+			{#if mobileQueueMounted}
+				<div
+					class="queue-mobile-backdrop"
+					class:queue-mobile-backdrop--open={mobileQueueOpen}
+					role="presentation"
+					onclick={() => queuePanelOpen.set(false)}
+				/>
+				<aside class="queue-column queue-mobile-sheet" class:queue-mobile-sheet--open={mobileQueueOpen}>
+					<QueuePanel />
+				</aside>
+			{/if}
+		{:else}
+			{#if $queuePanelOpen}
+				<aside class="queue-column" style="width: {$queuePanelWidth}px;">
+					<QueuePanel />
+				</aside>
+			{/if}
 		{/if}
 	</div>
 
@@ -139,6 +240,60 @@
 		overflow: hidden;
 		display: flex;
 		flex-direction: column;
+	}
+
+	.queue-mobile-backdrop {
+		position: fixed;
+		inset: 0;
+		z-index: 10000;
+		background: rgba(0, 0, 0, 0.55);
+		backdrop-filter: blur(6px);
+		-webkit-backdrop-filter: blur(6px);
+		opacity: 0;
+		transition: opacity 220ms ease;
+	}
+	.queue-mobile-backdrop--open {
+		opacity: 1;
+	}
+
+	.queue-mobile-sheet {
+		position: fixed;
+		inset: 0;
+		z-index: 10001;
+		display: flex;
+		flex-direction: column;
+		width: 100vw;
+		transform: translateX(100%);
+		transition: transform 220ms ease;
+	}
+	.queue-mobile-sheet--open {
+		transform: translateX(0%);
+	}
+
+	.console-mobile-backdrop {
+		position: fixed;
+		inset: 0;
+		z-index: 10020;
+		background: rgba(0, 0, 0, 0.55);
+		backdrop-filter: blur(6px);
+		-webkit-backdrop-filter: blur(6px);
+		opacity: 0;
+		transition: opacity 220ms ease;
+	}
+	.console-mobile-backdrop--open {
+		opacity: 1;
+	}
+	.console-mobile-sheet {
+		position: fixed;
+		inset: 0;
+		z-index: 10021;
+		display: flex;
+		flex-direction: column;
+		transform: translateX(100%);
+		transition: transform 220ms ease;
+	}
+	.console-mobile-sheet--open {
+		transform: translateX(0%);
 	}
 
 	.app-footer-area {

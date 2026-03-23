@@ -1,7 +1,8 @@
 <script lang="ts">
-	import { getApiBase } from '$lib/config';
-	import { goto, invalidate } from '$app/navigation';
-	import { page } from '$app/stores';
+import { getApiBase } from '$lib/config';
+import { goto, invalidate } from '$app/navigation';
+import { page } from '$app/stores';
+import { get } from 'svelte/store';
 	import { browser } from '$app/environment';
 	import { onMount, onDestroy, tick, untrack } from 'svelte';
 	import { getThumbSizeCookie, setThumbSizeCookie, getNotesCollapsedCookie, setNotesCollapsedCookie, getLeftPanelCollapsedCookie, setLeftPanelCollapsedCookie, getSkipDeleteConfirmCookie, setSkipDeleteConfirmCookie, type ThumbSize, type DeleteConfirmKey } from '$lib/cookie';
@@ -72,6 +73,7 @@
 	let totalGroups = $state<number>(0);
 	let statsTotalRuns = $state<number | null>(null);
 	let statsTotalGenerations = $state<number | null>(null);
+	const DELETED_APP_FILTER_ID = '__deleted__';
 	let filterAppId = $state<string>('');
 	let filterFromDate = $state<string>('');
 	let filterToDate = $state<string>('');
@@ -132,6 +134,9 @@
 	});
 
 	const filterActive = $derived(!!(filterAppId.trim() || filterFromDate.trim() || filterToDate.trim() || filterMetaQ.trim() || filterFavoritesOnly));
+	const runsRenderKey = $derived(
+		`${data.projectId}|${filterAppId}|${filterFromDate}|${filterToDate}|${filterMetaQ}|${filterFavoritesOnly}`
+	);
 
 	const runGroups = $derived.by(() => {
 		let list = runs;
@@ -139,6 +144,12 @@
 			list = list.filter((r) => favorites.has(r.id));
 		} else if (filterFavoritesOnly) {
 			list = [];
+		}
+		// For concrete apps, filter by app_id on the client as well.
+		// For deleted apps we rely on the backend's deleted_app=true
+		// filter and do not re-filter here.
+		if (filterAppId.trim() && filterAppId !== DELETED_APP_FILTER_ID) {
+			list = list.filter((r) => r.app_id === filterAppId.trim());
 		}
 		const byGroup = new Map<string, ApiRun[]>();
 		for (const r of list) {
@@ -173,7 +184,9 @@
 			const error = sorted.find((r) => r.error)?.error ?? null;
 			const comfyui_unreachable_warning = sorted.find((r) => r.comfyui_unreachable_warning)?.comfyui_unreachable_warning ?? null;
 			const latent_resolution = sorted.find((r) => r.latent_resolution)?.latent_resolution ?? null;
-			const app_removed = !!(first.app_id && first.app_slug == null && first.app_title == null);
+			const app_removed = sorted.some(
+				(r) => r.app_id && r.app_slug == null && r.app_title == null
+			);
 			const app_header_color = first.app_header_color ?? null;
 			groups.push({
 				groupId,
@@ -195,12 +208,14 @@
 		return groups;
 	});
 
+	const visibleRunGroups = $derived.by(() => runGroups);
+
 	const displayRunsCount = $derived(
-		filterFavoritesOnly ? runGroups.length : (statsTotalGenerations ?? totalGroups)
+		filterFavoritesOnly ? visibleRunGroups.length : (statsTotalGenerations ?? totalGroups)
 	);
 
 	const displayGenerationsCount = $derived(
-		filterFavoritesOnly ? runGroups.reduce((n, g) => n + g.runs.length, 0) : (statsTotalRuns ?? 0)
+		filterFavoritesOnly ? visibleRunGroups.reduce((n, g) => n + g.runs.length, 0) : (statsTotalRuns ?? 0)
 	);
 
 	const loadedGroupCount = $derived.by(() => {
@@ -217,6 +232,30 @@
 			if (r.app_id) countByAppId.set(r.app_id, (countByAppId.get(r.app_id) ?? 0) + 1);
 		}
 		return [...apps].sort((a, b) => (countByAppId.get(b.id) ?? 0) - (countByAppId.get(a.id) ?? 0));
+	});
+
+	const appFilterOptions = $derived.by(() => {
+		const options =
+			appsUsedSortedByRuns
+				.map((app) => ({
+					id: app.id,
+					title: (app.title ?? '').trim()
+				}))
+				.filter((app) => app.id && app.title) ?? [];
+
+		const withDeleted = [
+			{
+				id: DELETED_APP_FILTER_ID,
+				title: 'Deleted app (removed)'
+			},
+			...options
+		];
+		const selected = filterAppId?.trim();
+		if (selected && !withDeleted.some((opt) => opt.id === selected)) {
+			const label = selected === DELETED_APP_FILTER_ID ? 'Deleted app (removed)' : 'Selected app';
+			return [{ id: selected, title: label }, ...withDeleted];
+		}
+		return withDeleted;
 	});
 
 	$effect(() => {
@@ -241,6 +280,28 @@
 			if (u.remote_storage_bytes === undefined) merged.remote_storage_bytes = r.remote_storage_bytes;
 			return merged;
 		});
+	}
+
+	/** Matches thumbnail visibility: remote-deleted slots only show if run still has local copies. */
+	function runHasDisplayableOutputs(run: ApiRun): boolean {
+		const imgs = run.images ?? [];
+		return imgs.some((item) => {
+			const rd = !!(item as { remote_deleted?: boolean }).remote_deleted;
+			if (!rd) return true;
+			return run.local_storage_status === 'saved' || run.local_storage_status === 'partial';
+		});
+	}
+
+	function pruneStaleRunFavorites(runsToCheck: ApiRun[]) {
+		const toRemove: string[] = [];
+		for (const r of runsToCheck) {
+			if (favorites.has(r.id) && !runHasDisplayableOutputs(r)) toRemove.push(r.id);
+		}
+		if (!toRemove.length) return;
+		const next = new Set(favorites);
+		for (const id of toRemove) next.delete(id);
+		favorites = next;
+		saveFavoritesMetadata([...next]).catch(() => {});
 	}
 
 	async function refetchStorageSizesForRunIds(
@@ -296,6 +357,9 @@
 						remote_status: data.remote_status,
 						local_path: data.local_path
 					});
+					if (typeof window !== 'undefined') {
+						window.dispatchEvent(new CustomEvent('workflowui-refresh-storage'));
+					}
 				} else {
 					updateRunStorage(run.id, { local_storage_status: 'failed' });
 				}
@@ -326,6 +390,9 @@
 							remote_status: data.remote_status,
 							local_path: data.local_path
 						});
+						if (typeof window !== 'undefined') {
+							window.dispatchEvent(new CustomEvent('workflowui-refresh-storage'));
+						}
 					} else {
 						updateRunStorage(runId, { local_storage_status: 'failed' });
 					}
@@ -383,6 +450,9 @@
 							local_storage_status: data.local_storage_status,
 							local_path: data.local_path
 						});
+						if (typeof window !== 'undefined') {
+							window.dispatchEvent(new CustomEvent('workflowui-refresh-storage'));
+						}
 					} else {
 						updateRunStorage(run.id, { local_storage_status: 'failed' });
 					}
@@ -521,7 +591,8 @@
 	}
 
 	function requestDeleteRunGroup(group: (typeof runGroups)[0]) {
-		const hasFav = group.runs.some((r) => favorites.has(r.id));
+		pruneStaleRunFavorites(group.runs);
+		const hasFav = group.runs.some((r) => favorites.has(r.id) && runHasDisplayableOutputs(r));
 		if (!hasFav && getSkipDeleteConfirmCookie('delete_run')) {
 			deleteRunGroup(group).catch(() => {});
 			return;
@@ -803,17 +874,29 @@
 	}
 
 	let notesInitialized = false;
-	let notesCollapsed = $state(browser ? getNotesCollapsedCookie() : false);
+	let isMobile = $state(browser && typeof window !== 'undefined' ? window.matchMedia('(max-width: 639px)').matches : false);
+	let notesUserOpened = $state(false);
+
+	let notesCollapsed = $state(browser ? (isMobile ? true : getNotesCollapsedCookie()) : false);
 	$effect(() => {
 		if (data.project && !notesInitialized) {
 			const hasNotes = (data.project.metadata?.notes?.length ?? 0) > 0;
-			notesCollapsed = hasNotes ? false : (browser ? getNotesCollapsedCookie() : false);
+			// On mobile we collapse notes by default (unless the user opened it already during this session).
+			// On desktop we preserve the existing cookie-driven behavior.
+			notesCollapsed = hasNotes
+				? isMobile
+					? !notesUserOpened
+					: false
+				: browser
+					? getNotesCollapsedCookie()
+					: false;
 			notesInitialized = true;
 		}
 	});
 	function toggleNotesCollapsed() {
 		notesCollapsed = !notesCollapsed;
-		if (browser) setNotesCollapsedCookie(notesCollapsed);
+		if (isMobile && !notesCollapsed) notesUserOpened = true;
+		if (browser && !isMobile) setNotesCollapsedCookie(notesCollapsed);
 	}
 
 	let notesSearch = $state('');
@@ -840,10 +923,25 @@
 	);
 
 	const RUNS_PAGE_SIZE = 20;
+	let runsInitialSeq = 0;
+	let runsAppendSeq = 0;
+	let statsRequestSeq = 0;
+	let activeRunsQueryKey = '';
+	let runsAbortController: AbortController | null = null;
+	let statsAbortController: AbortController | null = null;
 
-	async function loadRuns(offset: number = 0) {
+	async function loadRuns(offset: number = 0, queryKey?: string) {
 		const projectIdWeFetch = data.projectId;
 		const isInitial = offset === 0;
+		const requestId = isInitial ? ++runsInitialSeq : ++runsAppendSeq;
+		const key = queryKey ?? activeRunsQueryKey;
+		if (isInitial) {
+			activeRunsQueryKey = key;
+			runsAppendSeq = 0;
+			if (runsAbortController) runsAbortController.abort();
+		}
+		const controller = new AbortController();
+		runsAbortController = controller;
 		if (isInitial) {
 			loading = true;
 			allGroupsRevealed = false;
@@ -854,7 +952,13 @@
 			const q = new URLSearchParams();
 			q.set('limit', String(RUNS_PAGE_SIZE));
 			q.set('offset', String(offset));
-			if (filterAppId.trim()) q.set('app_id', filterAppId.trim());
+			// Ask backend to filter by deleted apps when that option is selected,
+			// otherwise filter by concrete app_id when provided.
+			if (filterAppId === DELETED_APP_FILTER_ID) {
+				q.set('deleted_app', '1');
+			} else if (filterAppId.trim()) {
+				q.set('app_id', filterAppId.trim());
+			}
 			if (filterFromDate.trim()) {
 				const fromMs = new Date(filterFromDate.trim()).setHours(0, 0, 0, 0);
 				q.set('since', String(fromMs));
@@ -865,8 +969,11 @@
 			}
 			if (filterMetaQ.trim()) q.set('meta_q', filterMetaQ.trim());
 			const url = `${apiBase}/projects/${projectIdWeFetch}/runs?${q.toString()}`;
-			const res = await fetch(url);
-			if (data.projectId !== projectIdWeFetch) return;
+			console.debug('[projects runs] loadRuns url', url);
+			const res = await fetch(url, { signal: controller.signal });
+			if (data.projectId !== projectIdWeFetch || key !== activeRunsQueryKey) return;
+			if (isInitial && requestId !== runsInitialSeq) return;
+			if (!isInitial && requestId !== runsAppendSeq) return;
 			if (!res.ok) {
 				if (isInitial) {
 					runs = [];
@@ -875,7 +982,14 @@
 				return;
 			}
 			const raw = await res.json();
-			if (data.projectId !== projectIdWeFetch) return;
+			console.debug(
+				'[projects runs] loadRuns response',
+				{ status: res.status, ok: res.ok },
+				Array.isArray(raw?.runs) ? raw.runs.length : Array.isArray(raw) ? raw.length : null
+			);
+			if (data.projectId !== projectIdWeFetch || key !== activeRunsQueryKey) return;
+			if (isInitial && requestId !== runsInitialSeq) return;
+			if (!isInitial && requestId !== runsAppendSeq) return;
 			const mapRun = (r: ApiRun) => ({ ...r, run_group_id: r.run_group_id ?? null });
 			if (raw && typeof raw === 'object' && Array.isArray(raw.runs)) {
 				const newRuns = raw.runs.map(mapRun);
@@ -894,14 +1008,19 @@
 				runs = Array.isArray(raw) ? raw.map(mapRun) : [];
 				totalGroups = runs.length;
 			}
-		} catch {
-			if (data.projectId !== projectIdWeFetch) return;
+		} catch (e) {
+			if (e instanceof DOMException && e.name === 'AbortError') return;
+			if (data.projectId !== projectIdWeFetch || key !== activeRunsQueryKey) return;
+			if (isInitial && requestId !== runsInitialSeq) return;
+			if (!isInitial && requestId !== runsAppendSeq) return;
 			if (isInitial) {
 				runs = [];
 				totalGroups = 0;
 			}
 		} finally {
-			if (data.projectId === projectIdWeFetch) {
+			if (data.projectId === projectIdWeFetch && key === activeRunsQueryKey) {
+				if (isInitial && requestId !== runsInitialSeq) return;
+				if (!isInitial && requestId !== runsAppendSeq) return;
 				if (isInitial) loading = false;
 				else loadingMore = false;
 			}
@@ -915,8 +1034,16 @@
 
 	async function loadStats() {
 		const projectIdWeFetch = data.projectId;
+		const requestId = ++statsRequestSeq;
+		if (statsAbortController) statsAbortController.abort();
+		const controller = new AbortController();
+		statsAbortController = controller;
 		const q = new URLSearchParams();
-		if (filterAppId.trim()) q.set('app_id', filterAppId.trim());
+		if (filterAppId === DELETED_APP_FILTER_ID) {
+			q.set('deleted_app', '1');
+		} else if (filterAppId.trim()) {
+			q.set('app_id', filterAppId.trim());
+		}
 		if (filterFromDate.trim()) {
 			q.set('since', String(new Date(filterFromDate.trim()).setHours(0, 0, 0, 0)));
 		}
@@ -925,14 +1052,15 @@
 		}
 		if (filterMetaQ.trim()) q.set('meta_q', filterMetaQ.trim());
 		try {
-			const res = await fetch(`${apiBase}/projects/${projectIdWeFetch}/runs/stats?${q.toString()}`);
-			if (data.projectId !== projectIdWeFetch || !res.ok) return;
+			const res = await fetch(`${apiBase}/projects/${projectIdWeFetch}/runs/stats?${q.toString()}`, { signal: controller.signal });
+			if (data.projectId !== projectIdWeFetch || requestId !== statsRequestSeq || !res.ok) return;
 			const raw = await res.json();
-			if (data.projectId !== projectIdWeFetch) return;
+			if (data.projectId !== projectIdWeFetch || requestId !== statsRequestSeq) return;
 			if (typeof raw.total_runs === 'number') statsTotalRuns = raw.total_runs;
 			if (typeof raw.total_generations === 'number') statsTotalGenerations = raw.total_generations;
-		} catch {
-			if (data.projectId === projectIdWeFetch) {
+		} catch (e) {
+			if (e instanceof DOMException && e.name === 'AbortError') return;
+			if (data.projectId === projectIdWeFetch && requestId === statsRequestSeq) {
 				statsTotalRuns = null;
 				statsTotalGenerations = null;
 			}
@@ -941,12 +1069,15 @@
 
 	$effect(() => {
 		const projectId = data.projectId;
+		// Re-load runs and stats whenever filters change, but do not
+		// mutate filterAppId here so the select binding remains stable.
 		filterAppId;
 		filterFromDate;
 		filterToDate;
 		filterMetaQ;
 		if (projectId && browser) {
-			loadRuns();
+			const key = `${filterAppId}|${filterFromDate}|${filterToDate}|${filterMetaQ}|${filterFavoritesOnly}`;
+			loadRuns(0, key);
 			loadStats();
 		}
 	});
@@ -979,7 +1110,7 @@
 		goto(`/app/${appSlug}?project=${data.projectId}&run_id=${encodeURIComponent(runId)}`);
 	}
 
-	const fromPath = $derived($page.url.searchParams.get('from') ?? '');
+	const fromPath = $derived(get(page).url.searchParams.get('from') ?? '');
 	function backLabel(path: string): string {
 		if (path.startsWith('/app/')) return 'Back to workflow';
 		if (path === '/workflows' || path.startsWith('/workflows/')) return 'Back to workflows';
@@ -1010,10 +1141,10 @@
 		leftPanelResizing = false;
 	}
 
-	let leftPanelCollapsed = $state(browser ? getLeftPanelCollapsedCookie() : false);
+	let leftPanelCollapsed = $state(browser ? (isMobile ? true : getLeftPanelCollapsedCookie()) : false);
 	function toggleLeftPanel() {
 		leftPanelCollapsed = !leftPanelCollapsed;
-		if (browser) setLeftPanelCollapsedCookie(leftPanelCollapsed);
+		if (browser && !isMobile) setLeftPanelCollapsedCookie(leftPanelCollapsed);
 	}
 
 	$effect(() => {
@@ -1171,6 +1302,7 @@
 		};
 	}
 	function thumbSrc(thumbKey: string, url: string): string | undefined {
+		if (filterActive) return url;
 		return visibleThumbKeys[thumbKey] ? url : undefined;
 	}
 	
@@ -1180,7 +1312,7 @@
 	let _thumbRevealCount = 0;
 	$effect(() => {
 		if (!browser || loading || runGroups.length === 0) return;
-	
+
 		if (allGroupsRevealed && runGroups.length > _thumbRevealCount) allGroupsRevealed = false;
 		if (allGroupsRevealed) return;
 		const projectIdForBatch = data.projectId;
@@ -1209,6 +1341,20 @@
 		return () => clearTimeout(timeoutId);
 	});
 
+	$effect(() => {
+		if (!browser || loading) return;
+		if (!filterActive) return;
+		const groups = runGroups;
+		if (groups.length === 0) return;
+		const next: Record<string, boolean> = {};
+		for (const g of groups) {
+			for (const k of getThumbKeysForGroupId(g.groupId)) next[k] = true;
+		}
+		visibleThumbKeys = next;
+		_thumbRevealCount = groups.length;
+		allGroupsRevealed = true;
+	});
+
 	let _prevProjectId = $state<string | undefined>(undefined);
 	$effect(() => {
 		const projectId = data.projectId;
@@ -1230,6 +1376,20 @@
 			allGroupsRevealed = false;
 		}
 		_prevFilterFavoritesOnly = on;
+	});
+
+	let _prevFilterSignature = $state<string | undefined>(undefined);
+	$effect(() => {
+		const sig = `${filterAppId}|${filterFromDate}|${filterToDate}|${filterMetaQ}`;
+		if (_prevFilterSignature !== undefined && _prevFilterSignature !== sig) {
+			_thumbRevealCount = 0;
+			allGroupsRevealed = false;
+			visibleThumbKeys = {};
+			loadedThumbIds = {};
+			imagePreviewFailed = {};
+			thumbLoadFailed = new Set();
+		}
+		_prevFilterSignature = sig;
 	});
 	
 	$effect(() => {
@@ -1342,19 +1502,20 @@
 		}
 	}
 
-	async function deleteBothImage(runId: string, imageIndex: number) {
+	async function deleteBothImage(runId: string, imageIndex: number): Promise<boolean> {
 		deleteError = null;
 		const key = `${runId}_${imageIndex}`;
 		deletingBothImageKeys = new Set([...deletingBothImageKeys, key]);
 		try {
 			const res = await fetch(`${apiBase}/runs/${runId}/delete-both-image/${imageIndex}`, { method: 'POST' });
 			const data = await res.json().catch(() => ({}));
+			if (data.updated_runs?.length) mergeUpdatedRuns(data.updated_runs);
 			if (res.ok) {
-				mergeUpdatedRuns(data.updated_runs);
 				refetchStorageSizesForRunIds([runId]);
-			} else {
-				deleteError = typeof data?.detail === 'string' ? data.detail : data?.error ?? 'Delete failed';
+				return true;
 			}
+			deleteError = typeof data?.detail === 'string' ? data.detail : data?.error ?? 'Delete failed';
+			return false;
 		} finally {
 			const next = new Set(deletingBothImageKeys);
 			next.delete(key);
@@ -1399,7 +1560,8 @@
 					}
 					refetchStorageSizesForRunIds(Array.from(byRun.keys()));
 				};
-				if (getSkipDeleteConfirmCookie('delete_remote')) {
+				// Always confirm when favorites are involved ("Don't ask again" must not skip that warning).
+				if (getSkipDeleteConfirmCookie('delete_remote') && !hasFav) {
 					await doDelete();
 					return;
 				}
@@ -1445,6 +1607,9 @@
 							if (res.ok) {
 								if (data.updated_runs?.length) mergeUpdatedRuns(data.updated_runs);
 								updateRunStorage(runId, { local_storage_status: data.local_storage_status, local_path: data.local_path });
+								if (typeof window !== 'undefined') {
+									window.dispatchEvent(new CustomEvent('workflowui-refresh-storage'));
+								}
 							} else deleteError = typeof data?.detail === 'string' ? data.detail : data?.error ?? 'Delete failed';
 						} finally {
 							const next = new Set(deletingLocalImageKeys);
@@ -1454,7 +1619,7 @@
 					}
 					refetchStorageSizesForRunIds(Array.from(byRun.keys()));
 				};
-				if (getSkipDeleteConfirmCookie('delete_local')) {
+				if (getSkipDeleteConfirmCookie('delete_local') && !hasFav) {
 					await doDelete();
 					return;
 				}
@@ -1497,8 +1662,8 @@
 								body: JSON.stringify({ indices })
 							});
 							const data = await res.json().catch(() => ({}));
+							if (data.updated_runs?.length) mergeUpdatedRuns(data.updated_runs);
 							if (res.ok) {
-								if (data.updated_runs?.length) mergeUpdatedRuns(data.updated_runs);
 								updateRunStorage(runId, { local_storage_status: data.local_storage_status, remote_status: data.remote_status });
 							} else deleteError = typeof data?.detail === 'string' ? data.detail : data?.error ?? 'Delete failed';
 						} finally {
@@ -1509,7 +1674,7 @@
 					}
 					refetchStorageSizesForRunIds(Array.from(byRun.keys()));
 				};
-				if (getSkipDeleteConfirmCookie('delete_all')) {
+				if (getSkipDeleteConfirmCookie('delete_all') && !hasFav) {
 					await doDelete();
 					return;
 				}
@@ -1530,10 +1695,22 @@
 		}
 	}
 
-	let lightboxOpen = $state(false);
-	let lightboxImages = $state<LightboxItem[]>([]);
-	let lightboxIndex = $state(0);
-	let lightboxGroupId = $state<string | null>(null);
+let lightboxOpen = $state(false);
+let lightboxImages = $state<LightboxItem[]>([]);
+let lightboxIndex = $state(0);
+let lightboxGroupId = $state<string | null>(null);
+let lightboxDeletePending = $state<
+	| null
+	| {
+			item: LightboxItem;
+			message: string;
+			confirmLabel: string;
+			action: DeleteConfirmKey;
+	  }
+>(null);
+	let lightboxFavoriteDeletePending = $state<null | { item: LightboxItem; kind: 'local' | 'remote' | 'both' }>(
+		null
+	);
 	let runsScrollEl = $state<HTMLDivElement | null>(null);
 	$effect(() => {
 		if (runsScrollEl) return;
@@ -1550,6 +1727,8 @@
 				const img = run.images![i];
 				const mt = mediaType(img);
 				const remote_deleted = !!(img as { remote_deleted?: boolean }).remote_deleted;
+				const hasLocal = run.local_storage_status === 'saved' || run.local_storage_status === 'partial';
+				const hasRemote = !remote_deleted;
 				list.push({
 					id: imageKey(run.id, i),
 					url: imageUrl(img, run.id),
@@ -1557,6 +1736,8 @@
 					filename: img.filename,
 					mediaType: mt,
 					remote_deleted,
+					hasLocal,
+					hasRemote,
 					seed: run.seed,
 					executionTimeSec: run.execution_time,
 					outputIndex: i,
@@ -1613,6 +1794,166 @@
 		a.click();
 		document.body.removeChild(a);
 		URL.revokeObjectURL(url);
+	}
+
+	function applyLightboxDeletion(item: LightboxItem) {
+		const currentId = item.id;
+		const currentIdx = lightboxImages.findIndex((x) => x.id === currentId);
+		const nextImages = lightboxImages.filter((x) => x.id !== currentId);
+		if (!nextImages.length) {
+			// Carousel empty after delete — if this run still has outputs, show them from the start.
+			const gid = lightboxGroupId;
+			const runId = item.runId;
+			if (gid && runId) {
+				const group = runGroups.find((g) => g.groupId === gid);
+				if (group) {
+					const forRun = buildGroupImageList(group).filter((img) => img.runId === runId);
+					if (forRun.length > 0) {
+						lightboxImages = forRun;
+						lightboxIndex = 0;
+						return;
+					}
+				}
+			}
+			lightboxImages = [];
+			lightboxIndex = 0;
+			closeLightbox();
+			return;
+		}
+		lightboxImages = nextImages;
+		// Stay on the slot that was "next" (same index), or previous item if we deleted the last.
+		const nextIndex =
+			currentIdx < 0
+				? 0
+				: currentIdx >= nextImages.length
+					? nextImages.length - 1
+					: currentIdx;
+		lightboxIndex = nextIndex;
+	}
+
+	async function deleteLightboxLocal(item: LightboxItem) {
+		const runId = item.runId;
+		const index = item.outputIndex;
+		if (!runId || index == null) return;
+	const hadRemote = item.hasRemote ?? !item.remote_deleted;
+		await deleteLocalImage(runId, index);
+	if (!hadRemote) {
+		// This was the last copy (local-only); remove from lightbox.
+		applyLightboxDeletion(item);
+		return;
+	}
+	const currentIdx = lightboxImages.findIndex((x) => x.id === item.id);
+	if (currentIdx !== -1) {
+		const updated: LightboxItem = { ...lightboxImages[currentIdx], hasLocal: false };
+		const next = [...lightboxImages];
+		next[currentIdx] = updated;
+		lightboxImages = next;
+	}
+	}
+
+	async function deleteLightboxRemote(item: LightboxItem) {
+		const runId = item.runId;
+		const index = item.outputIndex;
+		if (!runId || index == null) return;
+	const hadLocal = item.hasLocal ?? true;
+		await deleteRemoteImage(runId, index);
+	if (!hadLocal) {
+		// This was the last copy (remote-only); remove from lightbox.
+		applyLightboxDeletion(item);
+		return;
+	}
+	const currentIdx = lightboxImages.findIndex((x) => x.id === item.id);
+	if (currentIdx !== -1) {
+		const updated: LightboxItem = {
+			...lightboxImages[currentIdx],
+			hasRemote: false,
+			remote_deleted: true
+		};
+		const next = [...lightboxImages];
+		next[currentIdx] = updated;
+		lightboxImages = next;
+	}
+	}
+
+	async function deleteLightboxBoth(item: LightboxItem) {
+		const runId = item.runId;
+		const index = item.outputIndex;
+		if (!runId || index == null) return;
+		const ok = await deleteBothImage(runId, index);
+		if (ok) applyLightboxDeletion(item);
+	}
+
+	function proceedLightboxDeletePrompt(item: LightboxItem, kind: 'local' | 'remote' | 'both') {
+		const name = item.filename && item.filename.trim().length ? item.filename : null;
+		if (kind === 'local') {
+			if (getSkipDeleteConfirmCookie('delete_local')) {
+				deleteLightboxLocal(item).catch(() => {});
+				return;
+			}
+			const message = name
+				? `Delete this local file?\n\n'${name}' will be removed from local storage.`
+				: 'Delete this local file from local storage?';
+			lightboxDeletePending = {
+				item,
+				message,
+				confirmLabel: 'Delete local file',
+				action: 'delete_local'
+			};
+			return;
+		}
+		if (kind === 'remote') {
+			if (getSkipDeleteConfirmCookie('delete_remote')) {
+				deleteLightboxRemote(item).catch(() => {});
+				return;
+			}
+			const message = name
+				? `Delete this remote file?\n\n'${name}' will be removed from the ComfyUI server.`
+				: 'Delete this remote file from the ComfyUI server?';
+			lightboxDeletePending = {
+				item,
+				message,
+				confirmLabel: 'Delete remote file',
+				action: 'delete_remote'
+			};
+			return;
+		}
+		if (getSkipDeleteConfirmCookie('delete_all')) {
+			deleteLightboxBoth(item).catch(() => {});
+			return;
+		}
+		const message = name
+			? `Delete this file from local and remote storage?\n\n'${name}' will be removed from local storage and the ComfyUI server.`
+			: 'Delete this file from local storage and the ComfyUI server?';
+		lightboxDeletePending = {
+			item,
+			message,
+			confirmLabel: 'Delete local and remote',
+			action: 'delete_all'
+		};
+	}
+
+	function requestDeleteLightboxLocal(item: LightboxItem) {
+		if (item.runId && favorites.has(item.runId)) {
+			lightboxFavoriteDeletePending = { item, kind: 'local' };
+			return;
+		}
+		proceedLightboxDeletePrompt(item, 'local');
+	}
+
+	function requestDeleteLightboxRemote(item: LightboxItem) {
+		if (item.runId && favorites.has(item.runId)) {
+			lightboxFavoriteDeletePending = { item, kind: 'remote' };
+			return;
+		}
+		proceedLightboxDeletePrompt(item, 'remote');
+	}
+
+	function requestDeleteLightboxBoth(item: LightboxItem) {
+		if (item.runId && favorites.has(item.runId)) {
+			lightboxFavoriteDeletePending = { item, kind: 'both' };
+			return;
+		}
+		proceedLightboxDeletePrompt(item, 'both');
 	}
 	
 	let thumbDownloading = $state(false);
@@ -1821,9 +2162,13 @@
 				</label>
 				<label class="filter-row">
 					<span class="filter-label">App</span>
-					<select class="filter-select" bind:value={filterAppId}>
+					<select
+						class="filter-select"
+						value={filterAppId}
+						onchange={(e) => { filterAppId = (e.currentTarget as HTMLSelectElement).value; }}
+					>
 						<option value="">All apps</option>
-						{#each data.project.apps_used ?? [] as app (app.id)}
+						{#each appFilterOptions as app (app.id)}
 							<option value={app.id}>{app.title}</option>
 						{/each}
 					</select>
@@ -1927,7 +2272,7 @@
 							{#if app.removed}
 								<span class="apps-used-removed-wrap" title="This app was deleted. No generated data was removed; run history is still available.">
 									<RunAppBadge
-										label="App removed"
+										label="Deleted App"
 										title="This app was deleted. No generated data was removed; run history is still available."
 										removed={true}
 									/>
@@ -2055,7 +2400,7 @@
 				</div>
 				{#if !loading}
 					<div class="runs-list-head-actions">
-						{#if runGroups.length > 0}
+						{#if visibleRunGroups.length > 0}
 						<div class="move-runs-actions">
 							<button
 								type="button"
@@ -2154,7 +2499,7 @@
 				<div class="runs-loading-wrap">
 					<PageLoadingIndicator />
 				</div>
-			{:else if !runGroups.length}
+			{:else if !visibleRunGroups.length}
 				{#if data.project.run_count === 0 && (data.appsForNew?.length ?? 0) > 0}
 					<div class="empty-project-state">
 						<div class="empty-project-icon" aria-hidden="true">
@@ -2187,7 +2532,8 @@
 				{/if}
 			{:else}
 				<div class="runs-scroll" bind:this={runsScrollEl}>
-					{#each runGroups as group (group.groupId)}
+					{#key runsRenderKey}
+					{#each visibleRunGroups as group (group.groupId)}
 						{@const storageSummary = getGroupStorageSummary(group)}
 						{@const savingGroup = savingGroupIds.has(group.groupId)}
 						{@const deletingGroup = deletingGroupIds.has(group.groupId)}
@@ -2256,7 +2602,7 @@
 									<span class="run-dot"></span>
 									<RunAppBadge
 										appHeaderColor={group.app_header_color ?? undefined}
-										label={group.app_removed ? 'App removed' : (group.app_title ?? group.app_slug ?? 'App')}
+										label={group.app_removed ? 'Deleted App' : (group.app_title ?? group.app_slug ?? 'App')}
 										title={group.app_removed ? 'App was deleted. No generated data was removed; run history is still available.' : (group.app_title ?? group.app_slug ?? '')}
 										removed={group.app_removed}
 									/>
@@ -2588,6 +2934,7 @@
 							{/if}
 						</section>
 					{/each}
+					{/key}
 					{#if loadedGroupCount < totalGroups && totalGroups > 0}
 						<div
 							class="load-more-sentinel"
@@ -2653,7 +3000,7 @@
 		{@const group = deleteRunGroupPending}
 		{@const runIds = group.runs.map((r) => r.id)}
 		{@const n = runIds.length}
-		{@const hasFav = runIds.some((id) => favorites.has(id))}
+		{@const hasFav = group.runs.some((r) => favorites.has(r.id) && runHasDisplayableOutputs(r))}
 		{@const mainMsg = n > 1
 			? `Delete ${n} generations permanently? This cannot be undone.`
 			: 'Delete this prompt (and all its files) permanently? This cannot be undone.'}
@@ -2735,9 +3082,59 @@
 		onToggleSelection={lightboxGroupId ? (item) => toggleImageSelection(lightboxGroupId!, item.id) : undefined}
 		isSelected={lightboxGroupId ? (item) => isImageSelected(lightboxGroupId!, item.id) : undefined}
 		onSendToApp={(item) => { closeLightbox(); sendToAppRunId = item.runId!; sendToAppOutputIndex = item.outputIndex ?? 0; }}
+		onDeleteLocal={requestDeleteLightboxLocal}
+		onDeleteRemote={requestDeleteLightboxRemote}
+		onDeleteBoth={requestDeleteLightboxBoth}
 		showCloseLabel={false}
 		ariaTitle="Media viewer"
 	/>
+
+	{#if lightboxFavoriteDeletePending}
+		{@const fp = lightboxFavoriteDeletePending}
+		<ConfirmDeleteDialog
+			open={true}
+			showDontAskAgain={false}
+			title="Favorited generation"
+			message="This will delete a favorited generation. Are you sure to delete the file?"
+			confirmLabel="Continue"
+			onConfirm={() => {
+				const { item, kind } = fp;
+				lightboxFavoriteDeletePending = null;
+				// Defer so this click’s mouseup doesn’t hit the lightbox before the next dialog mounts.
+				requestAnimationFrame(() => proceedLightboxDeletePrompt(item, kind));
+			}}
+			onCancel={() => {
+				lightboxFavoriteDeletePending = null;
+			}}
+		/>
+	{/if}
+
+	{#if lightboxDeletePending}
+		{@const p = lightboxDeletePending}
+		<ConfirmDeleteDialog
+			open={true}
+			title="Delete file"
+			message={p.message}
+			confirmLabel={p.confirmLabel}
+			onConfirm={async (dontShowAgain) => {
+				if (dontShowAgain) setSkipDeleteConfirmCookie(p.action, true);
+				const item = p.item;
+				const action = p.action;
+				try {
+					if (action === 'delete_local') await deleteLightboxLocal(item);
+					else if (action === 'delete_remote') await deleteLightboxRemote(item);
+					else if (action === 'delete_all') await deleteLightboxBoth(item);
+				} finally {
+					// Close dialog only after delete finishes so the confirming click/mouseup
+					// cannot fall through to the lightbox (which would treat it as backdrop → close).
+					lightboxDeletePending = null;
+				}
+			}}
+			onCancel={() => {
+				lightboxDeletePending = null;
+			}}
+		/>
+	{/if}
 {/if}
 
 <style>

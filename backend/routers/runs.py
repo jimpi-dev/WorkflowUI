@@ -5,6 +5,7 @@ from pathlib import Path
 
 import requests
 from fastapi import APIRouter, HTTPException, Depends, Request
+from fastapi.responses import JSONResponse
 
 from db.migrate import QUICK_RUNS_PROJECT_ID
 from services.comfyui_info import normalize_comfy_url as _normalize_comfy_url, get_run_remote_storage_bytes
@@ -726,10 +727,14 @@ async def delete_run_local_images(run_id: str, request: Request, db=Depends(get_
 @router.post("/runs/{run_id}/delete-both")
 def delete_run_both(run_id: str, db=Depends(get_db), service: MediaStorageService = Depends(get_media_storage_service)):
     result = service.delete_both(run_id, None)
-    if not result.get("ok"):
-        raise HTTPException(status_code=400, detail=result.get("error", "Delete failed"))
     _, _, app_repo, run_repo, _, _, _ = db
-    return build_updated_runs_response(result, app_repo, run_repo)
+    out = build_updated_runs_response(dict(result), app_repo, run_repo)
+    if not result.get("ok"):
+        err = result.get("error", "Delete failed")
+        body = dict(out) if isinstance(out, dict) else {}
+        body["detail"] = err
+        return JSONResponse(status_code=400, content=body)
+    return out
 
 
 @router.post("/runs/{run_id}/delete-both-image/{image_id}")
@@ -741,10 +746,14 @@ def delete_run_both_image(run_id: str, image_id: str, db=Depends(get_db), servic
     if image_index < 0:
         raise HTTPException(status_code=400, detail="image_id must be a non-negative index")
     result = service.delete_both(run_id, image_index=image_index)
-    if not result.get("ok"):
-        raise HTTPException(status_code=400, detail=result.get("error", "Delete failed"))
     _, _, app_repo, run_repo, _, _, _ = db
-    return build_updated_runs_response(result, app_repo, run_repo)
+    out = build_updated_runs_response(dict(result), app_repo, run_repo)
+    if not result.get("ok"):
+        err = result.get("error", "Delete failed")
+        body = dict(out) if isinstance(out, dict) else {}
+        body["detail"] = err
+        return JSONResponse(status_code=400, content=body)
+    return out
 
 
 @router.post("/runs/{run_id}/delete-both-images")
@@ -764,7 +773,11 @@ async def delete_run_both_images(run_id: str, request: Request, db=Depends(get_d
     if any(i < 0 for i in indices):
         raise HTTPException(status_code=400, detail="indices must be non-negative")
     result = service.delete_both(run_id, image_indices=indices)
-    if not result.get("ok"):
-        raise HTTPException(status_code=400, detail=result.get("error", "Delete failed"))
     _, _, app_repo, run_repo, _, _, _ = db
-    return build_updated_runs_response(result, app_repo, run_repo)
+    out = build_updated_runs_response(dict(result), app_repo, run_repo)
+    if not result.get("ok"):
+        err = result.get("error", "Delete failed")
+        body = dict(out) if isinstance(out, dict) else {}
+        body["detail"] = err
+        return JSONResponse(status_code=400, content=body)
+    return out

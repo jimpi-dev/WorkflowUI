@@ -68,13 +68,18 @@ function loadAppConfig(): {
 const appConfig = loadAppConfig();
 const proxyTarget = appConfig.backendUrl || 'http://localhost:8000';
 
+const devPortEnv = typeof process !== 'undefined' ? process.env?.FRONTEND_PORT ?? process.env?.PORT : undefined;
+const devPort = devPortEnv ? Number(devPortEnv) || 5173 : 5173;
+
 export default defineConfig({
 	plugins: [sveltekit(), svelteTesting()],
 	define: {
 		__APP_CONFIG__: JSON.stringify(appConfig)
 	},
 	server: {
+		port: devPort,
 		proxy: {
+			'/api': proxyTarget,
 			// Only proxy API paths that do NOT overlap with SvelteKit frontend routes.
 			// /workflow uses bypass so /workflows (frontend route) is never proxied — avoids JSON on reload.
 			'/workflow': {

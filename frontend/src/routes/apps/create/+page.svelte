@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { getApiBase } from '$lib/config';
+	import { browser } from '$app/environment';
 	import FieldCard from '$lib/components/app-builder/FieldCard.svelte';
 	import OutputCard from '$lib/components/app-builder/OutputCard.svelte';
 	import {
@@ -41,6 +42,7 @@
 	let tagInput = $state('');
 	let embedMetadataOnDownload = $state(true);
 	let embedMetadataOnSave = $state(true);
+	let isMobile = $state(browser && typeof window !== 'undefined' ? window.matchMedia('(max-width: 639px)').matches : false);
 	let activeTab = $state<'inputs' | 'outputs'>('inputs');
 	let filterQuery = $state('');
 	let visibilityFilter = $state<'all' | 'visible' | 'hidden'>('all');
@@ -388,24 +390,27 @@
 					{/if}
 				</div>
 			</section>
-			<section class="section">
-				<p class="field-label">WorkflowUI metadata</p>
-				<p class="field-help">When enabled, workflow and app data are embedded so users can restore from the Import page.</p>
-				<label class="toggle-label" for="app-embed-download">
-					<span class="toggle-wrap">
-						<input id="app-embed-download" type="checkbox" bind:checked={embedMetadataOnDownload} class="toggle-input" />
-						<span class="toggle-track" aria-hidden="true"></span>
-					</span>
-					<span class="toggle-label-text">Embed metadata when user downloads images</span>
-				</label>
-				<label class="toggle-label" for="app-embed-save">
-					<span class="toggle-wrap">
-						<input id="app-embed-save" type="checkbox" bind:checked={embedMetadataOnSave} class="toggle-input" />
-						<span class="toggle-track" aria-hidden="true"></span>
-					</span>
-					<span class="toggle-label-text">Embed metadata when saving to local storage</span>
-				</label>
-			</section>
+			<details class="advanced-accordion" open={!isMobile}>
+				<summary>WorkflowUI metadata</summary>
+				<section class="section">
+					<p class="field-label">WorkflowUI metadata</p>
+					<p class="field-help">When enabled, workflow and app data are embedded so users can restore from the Import page.</p>
+					<label class="toggle-label" for="app-embed-download">
+						<span class="toggle-wrap">
+							<input id="app-embed-download" type="checkbox" bind:checked={embedMetadataOnDownload} class="toggle-input" />
+							<span class="toggle-track" aria-hidden="true"></span>
+						</span>
+						<span class="toggle-label-text">Embed metadata when user downloads images</span>
+					</label>
+					<label class="toggle-label" for="app-embed-save">
+						<span class="toggle-wrap">
+							<input id="app-embed-save" type="checkbox" bind:checked={embedMetadataOnSave} class="toggle-input" />
+							<span class="toggle-track" aria-hidden="true"></span>
+						</span>
+						<span class="toggle-label-text">Embed metadata when saving to local storage</span>
+					</label>
+				</section>
+			</details>
 			{#if appDraft}
 				<section class="section">
 					<label class="toggle-label" for="app-ignore-load-image-default">
@@ -427,26 +432,29 @@
 				</section>
 			{/if}
 			{#if appDraft && visibleSeedInputs.length > 0}
-				<section class="section">
-					<label for="master-seed-select" class="field-label">Master seed for generation</label>
-					<p class="master-seed-help">
-						Only this seed is changed by &quot;Queue for generation (N×)&quot; and &quot;Random seed (N×)&quot;. Other seed fields keep their form values.
-					</p>
-					<select
-						id="master-seed-select"
-						class="master-seed-select"
-						value={appDraft.masterSeedInputKey ?? ''}
-						onchange={(e) => {
-							const v = (e.currentTarget as HTMLSelectElement).value;
-							setMasterSeedInputKey(appDraft!, v != null && v.trim() !== '' ? v.trim() : null);
-						}}
-					>
-						<option value="">— First seed input (default) —</option>
-						{#each visibleSeedInputs as seedInput}
-							<option value={seedInput.key!}>{seedInput.label ?? seedInput.key}</option>
-						{/each}
-					</select>
-				</section>
+				<details class="advanced-accordion" open={!isMobile}>
+					<summary>Master seed for generation</summary>
+					<section class="section">
+						<label for="master-seed-select" class="field-label">Master seed for generation</label>
+						<p class="master-seed-help">
+							Only this seed is changed by &quot;Queue for generation (N×)&quot; and &quot;Random seed (N×)&quot;. Other seed fields keep their form values.
+						</p>
+						<select
+							id="master-seed-select"
+							class="master-seed-select"
+							value={appDraft.masterSeedInputKey ?? ''}
+							onchange={(e) => {
+								const v = (e.currentTarget as HTMLSelectElement).value;
+								setMasterSeedInputKey(appDraft!, v != null && v.trim() !== '' ? v.trim() : null);
+							}}
+						>
+							<option value="">— First seed input (default) —</option>
+							{#each visibleSeedInputs as seedInput}
+								<option value={seedInput.key!}>{seedInput.label ?? seedInput.key}</option>
+							{/each}
+						</select>
+					</section>
+				</details>
 			{/if}
 			{#if saveError}
 				<p class="error-text">{saveError}</p>
@@ -1081,5 +1089,33 @@
 		flex: 1;
 		min-height: 0;
 		overflow-y: auto;
+	}
+	.advanced-accordion {
+		display: block;
+	}
+	.advanced-accordion > summary {
+		list-style: none;
+		cursor: pointer;
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 0.75rem;
+		width: 100%;
+		min-height: 44px;
+		padding: 0.6rem 0.75rem;
+		background: var(--surface);
+		border: 1px solid var(--border);
+		border-radius: 8px;
+		font-weight: 600;
+		color: var(--text);
+	}
+	.advanced-accordion > summary::-webkit-details-marker {
+		display: none;
+	}
+	.advanced-accordion[open] {
+		display: contents;
+	}
+	.advanced-accordion[open] > summary {
+		display: none;
 	}
 </style>

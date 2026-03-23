@@ -1,3 +1,4 @@
+import json
 import time
 from unittest.mock import patch, MagicMock
 
@@ -6,6 +7,8 @@ import requests
 
 from conftest import SAMPLE_WORKFLOW_GRAPH
 from services.comfyui_info import WORKFLOWUI_PLUGIN_MIN_VERSION
+from services.mp4_metadata import inject_workflowui_metadata, read_workflowui_metadata
+from tests.test_mp4_metadata import _minimal_mp4_bytes
 
 
 def test_get_workflow_definitions_empty(client):
@@ -170,6 +173,44 @@ def test_get_project_runs_empty(client):
     assert data == {"runs": [], "total": 0}
 
 
+def test_get_project_runs_deleted_app_filter_includes_null_app_id(client):
+    import dependencies
+    
+    imp = client.post(
+        "/import",
+        json={"name": "DeletedAppWF", "graph": SAMPLE_WORKFLOW_GRAPH},
+    )
+    assert imp.status_code == 200
+    version_id = imp.json()["workflow_version_id"]
+
+    create = client.post("/projects", json={"name": "DeletedAppProj"})
+    assert create.status_code == 200
+    project_id = create.json()["id"]
+    
+    run_repo = dependencies.get_db()[3]
+    created_at = int(time.time() * 1000)
+    run = run_repo.create_run(
+        id="deleted-app-run-1",
+        project_id=project_id,
+        workflow_version_id=version_id,
+        app_id=None,
+        status="done",
+        created_at=created_at,
+    )
+
+    r_all = client.get(f"/projects/{project_id}/runs")
+    assert r_all.status_code == 200
+    data_all = r_all.json()
+    all_ids = [x["id"] for x in data_all["runs"]]
+    assert run.id in all_ids
+
+    r_deleted = client.get(f"/projects/{project_id}/runs?deleted_app=1")
+    assert r_deleted.status_code == 200
+    data_deleted = r_deleted.json()
+    deleted_ids = [x["id"] for x in data_deleted["runs"]]
+    assert run.id in deleted_ids
+    assert data_deleted["total"] >= 1
+
 def test_get_project_runs_stats(client):
     r = client.get("/projects/nonexistent-id/runs/stats")
     assert r.status_code == 404
@@ -254,6 +295,130 @@ def test_move_runs_to_project_empty_run_ids_returns_400(client):
         json={"run_ids": [], "target_project_id": "other-project-id"},
     )
     assert r.status_code == 400
+
+
+def test_project_detail_and_runs_handle_deleted_app(client):
+    imp = client.post(
+        "/import",
+        json={"name": "DeletedAppWF", "graph": SAMPLE_WORKFLOW_GRAPH},
+    )
+    assert imp.status_code == 200
+    version_id = imp.json()["workflow_version_id"]
+
+    app_r = client.post(
+        "/apps",
+        json={
+            "workflow_version_id": version_id,
+            "slug": "to-be-deleted-app",
+            "title": "To Be Deleted",
+            "description": "",
+            "ui_config": {},
+            "default_inputs": {},
+            "default_outputs": {},
+            "is_public": False,
+        },
+    )
+    assert app_r.status_code == 200
+    app = app_r.json()
+    app_slug = app["slug"]
+
+    proj = client.post("/projects", json={"name": "DeletedAppProject"})
+    assert proj.status_code == 200
+    project_id = proj.json()["id"]
+
+    import dependencies
+
+    run_repo = dependencies.get_db()[3]
+    created_at = int(time.time() * 1000)
+    run = run_repo.create_run(
+        id="deleted-app-run-1",
+        project_id=project_id,
+        workflow_version_id=version_id,
+        app_id=app["id"],
+        status="done",
+        created_at=created_at,
+    )
+
+    detail_before = client.get(f"/projects/{project_id}")
+    assert detail_before.status_code == 200
+    data_before = detail_before.json()
+    assert any(a["id"] == app["id"] and a["removed"] is False for a in data_before["apps_used"])
+
+    delete_r = client.delete(f"/apps/{app_slug}")
+    assert delete_r.status_code == 204
+
+    detail_after = client.get(f"/projects/{project_id}")
+    assert detail_after.status_code == 200
+    data_after = detail_after.json()
+    assert any(a["id"] == app["id"] and a["removed"] is True for a in data_after["apps_used"])
+
+    runs_r = client.get(f"/projects/{project_id}/runs")
+    assert runs_r.status_code == 200
+    runs_data = runs_r.json()
+    assert runs_data["total"] >= 1
+    run_item = next((x for x in runs_data["runs"] if x["id"] == run.id), None)
+    assert run_item is not None
+    assert run_item["app_id"] is None
+    assert run_item["app_slug"] is None
+    assert run_item["app_title"] is None
+
+    deleted_only_r = client.get(f"/projects/{project_id}/runs", params={"deleted_app": True})
+    assert deleted_only_r.status_code == 200
+    deleted_data = deleted_only_r.json()
+    deleted_runs = deleted_data.get("runs", [])
+    assert any(x["id"] == run.id for x in deleted_runs)
+
+
+def test_deleted_app_filter_covers_null_app_ids_when_workflow_has_no_apps(client):
+    imp = client.post(
+        "/import",
+        json={"name": "NullAppDeletedWF", "graph": SAMPLE_WORKFLOW_GRAPH},
+    )
+    assert imp.status_code == 200
+    version_id = imp.json()["workflow_version_id"]
+
+    app_r = client.post(
+        "/apps",
+        json={
+            "workflow_version_id": version_id,
+            "slug": "null-app-deleted",
+            "title": "Null App Deleted",
+            "description": "",
+            "ui_config": {},
+            "default_inputs": {},
+            "default_outputs": {},
+            "is_public": False,
+        },
+    )
+    assert app_r.status_code == 200
+    app = app_r.json()
+    app_slug = app["slug"]
+
+    proj = client.post("/projects", json={"name": "NullAppDeletedProject"})
+    assert proj.status_code == 200
+    project_id = proj.json()["id"]
+
+    import dependencies
+
+    run_repo = dependencies.get_db()[3]
+    created_at = int(time.time() * 1000)
+    run = run_repo.create_run(
+        id="null-app-deleted-run-1",
+        project_id=project_id,
+        workflow_version_id=version_id,
+        app_id=None,
+        status="done",
+        created_at=created_at,
+    )
+
+    delete_r = client.delete(f"/apps/{app_slug}")
+    assert delete_r.status_code == 204
+
+    deleted_only_r = client.get(f"/projects/{project_id}/runs", params={"deleted_app": True})
+    assert deleted_only_r.status_code == 200
+    deleted_data = deleted_only_r.json()
+    deleted_runs = deleted_data.get("runs", [])
+    assert any(x["id"] == run.id for x in deleted_runs)
 
 
 def test_move_runs_to_project_source_not_found_returns_404(client):
@@ -385,7 +550,7 @@ def test_delete_app_success(client):
         "/import",
         json={"name": "DelWorkflow", "graph": SAMPLE_WORKFLOW_GRAPH},
     )
-    client.post(
+    app_r = client.post(
         "/apps",
         json={
             "workflow_version_id": imp.json()["workflow_version_id"],
@@ -394,10 +559,36 @@ def test_delete_app_success(client):
             "is_public": False,
         },
     )
+    assert app_r.status_code == 200
+    app = app_r.json()
+
+    # Create a project and a run that references this app_id to ensure app_id is nulled on delete
+    proj = client.post("/projects", json={"name": "DeleteAppProj"})
+    assert proj.status_code == 200
+    project_id = proj.json()["id"]
+
+    import dependencies
+
+    run_repo = dependencies.get_db()[3]
+    created_at = int(time.time() * 1000)
+    run = run_repo.create_run(
+        id="delete-app-run-1",
+        project_id=project_id,
+        workflow_version_id=imp.json()["workflow_version_id"],
+        app_id=app["id"],
+        status="done",
+        created_at=created_at,
+    )
+
     r = client.delete("/apps/to-delete")
     assert r.status_code == 204
     r2 = client.get("/app/to-delete")
     assert r2.status_code == 404
+
+    # After deletion the run should still exist but its app_id must be NULL
+    run_after = run_repo.get_run(run.id)
+    assert run_after is not None
+    assert run_after.app_id is None
 
 
 def test_delete_app_not_found(client):
@@ -1054,6 +1245,26 @@ def test_import_from_workflowui_payload_restored_when_hash_is_new(client):
     apps = client.get("/apps").json()
     assert len(apps) >= 1
     assert any(a["slug"] == out["app_slug"] for a in apps)
+
+
+def test_import_from_file_mp4_with_workflowui_metadata(client):
+    """POST /import/from-file with an MP4 containing WorkflowUI metadata restores or opens the app."""
+    other_graph = {**SAMPLE_WORKFLOW_GRAPH, "99": {"class_type": "EmptyLatentImage", "inputs": {"width": 512}}}
+    payload = _workflowui_payload("Mp4ImportWorkflow", other_graph, "mp4-import-app")
+    mp4_bytes = _minimal_mp4_bytes()
+    mp4_with_meta = inject_workflowui_metadata(mp4_bytes, json.dumps(payload, separators=(",", ":")))
+    assert read_workflowui_metadata(mp4_with_meta) is not None
+    r = client.post(
+        "/import/from-file",
+        files={"file": ("output.mp4", mp4_with_meta, "video/mp4")},
+    )
+    assert r.status_code == 200
+    data = r.json()
+    assert data.get("action") in ("open", "restored")
+    assert data.get("app_slug") or data.get("resolved_slug")
+    if data["action"] == "restored":
+        assert "workflow_id" in data
+        assert "workflow_version_id" in data
 
 
 def test_run_table_diagnostics(client):
