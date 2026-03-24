@@ -13,6 +13,9 @@
 	import { consolePanelOpen } from '$lib/stores/consolePanelOpen';
 	import { queuePanelOpen } from '$lib/stores/queuePanelOpen';
 	import { queuePanelWidth } from '$lib/stores/queuePanelWidth';
+	import { goto } from '$app/navigation';
+	import { getApiBase } from '$lib/config';
+	import { authState } from '$lib/stores/auth';
 	import { tick, onMount } from 'svelte';
 	let { children } = $props();
 
@@ -42,11 +45,37 @@
 	}
 
 	onMount(() => {
+		const originalFetch = window.fetch.bind(window);
+		window.fetch = ((input: RequestInfo | URL, init?: RequestInit) =>
+			originalFetch(input, { ...(init ?? {}), credentials: init?.credentials ?? 'include' })) as typeof window.fetch;
+
 		if (!footerEl || !layoutEl) return;
 		setFooterHeightVar();
 		const ro = new ResizeObserver(setFooterHeightVar);
 		ro.observe(footerEl);
 		return () => ro.disconnect();
+	});
+
+	onMount(() => {
+		const base = getApiBase() || '';
+		fetch(`${base}/auth/me`)
+			.then((r) => (r.ok ? r.json() : null))
+			.then((d) => {
+				const enabled = !!d?.enabled;
+				const authenticated = !!d?.authenticated;
+				authState.set({
+					enabled,
+					authenticated,
+					user: d?.user ?? null,
+					loaded: true
+				});
+				const path = window.location.pathname;
+				if (enabled && !authenticated && path !== '/login') goto('/login');
+				if (enabled && authenticated && path === '/login') goto('/');
+			})
+			.catch(() => {
+				authState.set({ enabled: false, authenticated: false, user: null, loaded: true });
+			});
 	});
 
 	onMount(() => {

@@ -1,4 +1,5 @@
 import hashlib
+import json
 import logging
 import requests
 from pathlib import Path
@@ -6,6 +7,7 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Depends, UploadFile, File, Response
 
+from authz import require_user, ensure_run_access
 from config import get_workflowui_embed_config
 from services.comfyui_info import normalize_comfy_url as _normalize_comfy_url
 from services.workflowui_metadata import (
@@ -19,7 +21,7 @@ from services.mp4_metadata import inject_workflowui_metadata as inject_workflowu
 from dependencies import COMFY_URL, INPUT_DATA_DIR, get_db, get_media_storage_service, get_run_queue_state
 
 logger = logging.getLogger(__name__)
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_user)])
 
 ALLOWED_IMAGE_EXTENSIONS = frozenset({".png", ".jpg", ".jpeg", ".webp", ".gif"})
 ALLOWED_VIDEO_EXTENSIONS = frozenset({".mp4", ".webm", ".mkv", ".mov"})
@@ -122,7 +124,11 @@ def resolve_node(prompt: dict, node_id: str):
 
 
 @router.get("/outputs/{prompt_id}")
-def get_outputs(prompt_id: str, state=Depends(get_run_queue_state)):
+def get_outputs(prompt_id: str, state=Depends(get_run_queue_state), db=Depends(get_db), ctx=Depends(require_user)):
+    run_repo = db[3]
+    run = run_repo.get_run_by_prompt_id(prompt_id) if run_repo else None
+    if run:
+        ensure_run_access(run.id, ctx, run_repo)
     comfy_url = _resolve_comfy_url_for_prompt(prompt_id, state, get_db)
     res = requests.get(f"{comfy_url}/history/{prompt_id}")
     history = res.json()
@@ -290,11 +296,36 @@ def get_image(
     embed_workflowui_metadata: str | None = None,
     state=Depends(get_run_queue_state),
     service=Depends(get_media_storage_service),
+    db=Depends(get_db),
+    ctx=Depends(require_user),
 ):
     logger.info("GET /image filename=%s subfolder=%s type=%s run_id=%s preview=%s embed=%s", filename, subfolder, type, run_id, preview, embed_workflowui_metadata)
     content: bytes
     media_type: str
+    if ctx.auth_enabled and not run_id:
+        raise HTTPException(status_code=400, detail="run_id is required")
+    run_entity = None
     if run_id:
+        run_entity = ensure_run_access(run_id, ctx, db[3])
+        entries = []
+        try:
+            if run_entity.media_json:
+                entries = json.loads(run_entity.media_json)
+            elif run_entity.images_json:
+                entries = json.loads(run_entity.images_json)
+        except Exception:
+            entries = []
+        matched = False
+        for ent in entries if isinstance(entries, list) else []:
+            if not isinstance(ent, dict):
+                continue
+            ent_type = (ent.get("type") or ent.get("kind") or "output").strip().lower()
+            req_type = (type or "output").strip().lower()
+            if ent_type == req_type and (ent.get("filename") or "") == (filename or "") and (ent.get("subfolder") or "") == (subfolder or ""):
+                matched = True
+                break
+        if not matched:
+            raise HTTPException(status_code=404, detail="Image not found")
         local_path = service.get_local_image_path(run_id, filename, subfolder or "", type or "output")
         if local_path is not None and local_path.is_file():
             logger.info("GET /image: serving from local storage %s", local_path)

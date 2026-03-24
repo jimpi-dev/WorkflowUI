@@ -7,6 +7,7 @@
 	import { appConfig, getApiBase } from '$lib/config';
 	import { waitForAppToBeAvailable } from '$lib/api';
 	import { appBooting } from '$lib/stores/appBooting';
+	import { authState } from '$lib/stores/auth';
 	import { headerAppContext } from '$lib/stores/headerAppContext';
 	import { presetHeaderStore, togglePresetHeaderCreation, requestOpenPresetList } from '$lib/stores/presetHeader';
 	import { projectSelectorOpen } from '$lib/stores/projectSelectorOpen';
@@ -44,6 +45,13 @@
 
 	function closeMenu() {
 		menuOpen = false;
+	}
+
+	async function logout() {
+		const apiBase = getApiBase().replace(/\/$/, '');
+		await fetch(`${apiBase}/auth/logout`, { method: 'POST', credentials: 'include' }).catch(() => {});
+		authState.set({ enabled: true, authenticated: false, user: null, loaded: true });
+		goto('/login');
 	}
 
 	function handleKeydown(e: KeyboardEvent) {
@@ -258,6 +266,16 @@
 				<svg class="top-nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
 				<span>Import</span>
 			</a>
+			{#if $authState.user?.role === 'admin'}
+				<a href="/admin/users" class:active={$page.url.pathname.startsWith('/admin/users')}>
+					<span>Users</span>
+				</a>
+			{/if}
+			{#if $authState.enabled && $authState.authenticated}
+				<a href="/login" onclick={(e) => { e.preventDefault(); logout(); }}>
+					<span>Logout</span>
+				</a>
+			{/if}
 		</nav>
 		<div class="header-drop-zone-wrap">
 			<div

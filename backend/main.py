@@ -7,6 +7,7 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
+from fastapi.responses import RedirectResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from logging_config import setup_logging
@@ -26,8 +27,11 @@ if hasattr(sys.stdout, "reconfigure"):
     except Exception:
         pass
 
-from dependencies import get_db
-from routers import config, runs, projects, comfyui, import_, apps, workflows, execution
+from dependencies import get_db, get_user_repo
+from config import get_auth_config
+from services.auth_service import parse_token
+from authz import AUTH_COOKIE_NAME
+from routers import config, runs, projects, comfyui, import_, apps, workflows, execution, auth, users
 
 
 def _load_cors_origins() -> list[str]:
@@ -73,6 +77,8 @@ def _include_api_routes(prefix: str) -> None:
     app.include_router(apps.router, prefix=prefix, tags=["apps"])
     app.include_router(workflows.router, prefix=prefix, tags=["workflows"])
     app.include_router(execution.router, prefix=prefix, tags=["execution"])
+    app.include_router(auth.router, prefix=prefix, tags=["auth"])
+    app.include_router(users.router, prefix=prefix, tags=["users"])
 
 
 _include_api_routes(API_PREFIX)
@@ -114,6 +120,14 @@ class SPAFallbackMiddleware(BaseHTTPMiddleware):
         path = (request.url.path or "").strip("/")
         if not _is_spa_document_request(path, sec_fetch_dest, sec_fetch_mode, accept):
             return await call_next(request)
+        auth_cfg = get_auth_config()
+        if auth_cfg.enabled and not (req_path.startswith("/login") or req_path.startswith("/_assets/")):
+            token = request.cookies.get(AUTH_COOKIE_NAME)
+            payload = parse_token(token) if token else None
+            sub = payload.get("sub") if isinstance(payload, dict) else None
+            user = get_user_repo().get_user_by_id(sub) if isinstance(sub, str) else None
+            if user is None or user.disabled_at is not None:
+                return RedirectResponse(url="/login", status_code=307)
         index_path = STATIC_DIR / "index.html"
         if not index_path.is_file():
             return await call_next(request)

@@ -7,6 +7,7 @@ import shutil
 
 from fastapi import APIRouter, HTTPException, Depends, Response
 
+from authz import require_user, ensure_project_access
 from db.migrate import QUICK_RUNS_PROJECT_ID
 from config import get_media_storage_config
 
@@ -25,7 +26,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 @router.post("/projects")
-def post_projects(body: dict, db=Depends(get_db)):
+def post_projects(body: dict, db=Depends(get_db), ctx=Depends(require_user)):
     name = body.get("name")
     if not name or not isinstance(name, str) or not name.strip():
         raise HTTPException(status_code=400, detail="name is required")
@@ -56,6 +57,7 @@ def post_projects(body: dict, db=Depends(get_db)):
         tags_json,
         storage_mode,
         header_color=header_color.strip() if header_color else None,
+        owner_user_id=ctx.user.id if ctx.auth_enabled and ctx.user else None,
     )
     return {
         "id": created.id,
@@ -76,9 +78,14 @@ def list_projects(
     limit: int = 100,
     archived: bool = False,
     db=Depends(get_db),
+    ctx=Depends(require_user),
 ):
     _, _, _, run_repo, project_repo, _, _ = db
     projects = project_repo.list_projects(tag=tag, limit=limit, archived=archived)
+    if ctx.auth_enabled and ctx.user:
+        projects = [p for p in projects if getattr(p, "owner_user_id", None) == ctx.user.id]
+    elif not ctx.auth_enabled:
+        projects = [p for p in projects if getattr(p, "owner_user_id", None) is None]
     result = []
     for p in projects:
         run_count = run_repo.count_runs_by_project(p.id)
@@ -94,16 +101,16 @@ def list_projects(
             "run_count": run_count,
             "header_color": p.header_color,
             "archived_at": p.archived_at,
+            "owner_user_id": p.owner_user_id,
         })
     return result
 
 
 @router.get("/projects/{project_id}")
-def get_project_detail(project_id: str, db=Depends(get_db)):
+def get_project_detail(project_id: str, db=Depends(get_db), ctx=Depends(require_user)):
     _, _, app_repo, run_repo, project_repo, _, _ = db
+    ensure_project_access(project_id, ctx, project_repo)
     proj = project_repo.get_project(project_id)
-    if not proj:
-        raise HTTPException(status_code=404, detail="Project not found")
     run_count = run_repo.count_runs_by_project(project_id)
     runs_list = run_repo.get_runs_by_project(project_id, limit=1000)
     app_ids = set()
@@ -158,13 +165,12 @@ def get_project_detail(project_id: str, db=Depends(get_db)):
 
 
 @router.patch("/projects/{project_id}")
-def patch_project(project_id: str, body: dict, db=Depends(get_db)):
+def patch_project(project_id: str, body: dict, db=Depends(get_db), ctx=Depends(require_user)):
     if project_id == QUICK_RUNS_PROJECT_ID and "archived_at" in body:
         raise HTTPException(status_code=400, detail="Quick runs project cannot be archived.")
     _, _, _, _, project_repo, _, _ = db
+    ensure_project_access(project_id, ctx, project_repo)
     proj = project_repo.get_project(project_id)
-    if not proj:
-        raise HTTPException(status_code=404, detail="Project not found")
     kwargs: dict = {"updated_at": int(time.time() * 1000)}
     if "name" in body and body["name"] is not None:
         name = body["name"]
@@ -203,13 +209,12 @@ def patch_project(project_id: str, body: dict, db=Depends(get_db)):
 
 
 @router.delete("/projects/{project_id}")
-def delete_project(project_id: str, body: dict | None = None, db=Depends(get_db)):
+def delete_project(project_id: str, body: dict | None = None, db=Depends(get_db), ctx=Depends(require_user)):
     if project_id == QUICK_RUNS_PROJECT_ID:
         raise HTTPException(status_code=400, detail="Quick runs project cannot be deleted or archived.")
     _, workflow_repo, _, run_repo, project_repo, _, _ = db
+    ensure_project_access(project_id, ctx, project_repo)
     proj = project_repo.get_project(project_id)
-    if not proj:
-        raise HTTPException(status_code=404, detail="Project not found")
     keep = (body or {}).get("keep", "none")
     if keep not in ("local", "remote", "none"):
         raise HTTPException(status_code=400, detail="keep must be local, remote, or none")
@@ -251,11 +256,12 @@ def delete_project(project_id: str, body: dict | None = None, db=Depends(get_db)
 
 
 @router.patch("/projects/{project_id}/storage")
-def patch_project_storage(project_id: str, body: dict, db=Depends(get_db)):
+def patch_project_storage(project_id: str, body: dict, db=Depends(get_db), ctx=Depends(require_user)):
     storage_mode = body.get("storage_mode") or body.get("storageMode")
     if storage_mode not in {"inherit", "local", "remote"}:
         raise HTTPException(status_code=400, detail="storage_mode must be inherit, local, or remote")
     _, _, _, _, project_repo, _, _ = db
+    ensure_project_access(project_id, ctx, project_repo)
     updated = project_repo.update_project(
         project_id,
         storage_mode=storage_mode,
@@ -283,11 +289,10 @@ def list_project_runs(
     offset: int = 0,
     db=Depends(get_db),
     state=Depends(get_run_queue_state),
+    ctx=Depends(require_user),
 ):
     _, _, app_repo, run_repo, project_repo, _, _ = db
-    proj = project_repo.get_project(project_id)
-    if not proj:
-        raise HTTPException(status_code=404, detail="Project not found")
+    ensure_project_access(project_id, ctx, project_repo)
     meta_q_trim = meta_q.strip() if meta_q and isinstance(meta_q, str) else None
     total = run_repo.count_runs_by_project_filtered(
         project_id,
@@ -403,12 +408,11 @@ def get_project_runs_storage_sizes(
     run_ids: str,
     db=Depends(get_db),
     service=Depends(get_media_storage_service),
+    ctx=Depends(require_user),
 ):
     """Return local and remote storage bytes for the given run IDs (comma-separated). Runs must belong to the project."""
     _, _, app_repo, run_repo, project_repo, _, _ = db
-    proj = project_repo.get_project(project_id)
-    if not proj:
-        raise HTTPException(status_code=404, detail="Project not found")
+    ensure_project_access(project_id, ctx, project_repo)
     ids = [rid.strip() for rid in (run_ids or "").split(",") if rid.strip()]
     if not ids:
         return {}
@@ -450,6 +454,7 @@ def move_runs_to_project(
     project_id: str,
     body: dict,
     db=Depends(get_db),
+    ctx=Depends(require_user),
 ):
     run_ids = body.get("run_ids")
     target_project_id = body.get("target_project_id")
@@ -462,15 +467,13 @@ def move_runs_to_project(
         raise HTTPException(status_code=400, detail="Target project must be different from source project")
 
     _, _, _, run_repo, project_repo, _, _ = db
+    ensure_project_access(project_id, ctx, project_repo)
     source_proj = project_repo.get_project(project_id)
-    if not source_proj:
-        raise HTTPException(status_code=404, detail="Source project not found")
     if getattr(source_proj, "archived_at", None) is not None:
         raise HTTPException(status_code=400, detail="Cannot move runs from an archived project")
 
+    ensure_project_access(target_project_id, ctx, project_repo)
     target_proj = project_repo.get_project(target_project_id)
-    if not target_proj:
-        raise HTTPException(status_code=404, detail="Target project not found")
     if getattr(target_proj, "archived_at", None) is not None:
         raise HTTPException(status_code=400, detail="Cannot move runs into an archived project")
 
@@ -530,11 +533,10 @@ def get_project_runs_stats(
     meta_q: str | None = None,
     deleted_app: bool | None = None,
     db=Depends(get_db),
+    ctx=Depends(require_user),
 ):
     _, _, _, run_repo, project_repo, _, _ = db
-    proj = project_repo.get_project(project_id)
-    if not proj:
-        raise HTTPException(status_code=404, detail="Project not found")
+    ensure_project_access(project_id, ctx, project_repo)
     meta_q_trim = meta_q.strip() if meta_q and isinstance(meta_q, str) else None
     total_generations = run_repo.count_runs_by_project_filtered(
         project_id,
