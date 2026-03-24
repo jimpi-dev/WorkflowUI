@@ -15,8 +15,10 @@ export function setCookie(name: string, value: string, maxAgeSeconds: number = M
 export const THUMB_SIZE_COOKIE = 'workflowui_thumb_size';
 
 export type ThumbSize = 'small' | 'medium' | 'large';
+export type ThumbFitMode = 'cover' | 'contain';
 
 const VALID_THUMB_SIZES: ThumbSize[] = ['small', 'medium', 'large'];
+const VALID_THUMB_FIT_MODES: ThumbFitMode[] = ['cover', 'contain'];
 
 export function getThumbSizeCookie(): ThumbSize {
     const raw = getCookie(THUMB_SIZE_COOKIE);
@@ -26,6 +28,18 @@ export function getThumbSizeCookie(): ThumbSize {
 
 export function setThumbSizeCookie(size: ThumbSize): void {
     setCookie(THUMB_SIZE_COOKIE, size);
+}
+
+export const THUMB_FIT_MODE_COOKIE = 'workflowui_thumb_fit_mode';
+
+export function getThumbFitModeCookie(): ThumbFitMode {
+    const raw = getCookie(THUMB_FIT_MODE_COOKIE);
+    if (raw && VALID_THUMB_FIT_MODES.includes(raw as ThumbFitMode)) return raw as ThumbFitMode;
+    return 'cover';
+}
+
+export function setThumbFitModeCookie(mode: ThumbFitMode): void {
+    setCookie(THUMB_FIT_MODE_COOKIE, mode);
 }
 
 export const NOTES_COLLAPSED_COOKIE = 'workflowui_notes_collapsed';
