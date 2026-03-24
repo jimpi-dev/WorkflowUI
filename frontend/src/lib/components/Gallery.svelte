@@ -1,7 +1,14 @@
 <script lang="ts">
     import { browser } from '$app/environment';
     import { tick } from 'svelte';
-    import { getThumbSizeCookie, setThumbSizeCookie, type ThumbSize } from '$lib/cookie';
+    import {
+        getThumbFitModeCookie,
+        getThumbSizeCookie,
+        setThumbFitModeCookie,
+        setThumbSizeCookie,
+        type ThumbFitMode,
+        type ThumbSize
+    } from '$lib/cookie';
     import ThumbnailOverlay from '$lib/components/ThumbnailOverlay.svelte';
     import RunHeaderActions from '$lib/components/RunHeaderActions.svelte';
     import RunAppBadge from '$lib/components/RunAppBadge.svelte';
@@ -81,7 +88,8 @@
         onReplicateRun = undefined as ((runId: string, appSlug: string) => void) | undefined,
         onShowRunMetadata = undefined as ((backendRunId: string) => void) | undefined,
         appSlugForReplicate = undefined as string | null | undefined,
-        onLightboxOpenChange = undefined as ((open: boolean) => void) | undefined
+        onLightboxOpenChange = undefined as ((open: boolean) => void) | undefined,
+        onRunFocusChange = undefined as ((focused: boolean) => void) | undefined
     }: {
         runs?: RunGroup[];
         outputLabels?: (string | undefined)[];
@@ -120,6 +128,7 @@
         appSlugForReplicate?: string | null;
         appHeaderColor?: string | null;
         onLightboxOpenChange?: (open: boolean) => void;
+        onRunFocusChange?: (focused: boolean) => void;
     } = $props();
 
     let flatImages = $derived(runs.flatMap(r => r.images));
@@ -334,6 +343,11 @@
         thumbnailSize = size;
         if (browser) setThumbSizeCookie(size);
     }
+    let thumbnailFitMode = $state<ThumbFitMode>(browser ? getThumbFitModeCookie() : 'cover');
+    function setThumbnailFitMode(mode: ThumbFitMode) {
+        thumbnailFitMode = mode;
+        if (browser) setThumbFitModeCookie(mode);
+    }
 
     let visibleRunIds = $state<Set<string>>(new Set());
     function setRunVisible(runId: string) {
@@ -347,6 +361,7 @@
         loadedThumbIds = new Set(loadedThumbIds).add(`${runId}-${imgId}`);
     }
     let selectedImageKeys = $state<Set<string>>(new Set());
+    let focusedRunId = $state<string | null>(null);
     function toggleSelection(runId: string, imgId: string) {
         const key = `${runId}-${imgId}`;
         const next = new Set(selectedImageKeys);
@@ -366,6 +381,22 @@
         }
         selectedImageKeys = next;
     }
+    function toggleRunFocus(runId: string) {
+        focusedRunId = focusedRunId === runId ? null : runId;
+    }
+
+    $effect(() => {
+        onRunFocusChange?.(!!focusedRunId);
+    });
+
+    $effect(() => {
+        if (!browser || !focusedRunId) return;
+        const onKeyDown = (event: KeyboardEvent) => {
+            if (event.key === 'Escape') focusedRunId = null;
+        };
+        window.addEventListener('keydown', onKeyDown);
+        return () => window.removeEventListener('keydown', onKeyDown);
+    });
     function observeRunSection(node: HTMLElement, runId: string) {
         if (!browser) return;
         const observer = new IntersectionObserver(
@@ -450,8 +481,34 @@
             </svg>
         </button>
     </div>
+    <span class="gallery-size-divider" aria-hidden="true"></span>
+    <div class="gallery-thumb-fit" role="group" aria-label="Thumbnail render mode">
+        <button
+            type="button"
+            class="expand-collapse-btn thumb-fit-btn"
+            class:active={thumbnailFitMode === 'cover'}
+            onclick={() => setThumbnailFitMode('cover')}
+            title="Default thumbnail"
+            aria-label="Default thumbnail"
+            aria-pressed={thumbnailFitMode === 'cover'}
+        >
+            Default thumbnail
+        </button>
+        <button
+            type="button"
+            class="expand-collapse-btn thumb-fit-btn"
+            class:active={thumbnailFitMode === 'contain'}
+            onclick={() => setThumbnailFitMode('contain')}
+            title="Fit into thumbnail"
+            aria-label="Fit into thumbnail"
+            aria-pressed={thumbnailFitMode === 'contain'}
+        >
+            Fit into thumbnail
+        </button>
+    </div>
 </div>
 {#each runs as run (run.id)}
+    {#if !focusedRunId || focusedRunId === run.id}
     {@const filteredImages = getFilteredImagesForRun(run)}
     {@const displayImages = getDisplayImagesForRun(run)}
     {@const outputGroups = groupByOutputIndex(displayImages)}
@@ -560,6 +617,9 @@
                 replicateTitle="Open this app with the same parameters to replicate the run"
                 showShowMetadata={!!onShowRunMetadata}
                 onShowMetadata={onShowRunMetadata ? () => onShowRunMetadata(run.backendRunIds?.[0] ?? run.id) : undefined}
+                showFullscreenToggle={true}
+                fullscreenActive={focusedRunId === run.id}
+                onToggleFullscreen={() => toggleRunFocus(run.id)}
                 collapseIcon={collapsedRuns.has(run.id) ? '▸' : '▾'}
                 hasSelection={runSelected}
             />
@@ -652,6 +712,7 @@
                                         class:thumb-size-small={thumbnailSize === 'small'}
                                         class:thumb-size-medium={thumbnailSize === 'medium'}
                                         class:thumb-size-large={thumbnailSize === 'large'}
+                                        class:thumb-fit-contain={thumbnailFitMode === 'contain'}
                                     >
                                         {#each images as img (img.id)}
                                             {@const inFilter = isImageInFilter(run.id, img.seed)}
@@ -813,6 +874,7 @@
             </div>
         {/if}
     </section>
+    {/if}
     {/if}
 {/each}
 {/if}
@@ -1078,6 +1140,11 @@
         align-items: center;
         gap: 0.2rem;
     }
+    .gallery-thumb-fit {
+        display: flex;
+        align-items: center;
+        gap: 0.2rem;
+    }
     .thumb-size-btn {
         padding: 0.35rem 0.45rem;
     }
@@ -1087,6 +1154,11 @@
         display: block;
     }
     .thumb-size-btn.active {
+        background: color-mix(in srgb, var(--accent) 22%, var(--surface));
+        border-color: var(--accent);
+        color: var(--accent);
+    }
+    .thumb-fit-btn.active {
         background: color-mix(in srgb, var(--accent) 22%, var(--surface));
         border-color: var(--accent);
         color: var(--accent);
@@ -1237,6 +1309,11 @@
         height: 100%;
         object-fit: cover;
         display: block;
+    }
+    .output-section-body.thumb-fit-contain .output-thumb img,
+    .output-section-body.thumb-fit-contain .output-thumb video {
+        object-fit: contain;
+        background: #0b0b0b;
     }
 
     .thumb-placeholder {

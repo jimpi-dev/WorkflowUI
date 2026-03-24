@@ -324,6 +324,8 @@
 
     type LayoutMode = 'split' | 'left-full' | 'right-full';
     let layoutMode = $state<LayoutMode>('split');
+    let runFocusActive = $state(false);
+    let layoutBeforeRunFocus = $state<LayoutMode | null>(null);
     let splitPosition = $state(0.45);
     let isDraggingDivider = $state(false);
     let layoutContainerEl = $state<HTMLDivElement | null>(null);
@@ -372,6 +374,18 @@
 
     function restoreSplit() {
         layoutMode = 'split';
+    }
+
+    function handleRunFocusChange(focused: boolean) {
+        if (focused) {
+            if (!runFocusActive) layoutBeforeRunFocus = layoutMode;
+            runFocusActive = true;
+            layoutMode = 'right-full';
+            return;
+        }
+        runFocusActive = false;
+        if (layoutBeforeRunFocus) layoutMode = layoutBeforeRunFocus;
+        layoutBeforeRunFocus = null;
     }
 
     function submitRunForm() {
@@ -462,6 +476,10 @@
     }
 
     let runs = $state<RunGroup[]>([]);
+    const hasActiveGeneratingRuns = $derived(
+        runs.some((run) => run.status === 'queued' || run.status === 'running')
+    );
+    const hideRunParamGroup = $derived(hasActiveGeneratingRuns && runFocusActive);
     let runningPromptsCompleted = $state<Record<string, number>>({});
     let savingRunIds = $state<Set<string>>(new Set());
     let deletingRunIds = $state<Set<string>>(new Set());
@@ -1268,16 +1286,18 @@
             onscroll={onResultsCardScroll}
         >
             {#key data.workflowId}
-                <RunParamGroup
-                        bind:values={formValues}
-                        formId="workflow-run-form"
-                        onSubmit={submitRunForm}
-                        onQueueClick={() => (randomizeSeedOnSubmit = false)}
-                        onRandomClick={() => (randomizeSeedOnSubmit = true)}
-                        masterSeedHint={hasSeedInputs ? masterSeedHint : null}
-                        hasSeedInputs={hasSeedInputs}
-                        showActions={!isMobile}
-                />
+                {#if !hideRunParamGroup}
+                    <RunParamGroup
+                            bind:values={formValues}
+                            formId="workflow-run-form"
+                            onSubmit={submitRunForm}
+                            onQueueClick={() => (randomizeSeedOnSubmit = false)}
+                            onRandomClick={() => (randomizeSeedOnSubmit = true)}
+                            masterSeedHint={hasSeedInputs ? masterSeedHint : null}
+                            hasSeedInputs={hasSeedInputs}
+                            showActions={!isMobile}
+                    />
+                {/if}
             {/key}
             <div
                 class="gallery-wrapper"
@@ -1345,6 +1365,7 @@
                     }}
                     onShowRunMetadata={(backendRunId) => { metadataPanelRunId = backendRunId; }}
                     onLightboxOpenChange={(open) => { lightboxOpen = open; }}
+                    onRunFocusChange={handleRunFocusChange}
                 />
             </div>
         </div>

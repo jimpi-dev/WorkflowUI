@@ -5,7 +5,7 @@ import { page } from '$app/stores';
 import { get } from 'svelte/store';
 	import { browser } from '$app/environment';
 	import { onMount, onDestroy, tick, untrack } from 'svelte';
-	import { getThumbSizeCookie, setThumbSizeCookie, getNotesCollapsedCookie, setNotesCollapsedCookie, getLeftPanelCollapsedCookie, setLeftPanelCollapsedCookie, getSkipDeleteConfirmCookie, setSkipDeleteConfirmCookie, type ThumbSize, type DeleteConfirmKey } from '$lib/cookie';
+	import { getThumbFitModeCookie, getThumbSizeCookie, setThumbFitModeCookie, setThumbSizeCookie, getNotesCollapsedCookie, setNotesCollapsedCookie, getLeftPanelCollapsedCookie, setLeftPanelCollapsedCookie, getSkipDeleteConfirmCookie, setSkipDeleteConfirmCookie, type ThumbFitMode, type ThumbSize, type DeleteConfirmKey } from '$lib/cookie';
 	import SendToAppDialog from '$lib/components/SendToAppDialog.svelte';
 	import MoveRunsDialog from '$lib/components/MoveRunsDialog.svelte';
 	import ThumbnailOverlay from '$lib/components/ThumbnailOverlay.svelte';
@@ -128,6 +128,8 @@ import { get } from 'svelte/store';
 	let deleteConfirmPending = $state<DeleteConfirmPending | null>(null);
 
 	let favorites = $state<Set<string>>(new Set());
+let focusedGroupId = $state<string | null>(null);
+let leftPanelCollapsedBeforeFocus = $state<boolean | null>(null);
 	$effect(() => {
 		const raw = data.project?.metadata?.favorites;
 		favorites = Array.isArray(raw) ? new Set(raw) : new Set();
@@ -209,6 +211,14 @@ import { get } from 'svelte/store';
 	});
 
 	const visibleRunGroups = $derived.by(() => runGroups);
+	const displayRunGroups = $derived.by(() =>
+		focusedGroupId ? visibleRunGroups.filter((g) => g.groupId === focusedGroupId) : visibleRunGroups
+	);
+
+	$effect(() => {
+		if (!focusedGroupId) return;
+		if (!visibleRunGroups.some((g) => g.groupId === focusedGroupId)) focusedGroupId = null;
+	});
 
 	const displayRunsCount = $derived(
 		filterFavoritesOnly ? visibleRunGroups.length : (statsTotalGenerations ?? totalGroups)
@@ -1179,11 +1189,38 @@ import { get } from 'svelte/store';
 		defaultNewGroupsCollapsed = true;
 		collapsedGroups = new Set(runGroups.map((g) => g.groupId));
 	}
+	function toggleGroupFocus(groupId: string) {
+		if (focusedGroupId === groupId) {
+			focusedGroupId = null;
+			if (leftPanelCollapsedBeforeFocus != null) {
+				leftPanelCollapsed = leftPanelCollapsedBeforeFocus;
+				leftPanelCollapsedBeforeFocus = null;
+			}
+			return;
+		}
+		leftPanelCollapsedBeforeFocus = leftPanelCollapsed;
+		leftPanelCollapsed = true;
+		focusedGroupId = groupId;
+	}
+
+	$effect(() => {
+		if (!browser || !focusedGroupId) return;
+		const onKeyDown = (event: KeyboardEvent) => {
+			if (event.key === 'Escape') toggleGroupFocus(focusedGroupId);
+		};
+		window.addEventListener('keydown', onKeyDown);
+		return () => window.removeEventListener('keydown', onKeyDown);
+	});
 
 	let thumbnailSize = $state<ThumbSize>(browser ? getThumbSizeCookie() : 'medium');
 	function setThumbnailSize(size: ThumbSize) {
 		thumbnailSize = size;
 		if (browser) setThumbSizeCookie(size);
+	}
+	let thumbnailFitMode = $state<ThumbFitMode>(browser ? getThumbFitModeCookie() : 'cover');
+	function setThumbnailFitMode(mode: ThumbFitMode) {
+		thumbnailFitMode = mode;
+		if (browser) setThumbFitModeCookie(mode);
 	}
 
 	let loadedThumbIds = $state<Record<string, boolean>>({});
@@ -2483,6 +2520,31 @@ let lightboxDeletePending = $state<
 								</svg>
 							</button>
 						</div>
+						<span class="gallery-size-divider" aria-hidden="true"></span>
+						<div class="gallery-thumb-fit" role="group" aria-label="Thumbnail render mode">
+							<button
+								type="button"
+								class="collapse-all-btn thumb-fit-btn"
+								class:active={thumbnailFitMode === 'cover'}
+								onclick={() => setThumbnailFitMode('cover')}
+								title="Default thumbnail"
+								aria-label="Default thumbnail"
+								aria-pressed={thumbnailFitMode === 'cover'}
+							>
+								Default thumbnail
+							</button>
+							<button
+								type="button"
+								class="collapse-all-btn thumb-fit-btn"
+								class:active={thumbnailFitMode === 'contain'}
+								onclick={() => setThumbnailFitMode('contain')}
+								title="Fit into thumbnail"
+								aria-label="Fit into thumbnail"
+								aria-pressed={thumbnailFitMode === 'contain'}
+							>
+								Fit into thumbnail
+							</button>
+						</div>
 						</div>
 						{/if}
 					</div>
@@ -2499,7 +2561,7 @@ let lightboxDeletePending = $state<
 				<div class="runs-loading-wrap">
 					<PageLoadingIndicator />
 				</div>
-			{:else if !visibleRunGroups.length}
+			{:else if !displayRunGroups.length}
 				{#if data.project.run_count === 0 && (data.appsForNew?.length ?? 0) > 0}
 					<div class="empty-project-state">
 						<div class="empty-project-icon" aria-hidden="true">
@@ -2533,7 +2595,7 @@ let lightboxDeletePending = $state<
 			{:else}
 				<div class="runs-scroll" bind:this={runsScrollEl}>
 					{#key runsRenderKey}
-					{#each visibleRunGroups as group (group.groupId)}
+					{#each displayRunGroups as group (group.groupId)}
 						{@const storageSummary = getGroupStorageSummary(group)}
 						{@const savingGroup = savingGroupIds.has(group.groupId)}
 						{@const deletingGroup = deletingGroupIds.has(group.groupId)}
@@ -2681,6 +2743,10 @@ let lightboxDeletePending = $state<
 									replicateTitle={group.app_removed ? 'App was deleted; cannot replicate this run. No generated data was removed.' : 'Open this app with the same parameters to replicate the run'}
 									showShowMetadata={true}
 									onShowMetadata={() => { metadataPanelRunId = group.firstRunId; metadataPanelMode = 'run'; }}
+									showFullscreenToggle={true}
+									fullscreenActive={focusedGroupId === group.groupId}
+									onToggleFullscreen={() => toggleGroupFocus(group.groupId)}
+									fullscreenTitle="Focus this run in fullscreen (Esc to exit)"
 									collapseIcon={collapsedGroups.has(group.groupId) ? '▸' : '▾'}
 									hasSelection={hasGroupSelection}
 								/>
@@ -2761,6 +2827,7 @@ let lightboxDeletePending = $state<
 											class:thumb-size-small={thumbnailSize === 'small'}
 											class:thumb-size-medium={thumbnailSize === 'medium'}
 											class:thumb-size-large={thumbnailSize === 'large'}
+											class:thumb-fit-contain={thumbnailFitMode === 'contain'}
 										>
 											{#each group.runs as run (run.id)}
 												{@const visibleImages = (run.images ?? []).map((item, origI) => ({ item, origI })).filter(({ item }) => { const rd = !!(item as { remote_deleted?: boolean }).remote_deleted; if (!rd) return true; if (run.local_storage_status === 'saved' || run.local_storage_status === 'partial') return true; return false; })}
@@ -4253,6 +4320,11 @@ let lightboxDeletePending = $state<
 		align-items: center;
 		gap: 0.2rem;
 	}
+	.gallery-thumb-fit {
+		display: flex;
+		align-items: center;
+		gap: 0.2rem;
+	}
 	.thumb-size-btn {
 		padding: 0.35rem 0.45rem;
 	}
@@ -4262,6 +4334,11 @@ let lightboxDeletePending = $state<
 		display: block;
 	}
 	.thumb-size-btn.active {
+		background: color-mix(in srgb, var(--accent) 22%, var(--surface));
+		border-color: var(--accent);
+		color: var(--accent);
+	}
+	.thumb-fit-btn.active {
 		background: color-mix(in srgb, var(--accent) 22%, var(--surface));
 		border-color: var(--accent);
 		color: var(--accent);
@@ -4645,6 +4722,11 @@ let lightboxDeletePending = $state<
 		height: 100%;
 		object-fit: cover;
 		display: block;
+	}
+	.output-section-body.thumb-fit-contain .output-thumb img,
+	.output-section-body.thumb-fit-contain .output-thumb video {
+		object-fit: contain;
+		background: #0b0b0b;
 	}
 	.thumb-loading {
 		position: absolute;

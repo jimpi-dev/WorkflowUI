@@ -47,6 +47,10 @@
 		replicateTitle = 'Open this app with the same parameters to replicate the run',
 		showShowMetadata = false,
 		onShowMetadata = undefined as (() => void) | undefined,
+		showFullscreenToggle = false,
+		fullscreenActive = false,
+		onToggleFullscreen = undefined as (() => void) | undefined,
+		fullscreenTitle = 'Focus this run in fullscreen (Esc to exit)',
 		collapseIcon = '▾',
 		hasSelection = false,
 	}: {
@@ -82,6 +86,10 @@
 		replicateTitle?: string;
 		showShowMetadata?: boolean;
 		onShowMetadata?: () => void;
+		showFullscreenToggle?: boolean;
+		fullscreenActive?: boolean;
+		onToggleFullscreen?: () => void;
+		fullscreenTitle?: string;
 		collapseIcon?: string;
 		hasSelection?: boolean;
 	} = $props();
@@ -221,6 +229,24 @@
 	{#if showShowMetadata && onShowMetadata}
 		<button type="button" class="run-open-detail-btn" onclick={(e) => { e.stopPropagation(); onShowMetadata(); }}>
 			Metadata
+		</button>
+	{/if}
+	{#if showFullscreenToggle && onToggleFullscreen}
+		<button
+			type="button"
+			class="run-action-btn"
+			class:context-aware={fullscreenActive}
+			onclick={(e) => { e.stopPropagation(); onToggleFullscreen(); }}
+			title={fullscreenActive ? 'Exit focused run fullscreen' : fullscreenTitle}
+			aria-label={fullscreenActive ? 'Exit focused run fullscreen' : 'Focus this run in fullscreen (Esc to exit)'}
+			aria-pressed={fullscreenActive}
+		>
+			<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+				<path d="M8 3H3v5"/>
+				<path d="M16 3h5v5"/>
+				<path d="M8 21H3v-5"/>
+				<path d="M16 21h5v-5"/>
+			</svg>
 		</button>
 	{/if}
 	{#if onDeleteRun}
