@@ -29,3 +29,4 @@ class Run:
     parent_media_id: str | None = None
     root_run_id: str | None = None
     deleted_at: int | None = None
+    owner_user_id: str | None = None

@@ -7,6 +7,7 @@ import requests
 from fastapi import APIRouter, HTTPException, Depends, Request
 from fastapi.responses import JSONResponse
 
+from authz import require_user, ensure_project_access, ensure_run_access, user_can_access_app
 from db.migrate import QUICK_RUNS_PROJECT_ID
 from services.comfyui_info import normalize_comfy_url as _normalize_comfy_url, get_run_remote_storage_bytes
 from services.run_queue import (
@@ -33,7 +34,7 @@ from services.run_serialization import (
     safe_json_loads,
 )
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_user)])
 
 def _queue_run(job: dict, state, get_db_fn, get_media_fn, auto_start: bool = True):
     executor = get_executor()
@@ -56,6 +57,7 @@ def run_workflow_versioned(
     payload: dict,
     db=Depends(get_db),
     state=Depends(get_run_queue_state),
+    ctx=Depends(require_user),
 ):
     _values = payload.get("values") or {}
     _bindings = payload.get("bindings") or []
@@ -79,15 +81,15 @@ def run_workflow_versioned(
     if not app_id and not workflow_version_id:
         raise HTTPException(status_code=400, detail="Provide app_id or workflow_version_id")
     _, workflow_repo, app_repo, run_repo, project_repo, _, _ = db
-    proj = project_repo.get_project(project_id)
-    if not proj:
-        raise HTTPException(status_code=404, detail="Project not found")
+    ensure_project_access(project_id, ctx, project_repo)
     version_id = workflow_version_id
     default_inputs = None
     app = None
     if app_id:
         app = app_repo.get_app_by_id(app_id)
         if not app:
+            raise HTTPException(status_code=404, detail="App not found")
+        if not user_can_access_app(app.id, ctx):
             raise HTTPException(status_code=404, detail="App not found")
         version_id = app.workflow_version_id
         if app.default_inputs_json:
@@ -178,6 +180,7 @@ def run_workflow_versioned(
         parent_run_id=parent_run_id,
         parent_media_id=parent_media_id,
         root_run_id=root_run_id,
+        owner_user_id=ctx.user.id if ctx.user else None,
     )
     project_repo.update_project(project_id, updated_at=created_at)
     job = {
@@ -200,6 +203,7 @@ def run_workflow(
     payload: dict,
     db=Depends(get_db),
     state=Depends(get_run_queue_state),
+    ctx=Depends(require_user),
 ):
     run_id = payload.get("run_id") or str(uuid.uuid4())
     path = Path("workflows") / f"{workflow_id}.json"
@@ -216,6 +220,8 @@ def run_workflow(
     _, workflow_repo, app_repo, run_repo, project_repo, _, _ = db
     app = app_repo.get_app_by_slug(workflow_id)
     if app:
+        if not user_can_access_app(app.id, ctx):
+            raise HTTPException(status_code=404, detail="Workflow not found")
         version = workflow_repo.get_workflow_version(app.workflow_version_id)
         if version:
             graph = json.loads(version.original_graph_json)
@@ -231,6 +237,7 @@ def run_workflow(
                 created_at,
                 queue_position=len(state.run_queue) + 1,
                 comfyui_url=run_comfy_url,
+                owner_user_id=ctx.user.id if ctx.user else None,
             )
             job = {
                 "run_id": run_id,
@@ -246,14 +253,14 @@ def run_workflow(
 
 
 @router.get("/run/{run_id}/status")
-def get_run_status(run_id: str, db=Depends(get_db), state=Depends(get_run_queue_state)):
+def get_run_status(run_id: str, db=Depends(get_db), state=Depends(get_run_queue_state), ctx=Depends(require_user)):
     with state.queue_lock:
         r = state.runs.get(run_id)
     run_entity = None
     if r is None:
         run_repo = db[3]
         if run_repo:
-            run_entity = run_repo.get_run(run_id)
+            run_entity = ensure_run_access(run_id, ctx, run_repo)
             if run_entity:
                 r = {
                     "status": run_entity.status,
@@ -266,7 +273,7 @@ def get_run_status(run_id: str, db=Depends(get_db), state=Depends(get_run_queue_
                 }
     else:
         run_repo = db[3]
-        run_entity = run_repo.get_run(run_id) if run_repo else None
+        run_entity = ensure_run_access(run_id, ctx, run_repo) if run_repo else None
     if r is None:
         return {"status": "not_found"}
     r = r.copy()
@@ -291,8 +298,9 @@ def get_run_status(run_id: str, db=Depends(get_db), state=Depends(get_run_queue_
 
 
 @router.post("/runs/{run_id}/cancel")
-def cancel_run(run_id: str, db=Depends(get_db), state=Depends(get_run_queue_state)):
+def cancel_run(run_id: str, db=Depends(get_db), state=Depends(get_run_queue_state), ctx=Depends(require_user)):
     run_repo = db[3]
+    ensure_run_access(run_id, ctx, run_repo)
     with state.queue_lock:
         r = state.runs.get(run_id)
         if r is None and run_repo and run_repo.get_run(run_id):
@@ -478,7 +486,7 @@ def _restore_queue_from_saved(state, get_db_fn, run_repo) -> bool:
 
 
 @router.get("/queue")
-def get_queue(db=Depends(get_db), state=Depends(get_run_queue_state)):
+def get_queue(db=Depends(get_db), state=Depends(get_run_queue_state), ctx=Depends(require_user)):
     _, _, app_repo, run_repo, project_repo, _, _ = db
     try:
         _restore_queue_from_saved(state, get_db, run_repo)
@@ -496,10 +504,14 @@ def get_queue(db=Depends(get_db), state=Depends(get_run_queue_state)):
     running_item = None
     if running_id:
         run_entity = run_repo.get_run(running_id) if run_repo else None
+        if run_entity and ((ctx.auth_enabled and ctx.user and run_entity.owner_user_id != ctx.user.id) or (not ctx.auth_enabled and run_entity.owner_user_id is not None)):
+            run_entity = None
         running_item = _queue_item(running_id, run_entity, app_repo, project_repo, mem.get(running_id))
     queued = []
     for run_id in queued_ids:
         run_entity = run_repo.get_run(run_id) if run_repo else None
+        if run_entity and ((ctx.auth_enabled and ctx.user and run_entity.owner_user_id != ctx.user.id) or (not ctx.auth_enabled and run_entity.owner_user_id is not None)):
+            continue
         queued.append(_queue_item(run_id, run_entity, app_repo, project_repo, mem.get(run_id)))
     _persist_queue(state, run_repo)
     return {
@@ -540,11 +552,9 @@ def start_queue(state=Depends(get_run_queue_state)):
 
 
 @router.get("/runs/{run_id}")
-def get_run_detail(run_id: str, db=Depends(get_db), service: MediaStorageService = Depends(get_media_storage_service)):
+def get_run_detail(run_id: str, db=Depends(get_db), service: MediaStorageService = Depends(get_media_storage_service), ctx=Depends(require_user)):
     _, _, app_repo, run_repo, _, _, _ = db
-    run_entity = run_repo.get_run(run_id)
-    if not run_entity:
-        raise HTTPException(status_code=404, detail="Run not found")
+    run_entity = ensure_run_access(run_id, ctx, run_repo)
     parent_app_title = None
     if run_entity.parent_run_id and app_repo:
         parent_run = run_repo.get_run(run_entity.parent_run_id)

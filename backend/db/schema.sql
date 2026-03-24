@@ -48,7 +48,24 @@ CREATE TABLE IF NOT EXISTS project (
     tags_json TEXT,
     storage_mode TEXT DEFAULT 'inherit',
     header_color TEXT,
-    archived_at INTEGER NULL
+    archived_at INTEGER NULL,
+    owner_user_id TEXT REFERENCES user_account(id)
+);
+
+CREATE TABLE IF NOT EXISTS user_account (
+    id TEXT PRIMARY KEY,
+    username TEXT NOT NULL UNIQUE,
+    password_hash TEXT NOT NULL,
+    role TEXT NOT NULL,
+    allow_all_apps INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    disabled_at INTEGER NULL
+);
+
+CREATE TABLE IF NOT EXISTS user_app_access (
+    user_id TEXT NOT NULL REFERENCES user_account(id) ON DELETE CASCADE,
+    app_id TEXT NOT NULL REFERENCES workflow_app(id) ON DELETE CASCADE,
+    PRIMARY KEY (user_id, app_id)
 );
 
 CREATE TABLE IF NOT EXISTS comfyui_version (
@@ -64,6 +81,7 @@ CREATE TABLE IF NOT EXISTS run (
     project_id TEXT NOT NULL REFERENCES project(id),
     workflow_version_id TEXT NOT NULL REFERENCES workflow_version(id),
     app_id TEXT REFERENCES workflow_app(id),
+    owner_user_id TEXT REFERENCES user_account(id),
     created_at INTEGER NOT NULL,
     input_snapshot_json TEXT,
     metadata_snapshot_json TEXT,
@@ -115,6 +133,7 @@ CREATE INDEX IF NOT EXISTS idx_generation_run_id ON generation(run_id);
 CREATE INDEX IF NOT EXISTS idx_generation_prompt_id ON generation(prompt_id);
 CREATE INDEX IF NOT EXISTS idx_generation_parent_run_id ON generation(parent_run_id);
 CREATE INDEX IF NOT EXISTS idx_app_preset_app_id ON app_preset(app_id);
+CREATE INDEX IF NOT EXISTS idx_user_app_access_user ON user_app_access(user_id);
 
 CREATE TABLE IF NOT EXISTS saved_queue (
     id TEXT PRIMARY KEY,

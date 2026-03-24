@@ -6,6 +6,7 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Depends
 
+from authz import require_user, require_admin
 from config import get_media_storage_config, get_workflowui_embed_config, update_media_storage_config
 from db.maintenance import vacuum_db
 from db.migrate import QUICK_RUNS_PROJECT_ID
@@ -23,7 +24,7 @@ from dependencies import COMFY_URL, get_db, get_run_queue_state
 import time
 
 logger = logging.getLogger(__name__)
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_user)])
 
 
 def _get_frontend_version() -> str | None:
@@ -320,7 +321,7 @@ def get_comfyui_workflow(workflow_id: str):
     return {"name": (name or "Imported from ComfyUI").strip() or "Imported from ComfyUI", "graph": graph}
 
 @router.patch("/admin/media-storage")
-def patch_media_storage(body: dict):
+def patch_media_storage(body: dict, _=Depends(require_admin)):
     if not isinstance(body, dict):
         raise HTTPException(status_code=400, detail="Invalid body")
     enabled = body.get("enabled")

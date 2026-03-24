@@ -12,6 +12,7 @@ from domain.app import WorkflowApp
 from domain.run import Run
 from domain.project import Project
 from domain.preset import AppPreset
+from domain.user import User
 
 _UNSET = object()
 
@@ -66,7 +67,7 @@ def _run_select_cols() -> str:
     return """g.id, r.project_id, r.workflow_version_id, r.app_id, g.status, g.created_at, g.prompt_id, g.seed,
         g.images_json, g.media_json, g.execution_time, g.error, g.queue_position, COALESCE(g.input_snapshot_json, r.input_snapshot_json), r.metadata_snapshot_json, r.run_group_id, r.comfyui_url, r.comfyui_version_id,
         g.local_storage_status, g.remote_status, g.local_path, g.deleted_outputs_json,
-        g.parent_run_id, g.parent_media_id, g.root_run_id, g.deleted_at"""
+        g.parent_run_id, g.parent_media_id, g.root_run_id, g.deleted_at, r.owner_user_id"""
 
 
 def _row_to_run(row: tuple) -> Run:
@@ -98,6 +99,7 @@ def _row_to_run(row: tuple) -> Run:
         parent_media_id=row[23] if n > 23 else None,
         root_run_id=row[24] if n > 24 else None,
         deleted_at=row[25] if n > 25 else None,
+        owner_user_id=row[26] if n > 26 else None,
     )
 
 
@@ -125,6 +127,19 @@ def _row_to_project(row: tuple) -> Project:
         storage_mode=row[7] if len(row) > 7 else None,
         header_color=row[8] if len(row) > 8 else None,
         archived_at=row[9] if len(row) > 9 else None,
+        owner_user_id=row[10] if len(row) > 10 else None,
+    )
+
+
+def _row_to_user(row: tuple) -> User:
+    return User(
+        id=row[0],
+        username=row[1],
+        password_hash=row[2],
+        role=row[3],
+        allow_all_apps=bool(row[4]),
+        created_at=row[5],
+        disabled_at=row[6] if len(row) > 6 else None,
     )
 
 
@@ -363,13 +378,14 @@ class SqliteProjectRepository:
         tags_json: str | None = None,
         storage_mode: str | None = "inherit",
         header_color: str | None = None,
+        owner_user_id: str | None = None,
     ) -> Project:
         conn = self._conn()
         try:
             conn.execute(
-                """INSERT INTO project (id, name, description, created_at, updated_at, metadata_json, tags_json, storage_mode, header_color)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (id, name, description, created_at, updated_at, metadata_json, tags_json, storage_mode, header_color),
+                """INSERT INTO project (id, name, description, created_at, updated_at, metadata_json, tags_json, storage_mode, header_color, owner_user_id)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (id, name, description, created_at, updated_at, metadata_json, tags_json, storage_mode, header_color, owner_user_id),
             )
             conn.commit()
             return Project(
@@ -382,6 +398,7 @@ class SqliteProjectRepository:
                 tags_json=tags_json,
                 storage_mode=storage_mode,
                 header_color=header_color,
+                owner_user_id=owner_user_id,
             )
         finally:
             conn.close()
@@ -390,7 +407,7 @@ class SqliteProjectRepository:
         conn = self._conn()
         try:
             row = conn.execute(
-                "SELECT id, name, description, created_at, updated_at, metadata_json, tags_json, storage_mode, header_color, archived_at FROM project WHERE id = ?",
+                "SELECT id, name, description, created_at, updated_at, metadata_json, tags_json, storage_mode, header_color, archived_at, owner_user_id FROM project WHERE id = ?",
                 (project_id,),
             ).fetchone()
             return _row_to_project(row) if row else None
@@ -405,7 +422,7 @@ class SqliteProjectRepository:
     ) -> list[Project]:
         conn = self._conn()
         try:
-            base_cols = "id, name, description, created_at, updated_at, metadata_json, tags_json, storage_mode, header_color, archived_at"
+            base_cols = "id, name, description, created_at, updated_at, metadata_json, tags_json, storage_mode, header_color, archived_at, owner_user_id"
             if archived is False:
                 where = "WHERE archived_at IS NULL"
             elif archived is True:
@@ -439,6 +456,7 @@ class SqliteProjectRepository:
         storage_mode: str | None = None,
         header_color: str | None = _UNSET,
         archived_at: int | None = _UNSET,
+        owner_user_id: str | None = _UNSET,
     ) -> Project | None:
         conn = self._conn()
         try:
@@ -471,6 +489,9 @@ class SqliteProjectRepository:
             if archived_at is not _UNSET:
                 updates.append("archived_at = ?")
                 params.append(archived_at)
+            if owner_user_id is not _UNSET:
+                updates.append("owner_user_id = ?")
+                params.append(owner_user_id)
             if not updates:
                 return proj
             params.append(project_id)
@@ -751,6 +772,132 @@ class SqliteWorkflowAppRepository:
             conn.close()
 
 
+class SqliteUserRepository:
+    def __init__(self, db_path: str | Path):
+        self._db_path = str(Path(db_path).resolve())
+
+    def _conn(self) -> sqlite3.Connection:
+        return sqlite3.connect(self._db_path)
+
+    def create_user(
+        self,
+        user_id: str,
+        username: str,
+        password_hash: str,
+        role: str,
+        allow_all_apps: bool,
+        created_at: int,
+    ) -> User:
+        conn = self._conn()
+        try:
+            conn.execute(
+                """INSERT INTO user_account
+                   (id, username, password_hash, role, allow_all_apps, created_at, disabled_at)
+                   VALUES (?, ?, ?, ?, ?, ?, NULL)""",
+                (user_id, username, password_hash, role, 1 if allow_all_apps else 0, created_at),
+            )
+            conn.commit()
+            row = conn.execute(
+                "SELECT id, username, password_hash, role, allow_all_apps, created_at, disabled_at FROM user_account WHERE id = ?",
+                (user_id,),
+            ).fetchone()
+            assert row is not None
+            return _row_to_user(row)
+        finally:
+            conn.close()
+
+    def get_user_by_username(self, username: str) -> User | None:
+        conn = self._conn()
+        try:
+            row = conn.execute(
+                "SELECT id, username, password_hash, role, allow_all_apps, created_at, disabled_at FROM user_account WHERE username = ?",
+                (username,),
+            ).fetchone()
+            return _row_to_user(row) if row else None
+        finally:
+            conn.close()
+
+    def get_user_by_id(self, user_id: str) -> User | None:
+        conn = self._conn()
+        try:
+            row = conn.execute(
+                "SELECT id, username, password_hash, role, allow_all_apps, created_at, disabled_at FROM user_account WHERE id = ?",
+                (user_id,),
+            ).fetchone()
+            return _row_to_user(row) if row else None
+        finally:
+            conn.close()
+
+    def list_users(self) -> list[User]:
+        conn = self._conn()
+        try:
+            rows = conn.execute(
+                "SELECT id, username, password_hash, role, allow_all_apps, created_at, disabled_at FROM user_account ORDER BY created_at ASC"
+            ).fetchall()
+            return [_row_to_user(r) for r in rows]
+        finally:
+            conn.close()
+
+    def update_user(
+        self,
+        user_id: str,
+        *,
+        password_hash: str | None = None,
+        role: str | None = None,
+        allow_all_apps: bool | None = None,
+        disabled_at: int | None = None,
+        set_disabled_at: bool = False,
+    ) -> User | None:
+        updates: list[str] = []
+        params: list[Any] = []
+        if password_hash is not None:
+            updates.append("password_hash = ?")
+            params.append(password_hash)
+        if role is not None:
+            updates.append("role = ?")
+            params.append(role)
+        if allow_all_apps is not None:
+            updates.append("allow_all_apps = ?")
+            params.append(1 if allow_all_apps else 0)
+        if set_disabled_at:
+            updates.append("disabled_at = ?")
+            params.append(disabled_at)
+        if not updates:
+            return self.get_user_by_id(user_id)
+        conn = self._conn()
+        try:
+            params.append(user_id)
+            conn.execute(f"UPDATE user_account SET {', '.join(updates)} WHERE id = ?", params)
+            conn.commit()
+            return self.get_user_by_id(user_id)
+        finally:
+            conn.close()
+
+    def set_user_app_access(self, user_id: str, app_ids: list[str]) -> None:
+        conn = self._conn()
+        try:
+            conn.execute("DELETE FROM user_app_access WHERE user_id = ?", (user_id,))
+            if app_ids:
+                conn.executemany(
+                    "INSERT INTO user_app_access (user_id, app_id) VALUES (?, ?)",
+                    [(user_id, app_id) for app_id in app_ids],
+                )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def list_user_app_ids(self, user_id: str) -> list[str]:
+        conn = self._conn()
+        try:
+            rows = conn.execute(
+                "SELECT app_id FROM user_app_access WHERE user_id = ? ORDER BY app_id ASC",
+                (user_id,),
+            ).fetchall()
+            return [r[0] for r in rows]
+        finally:
+            conn.close()
+
+
 class SqliteRunRepository:
     def __init__(self, db_path: str | Path):
         self._db_path = str(Path(db_path).resolve())
@@ -838,19 +985,21 @@ class SqliteRunRepository:
         parent_run_id: str | None = None,
         parent_media_id: str | None = None,
         root_run_id: str | None = None,
+        owner_user_id: str | None = None,
     ) -> Run:
         conn = self._conn()
         try:
             group_id = run_group_id or id
             conn.execute(
                 """INSERT INTO run
-                   (id, project_id, workflow_version_id, app_id, created_at,
+                   (id, project_id, workflow_version_id, app_id, owner_user_id, created_at,
                     input_snapshot_json, metadata_snapshot_json, run_group_id, comfyui_url, comfyui_version_id)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                    ON CONFLICT(id) DO UPDATE SET
                        project_id = excluded.project_id,
                        workflow_version_id = excluded.workflow_version_id,
                        app_id = excluded.app_id,
+                       owner_user_id = COALESCE(run.owner_user_id, excluded.owner_user_id),
                        input_snapshot_json = COALESCE(run.input_snapshot_json, excluded.input_snapshot_json),
                        metadata_snapshot_json = COALESCE(run.metadata_snapshot_json, excluded.metadata_snapshot_json),
                        run_group_id = COALESCE(run.run_group_id, excluded.run_group_id),
@@ -862,6 +1011,7 @@ class SqliteRunRepository:
                     project_id,
                     workflow_version_id,
                     app_id,
+                    owner_user_id,
                     created_at,
                     input_snapshot_json,
                     metadata_snapshot_json,
@@ -906,6 +1056,7 @@ class SqliteRunRepository:
                 project_id=project_id,
                 workflow_version_id=workflow_version_id,
                 app_id=app_id,
+                owner_user_id=owner_user_id,
                 status=status,
                 created_at=created_at,
                 run_group_id=run_group_id,
