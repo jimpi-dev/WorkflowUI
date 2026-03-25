@@ -3,8 +3,31 @@ import { api } from '$lib/api';
 export type QueueSummary = {
 	seed?: number;
 	latent_resolution?: string;
-	runs?: number;
 	key_inputs?: { label: string; value: unknown }[];
+};
+
+export type QueueDetailInput = {
+	key: string;
+	label: string;
+	value: unknown;
+	display_value: string;
+	value_kind: 'scalar' | 'list' | 'object' | 'empty';
+	group: 'core' | 'text' | 'numeric' | 'boolean' | 'media' | 'other';
+	media_type?: 'image' | 'video' | 'audio';
+	preview_url?: string;
+};
+
+export type QueueDetails = {
+	total_inputs: number;
+	media_count: number;
+	groups: {
+		core: QueueDetailInput[];
+		text: QueueDetailInput[];
+		numeric: QueueDetailInput[];
+		boolean: QueueDetailInput[];
+		media: QueueDetailInput[];
+		other: QueueDetailInput[];
+	};
 };
 
 export type QueueItem = {
@@ -20,6 +43,7 @@ export type QueueItem = {
 	created_at?: number | null;
 	comfyui_unreachable_warning?: string | null;
 	summary?: QueueSummary;
+	details?: QueueDetails;
 };
 
 export type QueueResponse = {

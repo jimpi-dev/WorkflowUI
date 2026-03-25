@@ -397,6 +397,10 @@
         window.addEventListener('keydown', onKeyDown);
         return () => window.removeEventListener('keydown', onKeyDown);
     });
+    $effect(() => {
+        if (!focusedRunId) return;
+        if (!runs.some((run) => run.id === focusedRunId)) focusedRunId = null;
+    });
     function observeRunSection(node: HTMLElement, runId: string) {
         if (!browser) return;
         const observer = new IntersectionObserver(
