@@ -1753,6 +1753,11 @@
         visibility: hidden;
         pointer-events: none;
     }
+    .lightbox-open .app-mobile-run-bar {
+        visibility: hidden;
+        pointer-events: none;
+        z-index: -1;
+    }
 
     .edge-toggle {
         position: relative;

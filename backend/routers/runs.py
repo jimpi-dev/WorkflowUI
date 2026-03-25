@@ -1,11 +1,12 @@
 import json
+import mimetypes
 import time
 import uuid
 from pathlib import Path
 
 import requests
 from fastapi import APIRouter, HTTPException, Depends, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
 
 from authz import require_user, ensure_project_access, ensure_run_access, user_can_access_app
 from db.migrate import QUICK_RUNS_PROJECT_ID
@@ -30,6 +31,7 @@ from dependencies import (
 )
 from services.run_serialization import (
     build_updated_runs_response,
+    queue_item_details_from_run,
     queue_item_summary_from_run,
     safe_json_loads,
 )
@@ -428,8 +430,14 @@ def _queue_item(run_id: str, run_entity, app_repo, project_repo, mem_run: dict |
     }
     if run_entity:
         out["summary"] = queue_item_summary_from_run(run_entity, run_entity.input_snapshot_json)
+        out["details"] = queue_item_details_from_run(run_entity, run_entity.input_snapshot_json)
     else:
         out["summary"] = {}
+        out["details"] = {
+            "total_inputs": 0,
+            "media_count": 0,
+            "groups": {"core": [], "text": [], "numeric": [], "boolean": [], "media": [], "other": []},
+        }
     return out
 
 
@@ -604,6 +612,32 @@ def get_run_detail(run_id: str, db=Depends(get_db), service: MediaStorageService
         "child_run_ids": [r.id for r in run_repo.get_child_runs(run_id)] if run_repo else [],
     }
     return out
+
+
+@router.get("/runs/{run_id}/input-media")
+def get_run_input_media(run_id: str, filename: str, db=Depends(get_db), ctx=Depends(require_user)):
+    """Serve input media used by a run, guarded by run access checks."""
+    _, _, _, run_repo, _, _, _ = db
+    run_entity = ensure_run_access(run_id, ctx, run_repo)
+    if not filename or "/" in filename or "\\" in filename:
+        raise HTTPException(status_code=400, detail="Invalid filename")
+    allowed = False
+    if run_entity.input_snapshot_json:
+        try:
+            snap = json.loads(run_entity.input_snapshot_json)
+            values = snap.get("values") if isinstance(snap, dict) else {}
+            if isinstance(values, dict):
+                allowed = filename in {str(v) for v in values.values() if isinstance(v, str)}
+        except Exception:
+            allowed = False
+    if not allowed:
+        raise HTTPException(status_code=404, detail="Input media not found")
+    base = INPUT_DATA_DIR.resolve()
+    file_path = (INPUT_DATA_DIR / filename).resolve()
+    if not str(file_path).startswith(str(base)) or not file_path.is_file():
+        raise HTTPException(status_code=404, detail="Input media file not found")
+    media_type = mimetypes.guess_type(str(file_path))[0] or "application/octet-stream"
+    return FileResponse(path=str(file_path), media_type=media_type, filename=filename)
 
 
 @router.post("/runs/{run_id}/save")
