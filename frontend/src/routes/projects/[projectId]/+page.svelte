@@ -3059,6 +3059,7 @@ let lightboxDeletePending = $state<
 			runId={metadataPanelRunId}
 			projectId={data.projectId}
 			mode={metadataPanelMode}
+			embedWorkflowuiMetadataOnDownload={data.embedWorkflowuiMetadataOnDownload ?? false}
 			onClose={() => { metadataPanelRunId = null; }}
 		/>
 	{/if}
