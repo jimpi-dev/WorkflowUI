@@ -29,6 +29,9 @@ from dependencies import (
     get_executor,
     get_run_queue_state,
 )
+from routers.execution import load_run_output_content_bytes
+from services.comfyui_embedded_detect import file_has_embedded_comfyui_metadata
+from services.workflowui_embedded_detect import file_has_embedded_workflowui_metadata
 from services.run_serialization import (
     build_updated_runs_response,
     queue_item_details_from_run,
@@ -612,6 +615,76 @@ def get_run_detail(run_id: str, db=Depends(get_db), service: MediaStorageService
         "child_run_ids": [r.id for r in run_repo.get_child_runs(run_id)] if run_repo else [],
     }
     return out
+
+
+@router.get("/runs/{run_id}/output-workflowui-embedded")
+def get_run_output_workflowui_embedded(
+    run_id: str,
+    output_index: int = 0,
+    state=Depends(get_run_queue_state),
+    service: MediaStorageService = Depends(get_media_storage_service),
+    db=Depends(get_db),
+    ctx=Depends(require_user),
+):
+    """Embedded metadata: WorkflowUI (restore JSON) vs ComfyUI (PNG chunks or MP4 moov JSON)."""
+    _, _, _, run_repo, _, _, _ = db
+    run_entity = ensure_run_access(run_id, ctx, run_repo)
+    entries = []
+    try:
+        if run_entity.media_json:
+            entries = json.loads(run_entity.media_json)
+        elif run_entity.images_json:
+            entries = json.loads(run_entity.images_json)
+    except Exception:
+        entries = []
+    if not isinstance(entries, list) or output_index < 0 or output_index >= len(entries):
+        raise HTTPException(status_code=400, detail="Invalid output index")
+    ent = entries[output_index]
+    if not isinstance(ent, dict):
+        raise HTTPException(status_code=400, detail="Invalid output")
+    if ent.get("remote_deleted"):
+        return {
+            "hasEmbeddedWorkflowuiMetadata": False,
+            "hasWorkflowuiEmbeddedMetadata": False,
+            "hasComfyuiEmbeddedMetadata": False,
+            "comfyuiEmbeddedCheckApplicable": False,
+            "unavailable": True,
+            "reason": "remote_deleted",
+        }
+    filename = str(ent.get("filename") or "")
+    subfolder = str(ent.get("subfolder") or "")
+    typ = str(ent.get("type") or ent.get("kind") or "output")
+    try:
+        content, _ = load_run_output_content_bytes(
+            filename,
+            subfolder,
+            typ,
+            run_id,
+            preview=None,
+            state=state,
+            service=service,
+            db=db,
+            ctx=ctx,
+        )
+    except HTTPException:
+        raise
+    except Exception:
+        return {
+            "hasEmbeddedWorkflowuiMetadata": None,
+            "hasWorkflowuiEmbeddedMetadata": None,
+            "hasComfyuiEmbeddedMetadata": None,
+            "comfyuiEmbeddedCheckApplicable": False,
+            "unavailable": True,
+            "reason": "fetch_failed",
+        }
+    has_wf = file_has_embedded_workflowui_metadata(content, filename, typ)
+    has_comfy, comfy_applicable = file_has_embedded_comfyui_metadata(content)
+    return {
+        "hasEmbeddedWorkflowuiMetadata": has_wf,
+        "hasWorkflowuiEmbeddedMetadata": has_wf,
+        "hasComfyuiEmbeddedMetadata": has_comfy,
+        "comfyuiEmbeddedCheckApplicable": comfy_applicable,
+    }
 
 
 @router.get("/runs/{run_id}/input-media")

@@ -1456,6 +1456,7 @@
         <RunMetadataPanel
             runId={metadataPanelRunId}
             projectId={currentProject?.id ?? null}
+            embedWorkflowuiMetadataOnDownload={data.embedWorkflowuiMetadataOnDownload ?? false}
             onClose={() => { metadataPanelRunId = null; }}
         />
     {/if}
