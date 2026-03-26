@@ -795,6 +795,32 @@ async def delete_run_remote_images(run_id: str, request: Request, db=Depends(get
     return build_updated_runs_response(result, app_repo, run_repo)
 
 
+@router.post("/runs/{run_id}/remove-outputs")
+async def remove_run_outputs(run_id: str, request: Request, db=Depends(get_db), service: MediaStorageService = Depends(get_media_storage_service)):
+    try:
+        raw = await request.body()
+        body = json.loads(raw) if raw else {}
+    except Exception:
+        body = {}
+    indices = body.get("indices")
+    if not isinstance(indices, list):
+        raise HTTPException(
+            status_code=400,
+            detail="Body must be JSON with an 'indices' array, e.g. {\"indices\": [0]}",
+        )
+    try:
+        indices = [int(x) for x in indices]
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="indices must be integers")
+    if any(i < 0 for i in indices):
+        raise HTTPException(status_code=400, detail="indices must be non-negative")
+    result = service.remove_outputs_without_local_copy(run_id, indices)
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=result.get("error", "Remove failed"))
+    _, _, app_repo, run_repo, _, _, _ = db
+    return build_updated_runs_response(result, app_repo, run_repo)
+
+
 @router.post("/runs/{run_id}/delete-local")
 def delete_run_local(run_id: str, service: MediaStorageService = Depends(get_media_storage_service)):
     result = service.delete_local(run_id, None)

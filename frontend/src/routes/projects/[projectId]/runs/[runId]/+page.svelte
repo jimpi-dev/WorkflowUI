@@ -2,12 +2,14 @@
 	import { onMount } from 'svelte';
 	import { getApiBase } from '$lib/config';
 	import { browser } from '$app/environment';
+	import { invalidateAll } from '$app/navigation';
 	import SendToAppDialog from '$lib/components/SendToAppDialog.svelte';
 
 	let { data } = $props();
 
 	let sendToAppOutputIndex = $state<number | null>(null);
 	let isMobile = $state(false);
+	let removingOutputIndex = $state<number | null>(null);
 
 	const apiBase = getApiBase() || '';
 
@@ -23,6 +25,33 @@
 	}
 	function markImageLoadFailed(index: number) {
 		imageLoadFailed = new Set([...imageLoadFailed, imageKey(index)]);
+	}
+
+	function truncateOutputFilename(name: string, maxLen = 28): string {
+		const n = (name || '').trim();
+		if (n.length <= maxLen) return n;
+		const keep = maxLen - 1;
+		const a = Math.ceil(keep / 2);
+		const b = Math.floor(keep / 2);
+		return `${n.slice(0, a)}…${n.slice(-b)}`;
+	}
+
+	async function removeOutputFromRunDetail(imageIndex: number) {
+		if (!data.run) return;
+		removingOutputIndex = imageIndex;
+		try {
+			const res = await fetch(`${apiBase}/runs/${data.run.id}/remove-outputs`, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ indices: [imageIndex] }),
+			});
+			if (res.ok) {
+				imageLoadFailed = new Set();
+				await invalidateAll();
+			}
+		} finally {
+			removingOutputIndex = null;
+		}
 	}
 
 	onMount(() => {
@@ -55,6 +84,19 @@
 				<div class="image-card">
 					{#if data.run.images[0].remote_deleted && imageLoadFailed.has(imageKey(0))}
 						<div class="run-detail-deleted">Deleted</div>
+					{:else if !data.run.images[0].remote_deleted && imageLoadFailed.has(imageKey(0))}
+						<div class="output-not-found-detail">
+							<span class="output-not-found-detail-title">Not found</span>
+							<span class="output-not-found-detail-fn" title={data.run.images[0].filename ?? ''}>{truncateOutputFilename(data.run.images[0].filename ?? '')}</span>
+							<button
+								type="button"
+								class="output-remove-from-run-btn"
+								disabled={removingOutputIndex === 0}
+								onclick={() => removeOutputFromRunDetail(0)}
+							>
+								{removingOutputIndex === 0 ? 'Removing…' : 'Remove from run'}
+							</button>
+						</div>
 					{:else if data.run.images[0].type === 'video'}
 						<video src={imageUrl(data.run.images[0], data.run.id)} controls playsinline class="run-detail-media" onerror={() => markImageLoadFailed(0)}><track kind="captions" /></video>
 					{:else}
@@ -182,12 +224,27 @@
 							<div class="output-img-wrap">
 								{#if img.remote_deleted && imageLoadFailed.has(imageKey(i))}
 									<div class="output-deleted-placeholder">Deleted</div>
+								{:else if !img.remote_deleted && imageLoadFailed.has(imageKey(i))}
+									<div class="output-not-found-placeholder-detail">
+										<span class="output-not-found-detail-title">Not found</span>
+										<span class="output-not-found-detail-fn" title={img.filename ?? ''}>{truncateOutputFilename(img.filename ?? '')}</span>
+										<button
+											type="button"
+											class="output-remove-from-run-btn"
+											disabled={removingOutputIndex === i}
+											onclick={() => removeOutputFromRunDetail(i)}
+										>
+											{removingOutputIndex === i ? 'Removing…' : 'Remove from run'}
+										</button>
+									</div>
 								{:else if img.type === 'video'}
 									<video src={imageUrl(img, data.run.id)} controls playsinline class="output-media" onerror={() => markImageLoadFailed(i)}><track kind="captions" /></video>
 								{:else}
 									<img src={imageUrl(img, data.run.id)} alt="Output {i + 1}" onerror={() => markImageLoadFailed(i)} />
 								{/if}
-								<button type="button" class="send-to-app-link send-to-app-btn" title="Send to App" onclick={() => sendToAppOutputIndex = i}>Send to App</button>
+								{#if !imageLoadFailed.has(imageKey(i))}
+									<button type="button" class="send-to-app-link send-to-app-btn" title="Send to App" onclick={() => sendToAppOutputIndex = i}>Send to App</button>
+								{/if}
 							</div>
 						{/each}
 					</div>
@@ -276,6 +333,46 @@
 		background: var(--surface);
 		color: var(--text-muted);
 		font-size: 0.9rem;
+	}
+	.output-not-found-detail,
+	.output-not-found-placeholder-detail {
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		justify-content: center;
+		gap: 0.5rem;
+		min-height: 120px;
+		padding: 0.75rem;
+		text-align: center;
+		background: var(--surface);
+		color: var(--text-muted);
+		font-size: 0.85rem;
+	}
+	.output-not-found-detail-title {
+		font-weight: 600;
+		color: var(--text);
+	}
+	.output-not-found-detail-fn {
+		word-break: break-all;
+		font-size: 0.8rem;
+		line-height: 1.25;
+	}
+	.output-remove-from-run-btn {
+		padding: 0.35rem 0.65rem;
+		font-size: 0.8rem;
+		border-radius: 6px;
+		border: 1px solid var(--border);
+		background: var(--input-bg);
+		color: var(--text);
+		cursor: pointer;
+	}
+	.output-remove-from-run-btn:hover:not(:disabled) {
+		border-color: var(--accent);
+		color: var(--accent);
+	}
+	.output-remove-from-run-btn:disabled {
+		opacity: 0.65;
+		cursor: not-allowed;
 	}
 	.run-detail-deleted {
 		max-height: 320px;
