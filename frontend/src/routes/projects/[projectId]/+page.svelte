@@ -1560,6 +1560,44 @@ let leftPanelCollapsedBeforeFocus = $state<boolean | null>(null);
 		}
 	}
 
+	function truncateOutputFilename(name: string, maxLen = 28): string {
+		const n = (name || '').trim();
+		if (n.length <= maxLen) return n;
+		const keep = maxLen - 1;
+		const a = Math.ceil(keep / 2);
+		const b = Math.floor(keep / 2);
+		return `${n.slice(0, a)}…${n.slice(-b)}`;
+	}
+
+	async function removeOutputsFromRun(groupId: string, runId: string, imageIndex: number) {
+		deleteError = null;
+		const key = `${runId}_${imageIndex}`;
+		deletingImageKeys = new Set([...deletingImageKeys, key]);
+		try {
+			const res = await fetch(`${apiBase}/runs/${runId}/remove-outputs`, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ indices: [imageIndex] }),
+			});
+			const payload = await res.json().catch(() => ({}));
+			if (res.ok) {
+				mergeUpdatedRuns(payload.updated_runs);
+				refetchStorageSizesForRunIds([runId]);
+				selectedInGroup = { ...selectedInGroup, [groupId]: new Set() };
+				thumbLoadFailed = new Set(
+					[...thumbLoadFailed].filter((k) => !k.startsWith(`${groupId}-${runId}-`)),
+				);
+			} else {
+				deleteError =
+					typeof payload?.detail === 'string' ? payload.detail : payload?.error ?? 'Remove failed';
+			}
+		} finally {
+			const next = new Set(deletingImageKeys);
+			next.delete(key);
+			deletingImageKeys = next;
+		}
+	}
+
 	async function deleteRemoteSelectedOrGroup(group: (typeof runGroups)[0]) {
 		const byRun = getSelectedByRun(group);
 		if (byRun.size > 0) {
@@ -2838,8 +2876,11 @@ let lightboxDeletePending = $state<
 													{@const isVideo = itemType === 'video'}
 													{@const isAudio = itemType === 'audio'}
 													{@const thumbKey = `${group.groupId}-${run.id}-${origI}`}
-													{@const showDeletedPlaceholder = isRemoteDeleted && thumbLoadFailed.has(thumbKey)}
-													{@const isLoaded = !!loadedThumbIds[thumbKey] || showDeletedPlaceholder}
+													{@const thumbFailed = thumbLoadFailed.has(thumbKey)}
+													{@const showDeletedPlaceholder = isRemoteDeleted && thumbFailed}
+													{@const showNotFoundPlaceholder = !isRemoteDeleted && thumbFailed}
+													{@const showAnyMediaPlaceholder = showDeletedPlaceholder || showNotFoundPlaceholder}
+													{@const isLoaded = !!loadedThumbIds[thumbKey] || showAnyMediaPlaceholder}
 													{@const isDeleting = deletingImageKeys.has(key) || deletingLocalImageKeys.has(key) || deletingBothImageKeys.has(key)}
 													{@const hasLocalStorage = run.local_storage_status === 'saved' || run.local_storage_status === 'partial'}
 													<div
@@ -2848,6 +2889,7 @@ let lightboxDeletePending = $state<
 														class:output-thumb-video={isVideo}
 														class:output-thumb-audio={isAudio}
 														class:output-thumb-deleted={showDeletedPlaceholder}
+														class:output-thumb-not-found={showNotFoundPlaceholder}
 														class:output-thumb-deleting={isDeleting}
 														class:audio-playing={isAudio && playingAudioThumbKey === thumbKey}
 														class:thumb-selected={isImageSelected(group.groupId, key)}
@@ -2856,7 +2898,7 @@ let lightboxDeletePending = $state<
 														tabindex="0"
 														use:thumbLoadFallback={{ groupId: group.groupId, runId: run.id, index: origI, thumbKey }}
 														onclick={(e) => {
-														if (showDeletedPlaceholder || isDeleting) return;
+														if (showAnyMediaPlaceholder || isDeleting) return;
 														const target = e.target as HTMLElement;
 														const thumb = target.closest('.output-thumb');
 														const audio = thumb?.querySelector<HTMLAudioElement>('audio');
@@ -2875,7 +2917,7 @@ let lightboxDeletePending = $state<
 													}}
 													onkeydown={(e) => {
 														if (e.key !== 'Enter') return;
-														if (showDeletedPlaceholder || isDeleting) return;
+														if (showAnyMediaPlaceholder || isDeleting) return;
 														if ((e.target as HTMLElement).closest('.output-thumb-audio-play-btn, .output-thumb-audio-controls-wrap')) return;
 														openLightboxFromImage(group, run, origI);
 													}}
@@ -2901,8 +2943,8 @@ let lightboxDeletePending = $state<
 															showFavorite={true}
 															showSelection={true}
 															showSeed={true}
-															showDownload={!showDeletedPlaceholder}
-															showSendToApp={!showDeletedPlaceholder}
+															showDownload={!showAnyMediaPlaceholder}
+															showSendToApp={!showAnyMediaPlaceholder}
 															onMetadataClick={() => { metadataPanelRunId = run.id; metadataPanelMode = 'output'; }}
 															onToggleFavorite={() => toggleFavorite(run.id)}
 															onToggleSelection={() => toggleImageSelection(group.groupId, key)}
@@ -2917,6 +2959,27 @@ let lightboxDeletePending = $state<
 																		<path d="M8 6l1 14h6l1-14"/>
 																	</svg>
 																	<span>Deleted</span>
+																</div>
+															{:else if showNotFoundPlaceholder}
+																<div class="output-thumb-not-found-placeholder">
+																	<span class="output-thumb-not-found-label" aria-hidden="true">Not found</span>
+																	<span class="output-thumb-not-found-filename" title={(item as { filename?: string }).filename ?? ''}>{truncateOutputFilename((item as { filename?: string }).filename ?? '')}</span>
+																	<button
+																		type="button"
+																		class="output-thumb-remove-from-run-btn"
+																		disabled={isDeleting}
+																		title="Remove this missing file from the run record"
+																		aria-label="Remove missing output from run"
+																		onkeydown={(e) => e.stopPropagation()}
+																		onpointerdown={(e) => e.stopPropagation()}
+																		onmousedown={(e) => e.stopPropagation()}
+																		onclick={(e) => {
+																			e.stopPropagation();
+																			removeOutputsFromRun(group.groupId, run.id, origI);
+																		}}
+																	>
+																		Remove from run
+																	</button>
 																</div>
 															{:else if isVideo}
 																<video
@@ -2936,7 +2999,7 @@ let lightboxDeletePending = $state<
 																		if (v) { v.currentTime = 0; v.pause(); }
 																		markThumbLoaded(group.groupId, run.id, origI);
 																	}}
-																	onerror={() => { markThumbLoaded(group.groupId, run.id, origI); if (isRemoteDeleted) markThumbLoadFailed(thumbKey); }}
+																	onerror={() => { markThumbLoaded(group.groupId, run.id, origI); markThumbLoadFailed(thumbKey); }}
 																></video>
 																<span class="output-thumb-play" aria-hidden="true" title="Play video">
 																	<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>
@@ -2967,7 +3030,7 @@ let lightboxDeletePending = $state<
 																			playsinline
 																			onloadeddata={() => markThumbLoaded(group.groupId, run.id, origI)}
 																			onloadedmetadata={() => markThumbLoaded(group.groupId, run.id, origI)}
-																			onerror={() => { markThumbLoaded(group.groupId, run.id, origI); if (isRemoteDeleted) markThumbLoadFailed(thumbKey); }}
+																			onerror={() => { markThumbLoaded(group.groupId, run.id, origI); markThumbLoadFailed(thumbKey); }}
 																			onplay={(e) => {
 																				const el = e.currentTarget as HTMLAudioElement;
 																				document.querySelectorAll('audio').forEach((a) => { if (a !== el) a.pause(); });
@@ -2985,7 +3048,7 @@ let lightboxDeletePending = $state<
 																	alt=""
 																	loading="lazy"
 																	onload={() => markThumbLoaded(group.groupId, run.id, origI)}
-																	onerror={() => { markThumbLoaded(group.groupId, run.id, origI); if (isRemoteDeleted) markThumbLoadFailed(thumbKey); }}
+																	onerror={() => { markThumbLoaded(group.groupId, run.id, origI); markThumbLoadFailed(thumbKey); }}
 																/>
 															{/if}
 														</ThumbnailOverlay>
@@ -4757,8 +4820,53 @@ let lightboxDeletePending = $state<
 	@keyframes thumb-spin {
 		to { transform: rotate(360deg); }
 	}
-	.output-thumb-deleted .thumb-loading {
+	.output-thumb-deleted .thumb-loading,
+	.output-thumb-not-found .thumb-loading {
 		display: none;
+	}
+	.output-thumb-not-found-placeholder {
+		position: absolute;
+		inset: 0;
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		justify-content: center;
+		gap: 0.35rem;
+		padding: 0.5rem;
+		text-align: center;
+		background: var(--surface);
+		color: var(--muted);
+		font-size: 0.7rem;
+		z-index: 1;
+	}
+	.output-thumb-not-found-label {
+		font-weight: 600;
+		color: var(--text);
+		font-size: 0.72rem;
+	}
+	.output-thumb-not-found-filename {
+		word-break: break-all;
+		line-height: 1.2;
+		max-height: 3.6em;
+		overflow: hidden;
+	}
+	.output-thumb-remove-from-run-btn {
+		margin-top: 0.25rem;
+		padding: 0.25rem 0.5rem;
+		font-size: 0.68rem;
+		border-radius: 6px;
+		border: 1px solid var(--border);
+		background: var(--bg);
+		color: var(--text);
+		cursor: pointer;
+	}
+	.output-thumb-remove-from-run-btn:hover:not(:disabled) {
+		border-color: var(--accent);
+		color: var(--accent);
+	}
+	.output-thumb-remove-from-run-btn:disabled {
+		opacity: 0.6;
+		cursor: not-allowed;
 	}
 	.output-thumb-deleted-placeholder {
 		position: absolute;
