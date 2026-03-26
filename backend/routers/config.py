@@ -18,6 +18,7 @@ from services.comfyui_info import (
     COMFYUI_STATUS_TTL_SEC,
     WORKFLOWUI_PLUGIN_MIN_VERSION,
 )
+from services.comfyui_workflow_fetch import fetch_workflow_from_comfyui
 from version import ENGINE_VERSION
 
 from dependencies import COMFY_URL, get_db, get_run_queue_state
@@ -301,24 +302,8 @@ def get_comfyui_workflows():
 @router.get("/comfyui/workflows/{workflow_id}")
 def get_comfyui_workflow(workflow_id: str):
     """Fetch a single workflow (name + graph) from ComfyUI plugin for preview/load. Does not create workflow or app."""
-    import requests
-    base = (COMFY_URL or "").rstrip("/")
-    if not base:
-        raise HTTPException(status_code=503, detail="ComfyUI URL not configured")
-    url = f"{base}/workflowui/workflows/{requests.utils.quote(workflow_id, safe='')}"
-    try:
-        r = requests.get(url, timeout=15)
-        r.raise_for_status()
-        data = r.json()
-    except requests.RequestException as e:
-        raise HTTPException(status_code=502, detail=f"ComfyUI plugin unreachable: {e!s}") from e
-    if not isinstance(data, dict):
-        raise HTTPException(status_code=502, detail="ComfyUI plugin returned invalid response")
-    graph = data.get("graph")
-    name = data.get("name") or workflow_id or "Imported from ComfyUI"
-    if not isinstance(graph, dict) or not graph:
-        raise HTTPException(status_code=502, detail="ComfyUI plugin did not return a valid workflow graph")
-    return {"name": (name or "Imported from ComfyUI").strip() or "Imported from ComfyUI", "graph": graph}
+    name, graph = fetch_workflow_from_comfyui(COMFY_URL, workflow_id)
+    return {"name": name, "graph": graph}
 
 @router.patch("/admin/media-storage")
 def patch_media_storage(body: dict, _=Depends(require_admin)):

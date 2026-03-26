@@ -3,11 +3,11 @@ import logging
 import time
 import uuid
 
-import requests
 from fastapi import APIRouter, HTTPException, Depends, UploadFile, File
 
 from services.workflow_import_service import IdempotentImport
 from services.workflow_convert import convert_workflow_via_comfy, is_api_format_prompt
+from services.comfyui_workflow_fetch import fetch_workflow_from_comfyui
 
 logger = logging.getLogger(__name__)
 from services.png_metadata import read_workflowui_chunk
@@ -311,26 +311,7 @@ def _minimal_app_payload(workflow_name: str, graph: dict, db) -> dict:
 
 def _fetch_workflow_from_comfyui_plugin(workflow_id: str):
     """Fetch workflow in API format from ComfyUI WorkflowUI plugin. Returns (name, graph) or raises HTTPException."""
-    base = (COMFY_URL or "").rstrip("/")
-    if not base:
-        raise HTTPException(status_code=503, detail="ComfyUI URL not configured")
-    url = f"{base}/workflowui/workflows/{requests.utils.quote(workflow_id, safe='')}"
-    try:
-        r = requests.get(url, timeout=15)
-        r.raise_for_status()
-        data = r.json()
-    except requests.RequestException as e:
-        raise HTTPException(
-            status_code=502,
-            detail=f"ComfyUI plugin unreachable: {e!s}",
-        ) from e
-    if not isinstance(data, dict):
-        raise HTTPException(status_code=502, detail="ComfyUI plugin returned invalid response")
-    graph = data.get("graph")
-    name = data.get("name") or workflow_id or "Imported from ComfyUI"
-    if not isinstance(graph, dict) or not graph:
-        raise HTTPException(status_code=502, detail="ComfyUI plugin did not return a valid workflow graph")
-    return name.strip() or "Imported from ComfyUI", graph
+    return fetch_workflow_from_comfyui(COMFY_URL, workflow_id)
 
 
 @router.post("/import/from-comfyui")
