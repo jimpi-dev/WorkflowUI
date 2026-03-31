@@ -101,6 +101,64 @@ import { get } from 'svelte/store';
 	function markThumbLoadFailed(thumbKey: string) {
 		thumbLoadFailed = new Set([...thumbLoadFailed, thumbKey]);
 	}
+	let mediaResolutionByImageKey = $state<Record<string, { width: number; height: number }>>({});
+	const videoResolutionFetchInFlight = new Set<string>();
+	function setMediaResolution(key: string, width: number, height: number) {
+		if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) return;
+		const w = Math.round(width);
+		const h = Math.round(height);
+		const prev = mediaResolutionByImageKey[key];
+		if (prev && prev.width === w && prev.height === h) return;
+		mediaResolutionByImageKey = { ...mediaResolutionByImageKey, [key]: { width: w, height: h } };
+	}
+	function mediaResolutionLabel(key: string): string | undefined {
+		const dim = mediaResolutionByImageKey[key];
+		return dim ? `${dim.width}×${dim.height}` : undefined;
+	}
+	function onImageThumbLoad(groupId: string, runId: string, index: number, event: Event) {
+		markThumbLoaded(groupId, runId, index);
+		const img = event.currentTarget as HTMLImageElement | null;
+		if (!img) return;
+		setMediaResolution(imageKey(runId, index), img.naturalWidth, img.naturalHeight);
+	}
+	function onVideoThumbMetadataLoad(
+		groupId: string,
+		runId: string,
+		index: number,
+		thumbKey: string,
+		event: Event,
+	) {
+		// Only begin playback if the same thumb is still hovered.
+		if (playingVideoThumbKey !== thumbKey) return;
+		const v = event.currentTarget as HTMLVideoElement | null;
+		if (v) {
+			v.currentTime = 0;
+			setMediaResolution(imageKey(runId, index), v.videoWidth, v.videoHeight);
+		}
+		playingVideoThumbReady = true;
+		markThumbLoaded(groupId, runId, index);
+	}
+	function preloadVideoResolutionOnce(runId: string, index: number, url: string) {
+		if (!browser) return;
+		const key = imageKey(runId, index);
+		if (mediaResolutionByImageKey[key] || videoResolutionFetchInFlight.has(key)) return;
+		videoResolutionFetchInFlight.add(key);
+		const el = document.createElement('video');
+		el.preload = 'metadata';
+		el.muted = true;
+		el.playsInline = true;
+		const cleanup = () => {
+			el.removeAttribute('src');
+			el.load();
+			videoResolutionFetchInFlight.delete(key);
+		};
+		el.onloadedmetadata = () => {
+			setMediaResolution(key, el.videoWidth, el.videoHeight);
+			cleanup();
+		};
+		el.onerror = cleanup;
+		el.src = url;
+	}
 
 
 	let playingAudioThumbKey = $state<string | null>(null);
@@ -3210,6 +3268,7 @@ let lightboxDeletePending = $state<
 														{/if}
 														<ThumbnailOverlay
 															mediaType={isVideo ? 'video' : isAudio ? 'audio' : 'image'}
+															resolution={isAudio ? undefined : mediaResolutionLabel(key)}
 															seed={run.seed ?? undefined}
 															executionTimeSec={run.execution_time ?? undefined}
 															isFavorite={favorites.has(run.id)}
@@ -3266,16 +3325,7 @@ let lightboxDeletePending = $state<
 																		playsinline
 																		loop
 																		aria-hidden="true"
-																		onloadedmetadata={(e) => {
-																			// Only begin playback if the same thumb is still hovered.
-																			if (playingVideoThumbKey !== thumbKey) return;
-																			const v = e.currentTarget;
-																			if (v) {
-																				v.currentTime = 0;
-																			}
-																			playingVideoThumbReady = true;
-																			markThumbLoaded(group.groupId, run.id, origI);
-																		}}
+																		onloadedmetadata={(e) => onVideoThumbMetadataLoad(group.groupId, run.id, origI, thumbKey, e)}
 																		onerror={() => {
 																			if (playingVideoThumbKey !== thumbKey) return;
 																			playingVideoThumbReady = true;
@@ -3288,7 +3338,10 @@ let lightboxDeletePending = $state<
 																		src={thumbSrc(thumbKey, videoThumbnailPreviewUrl(item, run.id))}
 																		alt=""
 																		loading="lazy"
-																		onload={() => markThumbLoaded(group.groupId, run.id, origI)}
+																		onload={() => {
+																			markThumbLoaded(group.groupId, run.id, origI);
+																			preloadVideoResolutionOnce(run.id, origI, imageUrl(item, run.id));
+																		}}
 																		onerror={() => { markThumbLoaded(group.groupId, run.id, origI); markThumbLoadFailed(thumbKey); }}
 																	/>
 																{/if}
@@ -3338,7 +3391,7 @@ let lightboxDeletePending = $state<
 																	src={thumbSrc(thumbKey, imageUrl(item, run.id))}
 																	alt=""
 																	loading="lazy"
-																	onload={() => markThumbLoaded(group.groupId, run.id, origI)}
+																	onload={(e) => onImageThumbLoad(group.groupId, run.id, origI, e)}
 																	onerror={() => { markThumbLoaded(group.groupId, run.id, origI); markThumbLoadFailed(thumbKey); }}
 																/>
 															{/if}
