@@ -19,10 +19,12 @@ import LatentResolutionSection from './LatentResolutionSection.svelte';
 import CheckpointCombo from './CheckpointCombo.svelte';
 import ClipCombo from './ClipCombo.svelte';
 import VaeCombo from './VaeCombo.svelte';
+import type { MediaBrowserSelection } from '$lib/types/mediaBrowser';
 
     export let inputs: WorkflowInput[];
     export let values: Record<string, any>;
     export let appId: string | null = null;
+    export let projectId: string | null = null;
     export let onLoraToggle: (() => void) | undefined = undefined;
     export let extraLoraSlots: Record<string, string[]> = {};
     export let canEditLoras = false;
@@ -41,6 +43,9 @@ import VaeCombo from './VaeCombo.svelte';
     export let presetCreationOn = false;
     export let presetKeysToSave: Set<string> | string[] = [];
     export let onPresetKeyToggle: ((key: string, included: boolean) => void) | undefined = undefined;
+    export let onImageMediaSelection:
+        | ((inputKey: string, selection: MediaBrowserSelection | null) => void)
+        | undefined = undefined;
 
     $: selectedPresetKeys = Array.isArray(presetKeysToSave) ? presetKeysToSave : [...presetKeysToSave];
 
@@ -767,10 +772,12 @@ import VaeCombo from './VaeCombo.svelte';
                                                 {input}
                                                 bind:value={values[input.key]}
                                                 {appId}
+                                                {projectId}
                                                 prefillRunId={input.key === prefillImageInputKey ? prefillImageRunId : null}
                                                 prefillSubfolder={input.key === prefillImageInputKey ? prefillImageSubfolder : ''}
                                                 prefillType={input.key === prefillImageInputKey ? prefillImageType : 'image'}
                                                 overrideDisplayValue={input.key === prefillImageInputKey && prefillImageFilename ? prefillImageFilename : undefined}
+                                                onMediaSelection={(selection) => onImageMediaSelection?.(input.key, selection)}
                                             />
 
                                         {:else if input.type === 'video'}

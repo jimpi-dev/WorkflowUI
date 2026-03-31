@@ -8,6 +8,7 @@
     import { buildRunValues } from '$lib/run/buildRunPayload';
     import { pollRunStatus } from '$lib/run/pollRunStatus';
     import { safeUUID } from '$lib/utils/id';
+    import type { MediaBrowserSelection } from '$lib/types/mediaBrowser';
 
     export let workflowId: string;
     export let appId: string | null = null;
@@ -64,6 +65,17 @@
     }
     
     const runIdToBackendIds = new Map<string, Set<string>>();
+    let inputMediaSelections: Record<string, MediaBrowserSelection> = {};
+
+    function setImageMediaSelection(inputKey: string, selection: MediaBrowserSelection | null) {
+        if (selection) {
+            inputMediaSelections = { ...inputMediaSelections, [inputKey]: selection };
+            return;
+        }
+        if (!(inputKey in inputMediaSelections)) return;
+        const { [inputKey]: _, ...rest } = inputMediaSelections;
+        inputMediaSelections = rest;
+    }
 
     function getMergedBindings(): { key: string; nodeId: string; field: string }[] {
         const base = workflowModel.bindings ?? [];
@@ -161,7 +173,21 @@
             };
             if (appId) body.app_id = appId;
             if (projectId) body.project_id = projectId;
-            if (sendFromContext && runValues[sendFromContext.inputKey] === sendFromContext.filename) {
+            const selectedGenerationRef = Object.entries(inputMediaSelections).find(([inputKey, sel]) => {
+                if (!sel || sel.source !== 'generation') return false;
+                if (!sel.runId || sel.outputIndex == null) return false;
+                return runValues[inputKey] === sel.filename;
+            });
+            if (selectedGenerationRef) {
+                const [inputKey, selected] = selectedGenerationRef;
+                body.parent_run_id = selected.runId;
+                body.parent_media_id = `${selected.runId}:${selected.outputIndex}`;
+                body.input_from_run = {
+                    run_id: selected.runId,
+                    output_index: selected.outputIndex,
+                    input_key: inputKey
+                };
+            } else if (sendFromContext && runValues[sendFromContext.inputKey] === sendFromContext.filename) {
                 body.parent_run_id = sendFromContext.runId;
                 body.parent_media_id = `${sendFromContext.runId}:${sendFromContext.outputIndex}`;
                 body.input_from_run = {
@@ -296,6 +322,7 @@
                 form_label={workflowModel.form_label}
                 bind:values
                 appId={appId}
+                projectId={projectId}
                 extraLoraSlots={extraLoraSlots}
                 canEditLoras={canEditLoras}
                 prefilledFromRun={prefilledFromRun}
@@ -312,6 +339,7 @@
                 presetCreationOn={presetCreationOn}
                 presetKeysToSave={presetKeysToSave}
                 onPresetKeyToggle={onPresetKeyToggle}
+                onImageMediaSelection={setImageMediaSelection}
         />
         <div class="mobile-run-actions" role="group" aria-label="Run actions">
             <button

@@ -419,6 +419,74 @@ def list_project_runs(
     return {"runs": out, "total": total}
 
 
+@router.get("/media-browser/images")
+def list_media_browser_images(
+    project_id: str | None = None,
+    source: str = "all",
+    app_id: str | None = None,
+    since: int | None = None,
+    until: int | None = None,
+    q: str | None = None,
+    favorites_only: bool = False,
+    limit: int = 60,
+    offset: int = 0,
+    db=Depends(get_db),
+    ctx=Depends(require_user),
+):
+    _, _, _, run_repo, _, _, _ = db
+    source_norm = (source or "all").strip().lower()
+    if source_norm not in {"all", "generation", "input"}:
+        raise HTTPException(status_code=400, detail="source must be one of: all, generation, input")
+    safe_limit = max(1, min(int(limit), 200))
+    safe_offset = max(0, int(offset))
+    query_text = q.strip() if isinstance(q, str) and q.strip() else None
+    items, total = run_repo.list_media_browser_images(
+        owner_user_id=ctx.user.id if (ctx.auth_enabled and ctx.user) else None,
+        auth_enabled=bool(ctx.auth_enabled),
+        project_id=project_id.strip() if isinstance(project_id, str) and project_id.strip() else None,
+        source=source_norm,
+        app_id=app_id.strip() if isinstance(app_id, str) and app_id.strip() else None,
+        since_ts=since,
+        until_ts=until,
+        q=query_text,
+        favorites_only=bool(favorites_only),
+        limit=safe_limit,
+        offset=safe_offset,
+    )
+    # No-leakage contract: totals and results are computed only from
+    # the current user's scoped dataset when auth is enabled.
+    return {"items": items, "total": total}
+
+
+@router.get("/media-browser/projects")
+def list_media_browser_projects(
+    source: str = "all",
+    app_id: str | None = None,
+    since: int | None = None,
+    until: int | None = None,
+    q: str | None = None,
+    favorites_only: bool = False,
+    db=Depends(get_db),
+    ctx=Depends(require_user),
+):
+    _, _, _, run_repo, _, _, _ = db
+    source_norm = (source or "all").strip().lower()
+    if source_norm not in {"all", "generation", "input"}:
+        raise HTTPException(status_code=400, detail="source must be one of: all, generation, input")
+    query_text = q.strip() if isinstance(q, str) and q.strip() else None
+    items = run_repo.list_media_browser_projects(
+        owner_user_id=ctx.user.id if (ctx.auth_enabled and ctx.user) else None,
+        auth_enabled=bool(ctx.auth_enabled),
+        source=source_norm,
+        app_id=app_id.strip() if isinstance(app_id, str) and app_id.strip() else None,
+        since_ts=since,
+        until_ts=until,
+        q=query_text,
+        favorites_only=bool(favorites_only),
+    )
+    return {"items": items}
+
+
 def _format_run_date_ms(ms: int) -> str:
     try:
         return time.strftime("%Y-%m-%d", time.gmtime(ms / 1000))
