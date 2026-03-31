@@ -20,6 +20,7 @@ from services.mp4_metadata import inject_workflowui_metadata as inject_workflowu
 
 from dependencies import COMFY_URL, INPUT_DATA_DIR, get_db, get_media_storage_service, get_run_queue_state
 from services.media_storage_service import MediaStorageService
+from services.video_thumbnail import get_or_create_video_thumbnail_webp_bytes
 
 logger = logging.getLogger(__name__)
 router = APIRouter(dependencies=[Depends(require_user)])
@@ -370,6 +371,10 @@ def load_run_output_content_bytes(
     """Load raw bytes for GET /image (local or ComfyUI) without WorkflowUI embed injection."""
     if ctx.auth_enabled and not run_id:
         raise HTTPException(status_code=400, detail="run_id is required")
+    is_video_thumbnail_preview = (
+        (preview or "").strip().lower() == "webp"
+        and (type or "").strip().lower() == "video"
+    )
     content: bytes | None
     media_type: str
     if run_id:
@@ -383,7 +388,8 @@ def load_run_output_content_bytes(
         except Exception:
             entries = []
         matched_ent = None
-        for ent in entries if isinstance(entries, list) else []:
+        matched_index: int | None = None
+        for idx, ent in enumerate(entries if isinstance(entries, list) else []):
             if not isinstance(ent, dict):
                 continue
             ent_type = (ent.get("type") or ent.get("kind") or "output").strip().lower()
@@ -392,11 +398,49 @@ def load_run_output_content_bytes(
                 continue
             if (ent.get("filename") or "") == (filename or "") and (ent.get("subfolder") or "") == (subfolder or ""):
                 matched_ent = ent
+                matched_index = idx
                 break
         if not matched_ent:
             raise HTTPException(status_code=404, detail="Image not found")
+        if is_video_thumbnail_preview:
+            if matched_index is None:
+                raise HTTPException(status_code=404, detail="Video preview not found")
         stored_for_local = (matched_ent.get("type") or matched_ent.get("kind") or "output").strip().lower()
         local_path = service.get_local_image_path(run_id, filename, subfolder or "", stored_for_local)
+        if is_video_thumbnail_preview:
+            thumb_bytes = None
+            if local_path is not None and local_path.is_file():
+                thumb_bytes = get_or_create_video_thumbnail_webp_bytes(
+                    run_entity=run_entity,
+                    output_index=matched_index,
+                    filename=filename,
+                    subfolder=subfolder or "",
+                    comfy_url=None,
+                    view_type="output",
+                    input_video_path=local_path,
+                )
+            else:
+                # Resolve comfy url for remote thumbnail generation.
+                comfy_url = None
+                with state.queue_lock:
+                    if run_id in state.runs and state.runs[run_id].get("comfyui_url"):
+                        comfy_url = state.runs[run_id]["comfyui_url"]
+                if comfy_url is None:
+                    run_repo = get_db()[3]
+                    run = run_repo.get_run(run_id) if run_repo else None
+                    comfy_url = _normalize_comfy_url(run.comfyui_url or COMFY_URL) if run and run.comfyui_url else COMFY_URL
+                thumb_bytes = get_or_create_video_thumbnail_webp_bytes(
+                    run_entity=run_entity,
+                    output_index=matched_index,
+                    filename=filename,
+                    subfolder=subfolder or "",
+                    comfy_url=comfy_url,
+                    view_type="output",
+                    input_video_path=None,
+                )
+            assert thumb_bytes is not None
+            return thumb_bytes, "image/webp"
+
         if local_path is not None and local_path.is_file():
             logger.info("GET /image: serving from local storage %s", local_path)
             media_type = _media_type_for_path(local_path)

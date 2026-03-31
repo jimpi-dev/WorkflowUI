@@ -104,6 +104,8 @@ import { get } from 'svelte/store';
 
 
 	let playingAudioThumbKey = $state<string | null>(null);
+	let playingVideoThumbKey = $state<string | null>(null);
+	let playingVideoThumbReady = $state(false);
 
 	let sendToAppRunId = $state<string | null>(null);
 	let sendToAppOutputIndex = $state<number | null>(null);
@@ -117,6 +119,13 @@ import { get } from 'svelte/store';
 	let metadataPanelMode = $state<'output' | 'run'>('output');
 
 	let deleteRunGroupPending = $state<{ groupId: string; runs: ApiRun[] } | null>(null);
+	let deleteStorageRunGroupPending = $state<
+		| null
+		| {
+			group: (typeof runGroups)[0];
+			action: 'delete_remote' | 'delete_local' | 'delete_all';
+		  }
+	>(null);
 
 	type DeleteConfirmPending = {
 		action: DeleteConfirmKey;
@@ -130,6 +139,7 @@ import { get } from 'svelte/store';
 	let favorites = $state<Set<string>>(new Set());
 let focusedGroupId = $state<string | null>(null);
 let leftPanelCollapsedBeforeFocus = $state<boolean | null>(null);
+let runsScrollTopBeforeFocus = $state<number | null>(null);
 	$effect(() => {
 		const raw = data.project?.metadata?.favorites;
 		favorites = Array.isArray(raw) ? new Set(raw) : new Set();
@@ -233,6 +243,10 @@ let leftPanelCollapsedBeforeFocus = $state<boolean | null>(null);
 		for (const r of runs) seen.add(r.run_group_id ?? r.id);
 		return seen.size;
 	});
+
+	const hasInFlightRuns = $derived.by(() =>
+		runGroups.some((g) => g.status === 'queued' || g.status === 'running')
+	);
 
 	const appsUsedSortedByRuns = $derived.by(() => {
 		const apps = data.project?.apps_used ?? [];
@@ -355,6 +369,22 @@ let leftPanelCollapsedBeforeFocus = $state<boolean | null>(null);
 		return { label: 'Remote Only', tone: 'remote' };
 	}
 
+	function sumKnownStorageBytes(
+		group: (typeof runGroups)[0],
+		key: 'local_storage_bytes' | 'remote_storage_bytes'
+	): number | null {
+		let total = 0;
+		let hasKnown = false;
+		for (const run of group.runs) {
+			const value = run[key];
+			if (typeof value === 'number' && Number.isFinite(value) && value >= 0) {
+				total += value;
+				hasKnown = true;
+			}
+		}
+		return hasKnown ? total : null;
+	}
+
 	async function saveRunGroup(group: (typeof runGroups)[0]) {
 		savingGroupIds = new Set([...savingGroupIds, group.groupId]);
 		try {
@@ -416,25 +446,36 @@ let leftPanelCollapsedBeforeFocus = $state<boolean | null>(null);
 		}
 	}
 
-	async function deleteRemoteRunGroup(group: (typeof runGroups)[0]) {
+	async function deleteRemoteRunGroup(
+		group: (typeof runGroups)[0],
+		runIdsToDelete?: string[],
+		skipConfirm = false
+	) {
+		const runIds = runIdsToDelete ?? group.runs.map((r) => r.id);
+		if (runIds.length === 0) return;
 		const doDelete = async () => {
 			deletingGroupIds = new Set([...deletingGroupIds, group.groupId]);
 			try {
-				for (const run of group.runs) {
-					const res = await fetch(`${apiBase}/runs/${run.id}/delete-remote`, { method: 'POST' });
+				for (const runId of runIds) {
+					const res = await fetch(`${apiBase}/runs/${runId}/delete-remote`, { method: 'POST' });
 					const data = await res.json().catch(() => ({}));
 					if (res.ok) {
 						mergeUpdatedRuns(data.updated_runs);
 					} else {
-						updateRunStorage(run.id, { remote_status: 'exists' });
+						updateRunStorage(runId, { remote_status: 'exists' });
 					}
 				}
+				refetchStorageSizesForRunIds(runIds);
 			} finally {
 				const next = new Set(deletingGroupIds);
 				next.delete(group.groupId);
 				deletingGroupIds = next;
 			}
 		};
+		if (skipConfirm) {
+			await doDelete();
+			return;
+		}
 		if (getSkipDeleteConfirmCookie('delete_remote')) {
 			await doDelete();
 			return;
@@ -448,15 +489,21 @@ let leftPanelCollapsedBeforeFocus = $state<boolean | null>(null);
 		};
 	}
 
-	async function deleteLocalRunGroup(group: (typeof runGroups)[0]) {
+	async function deleteLocalRunGroup(
+		group: (typeof runGroups)[0],
+		runIdsToDelete?: string[],
+		skipConfirm = false
+	) {
+		const runIds = runIdsToDelete ?? group.runs.map((r) => r.id);
+		if (runIds.length === 0) return;
 		const doDelete = async () => {
 			deletingLocalGroupIds = new Set([...deletingLocalGroupIds, group.groupId]);
 			try {
-				for (const run of group.runs) {
-					const res = await fetch(`${apiBase}/runs/${run.id}/delete-local`, { method: 'POST' });
+				for (const runId of runIds) {
+					const res = await fetch(`${apiBase}/runs/${runId}/delete-local`, { method: 'POST' });
 					const data = await res.json().catch(() => ({}));
 					if (res.ok) {
-						updateRunStorage(run.id, {
+						updateRunStorage(runId, {
 							local_storage_status: data.local_storage_status,
 							local_path: data.local_path
 						});
@@ -464,15 +511,20 @@ let leftPanelCollapsedBeforeFocus = $state<boolean | null>(null);
 							window.dispatchEvent(new CustomEvent('workflowui-refresh-storage'));
 						}
 					} else {
-						updateRunStorage(run.id, { local_storage_status: 'failed' });
+						updateRunStorage(runId, { local_storage_status: 'failed' });
 					}
 				}
+				refetchStorageSizesForRunIds(runIds);
 			} finally {
 				const next = new Set(deletingLocalGroupIds);
 				next.delete(group.groupId);
 				deletingLocalGroupIds = next;
 			}
 		};
+		if (skipConfirm) {
+			await doDelete();
+			return;
+		}
 		if (getSkipDeleteConfirmCookie('delete_local')) {
 			await doDelete();
 			return;
@@ -486,25 +538,36 @@ let leftPanelCollapsedBeforeFocus = $state<boolean | null>(null);
 		};
 	}
 
-	async function deleteBothRunGroup(group: (typeof runGroups)[0]) {
+	async function deleteBothRunGroup(
+		group: (typeof runGroups)[0],
+		runIdsToDelete?: string[],
+		skipConfirm = false
+	) {
+		const runIds = runIdsToDelete ?? group.runs.map((r) => r.id);
+		if (runIds.length === 0) return;
 		const doDelete = async () => {
 			deletingBothGroupIds = new Set([...deletingBothGroupIds, group.groupId]);
 			try {
-				for (const run of group.runs) {
-					const res = await fetch(`${apiBase}/runs/${run.id}/delete-both`, { method: 'POST' });
+				for (const runId of runIds) {
+					const res = await fetch(`${apiBase}/runs/${runId}/delete-both`, { method: 'POST' });
 					const data = await res.json().catch(() => ({}));
 					if (res.ok) {
 						mergeUpdatedRuns(data.updated_runs);
 					} else {
-						updateRunStorage(run.id, { remote_status: 'exists' });
+						updateRunStorage(runId, { remote_status: 'exists' });
 					}
 				}
+				refetchStorageSizesForRunIds(runIds);
 			} finally {
 				const next = new Set(deletingBothGroupIds);
 				next.delete(group.groupId);
 				deletingBothGroupIds = next;
 			}
 		};
+		if (skipConfirm) {
+			await doDelete();
+			return;
+		}
 		if (getSkipDeleteConfirmCookie('delete_all')) {
 			await doDelete();
 			return;
@@ -623,12 +686,45 @@ let leftPanelCollapsedBeforeFocus = $state<boolean | null>(null);
 		}
 	}
 
+	async function confirmDeleteStorageRunGroup(mode: 'all' | 'non_favorites') {
+		const pending = deleteStorageRunGroupPending;
+		if (!pending) return;
+		deleteStorageRunGroupPending = null;
+		const { group, action } = pending;
+		if (mode === 'non_favorites') {
+			const runIdsToDelete = group.runs.filter((r) => !favorites.has(r.id)).map((r) => r.id);
+			if (runIdsToDelete.length === 0) {
+				deleteError = 'No non-favorited runs in this group to delete.';
+				return;
+			}
+			if (action === 'delete_remote') await deleteRemoteRunGroup(group, runIdsToDelete, true);
+			else if (action === 'delete_local') await deleteLocalRunGroup(group, runIdsToDelete, true);
+			else await deleteBothRunGroup(group, runIdsToDelete, true);
+		} else {
+			if (action === 'delete_remote') await deleteRemoteRunGroup(group, undefined, true);
+			else if (action === 'delete_local') await deleteLocalRunGroup(group, undefined, true);
+			else await deleteBothRunGroup(group, undefined, true);
+		}
+	}
+
 	$effect(() => {
 		if (!deleteRunGroupPending || !browser) return;
 		const onKey = (e: KeyboardEvent) => {
 			if (e.key === 'Escape') {
 				e.preventDefault();
 				deleteRunGroupPending = null;
+			}
+		};
+		window.addEventListener('keydown', onKey);
+		return () => window.removeEventListener('keydown', onKey);
+	});
+
+	$effect(() => {
+		if (!deleteStorageRunGroupPending || !browser) return;
+		const onKey = (e: KeyboardEvent) => {
+			if (e.key === 'Escape') {
+				e.preventDefault();
+				deleteStorageRunGroupPending = null;
 			}
 		};
 		window.addEventListener('keydown', onKey);
@@ -1042,6 +1138,125 @@ let leftPanelCollapsedBeforeFocus = $state<boolean | null>(null);
 		loadRuns(loadedGroupCount);
 	}
 
+	let _inFlightRefreshController: AbortController | null = null;
+	let _inFlightRefreshBusy = false;
+	function revealThumbKeysForRuns(updatedRuns: ApiRun[]) {
+		if (filterActive) return;
+		if (!updatedRuns?.length) return;
+		const next = { ...visibleThumbKeys };
+		for (const r of updatedRuns) {
+			const groupId = r.run_group_id ?? r.id;
+			const imgs = r.images ?? [];
+			for (let i = 0; i < imgs.length; i++) {
+				next[`${groupId}-${r.id}-${i}`] = true;
+			}
+		}
+		visibleThumbKeys = next;
+	}
+	async function refreshLatestRunsPage(): Promise<void> {
+		if (!browser) return;
+		if (!data.projectId) return;
+		if (_inFlightRefreshBusy) return;
+		// Avoid racing the main list loader (which can abort/replace state).
+		if (loading || loadingMore) return;
+
+		_inFlightRefreshBusy = true;
+		if (_inFlightRefreshController) _inFlightRefreshController.abort();
+		const controller = new AbortController();
+		_inFlightRefreshController = controller;
+
+		const projectIdWeFetch = data.projectId;
+		const keyAtStart = activeRunsQueryKey;
+		try {
+			const q = new URLSearchParams();
+			q.set('limit', String(RUNS_PAGE_SIZE));
+			q.set('offset', '0');
+			if (filterAppId === DELETED_APP_FILTER_ID) {
+				q.set('deleted_app', '1');
+			} else if (filterAppId.trim()) {
+				q.set('app_id', filterAppId.trim());
+			}
+			if (filterFromDate.trim()) {
+				const fromMs = new Date(filterFromDate.trim()).setHours(0, 0, 0, 0);
+				q.set('since', String(fromMs));
+			}
+			if (filterToDate.trim()) {
+				const toMs = new Date(filterToDate.trim()).setHours(23, 59, 59, 999);
+				q.set('until', String(toMs));
+			}
+			if (filterMetaQ.trim()) q.set('meta_q', filterMetaQ.trim());
+			const url = `${apiBase}/projects/${projectIdWeFetch}/runs?${q.toString()}`;
+			const res = await fetch(url, { signal: controller.signal });
+			if (!res.ok) return;
+			// If navigation/filters changed mid-flight, do nothing.
+			if (data.projectId !== projectIdWeFetch) return;
+			if (activeRunsQueryKey !== keyAtStart) return;
+
+			const raw = await res.json().catch(() => null);
+			const mapRun = (r: ApiRun) => ({ ...r, run_group_id: r.run_group_id ?? null });
+			const newRuns: ApiRun[] =
+				raw && typeof raw === 'object' && Array.isArray((raw as any).runs)
+					? (raw as any).runs.map(mapRun)
+					: Array.isArray(raw)
+						? raw.map(mapRun)
+						: [];
+
+			if (raw && typeof raw === 'object' && typeof (raw as any).total === 'number') {
+				totalGroups = (raw as any).total;
+			}
+
+			if (newRuns.length) {
+				// Prepend any brand-new runs so they become visible without a manual refresh.
+				const existingIds = new Set(runs.map((r) => r.id));
+				const missing = newRuns.filter((r) => !existingIds.has(r.id));
+				if (missing.length) runs = [...missing, ...runs];
+				mergeUpdatedRuns(newRuns);
+				// Ensure newly-arrived outputs actually get a `src` assigned (thumbSrc gating).
+				revealThumbKeysForRuns(newRuns);
+			}
+		} catch (e) {
+			if (e instanceof DOMException && e.name === 'AbortError') return;
+		} finally {
+			if (_inFlightRefreshController === controller) _inFlightRefreshController = null;
+			_inFlightRefreshBusy = false;
+		}
+	}
+
+	let _queuedRefreshTimer: number | null = null;
+	function stopQueuedRefresh() {
+		if (_queuedRefreshTimer != null) {
+			clearInterval(_queuedRefreshTimer);
+			_queuedRefreshTimer = null;
+		}
+		if (_inFlightRefreshController) {
+			_inFlightRefreshController.abort();
+			_inFlightRefreshController = null;
+		}
+		_inFlightRefreshBusy = false;
+	}
+	$effect(() => {
+		if (!browser) return;
+		const projectId = data.projectId;
+		const shouldRun = !!projectId && hasInFlightRuns;
+		if (!shouldRun) {
+			stopQueuedRefresh();
+			return;
+		}
+		if (_queuedRefreshTimer != null) return;
+
+		// Kick once immediately, then poll lightly while work is in-flight.
+		untrack(() => {
+			refreshLatestRunsPage();
+		});
+		_queuedRefreshTimer = window.setInterval(() => {
+			untrack(() => {
+				refreshLatestRunsPage();
+			});
+		}, 2500);
+
+		return () => stopQueuedRefresh();
+	});
+
 	async function loadStats() {
 		const projectIdWeFetch = data.projectId;
 		const requestId = ++statsRequestSeq;
@@ -1108,6 +1323,16 @@ let leftPanelCollapsedBeforeFocus = $state<boolean | null>(null);
 	}
 	function previewImageUrl(img: { filename: string; subfolder?: string; type?: string }, runId?: string) {
 		return imageUrl(img, runId) + '&preview=webp';
+	}
+	// Preview thumbnails for video must not request `embed_workflowui_metadata=1`, because
+	// thumbnails are not meant to carry WorkflowUI metadata chunks.
+	function videoThumbnailPreviewUrl(img: { filename: string; subfolder?: string; type?: string }, runId?: string) {
+		const subfolder = img.subfolder ?? '';
+		const type = img.type ?? 'output';
+		let url = `${apiBase}/image?filename=${encodeURIComponent(img.filename)}&subfolder=${encodeURIComponent(subfolder)}&type=${encodeURIComponent(type)}`;
+		if (runId) url += `&run_id=${encodeURIComponent(runId)}`;
+		url += '&preview=webp';
+		return url;
 	}
 
 	function openAppInProject(appSlug: string) {
@@ -1192,11 +1417,26 @@ let leftPanelCollapsedBeforeFocus = $state<boolean | null>(null);
 	function toggleGroupFocus(groupId: string) {
 		if (focusedGroupId === groupId) {
 			focusedGroupId = null;
+			const scrollTopToRestore = runsScrollTopBeforeFocus;
+			runsScrollTopBeforeFocus = null;
 			if (leftPanelCollapsedBeforeFocus != null) {
 				leftPanelCollapsed = leftPanelCollapsedBeforeFocus;
 				leftPanelCollapsedBeforeFocus = null;
 			}
+			// Focusing hides the left panel content; preserve the inner runs list scroll.
+			if (browser && scrollTopToRestore != null) {
+				tick().then(() => {
+					requestAnimationFrame(() => {
+						if (!runsScrollEl) return;
+						runsScrollEl.scrollTop = scrollTopToRestore;
+					});
+				});
+			}
 			return;
+		}
+		// Only capture scroll position on unfocused -> focused transition.
+		if (browser && focusedGroupId == null && runsScrollEl) {
+			runsScrollTopBeforeFocus = runsScrollEl.scrollTop;
 		}
 		leftPanelCollapsedBeforeFocus = leftPanelCollapsed;
 		leftPanelCollapsed = true;
@@ -1653,6 +1893,12 @@ let leftPanelCollapsedBeforeFocus = $state<boolean | null>(null);
 		deleteError = null;
 		if (byRun.size > 0) {
 		} else {
+			pruneStaleRunFavorites(group.runs);
+			const hasFav = group.runs.some((r) => favorites.has(r.id) && runHasDisplayableOutputs(r));
+			if (hasFav) {
+				deleteStorageRunGroupPending = { group, action: 'delete_remote' };
+				return;
+			}
 			await deleteRemoteRunGroup(group);
 		}
 	}
@@ -1711,6 +1957,12 @@ let leftPanelCollapsedBeforeFocus = $state<boolean | null>(null);
 		deleteError = null;
 		if (byRun.size > 0) {
 		} else {
+			pruneStaleRunFavorites(group.runs);
+			const hasFav = group.runs.some((r) => favorites.has(r.id) && runHasDisplayableOutputs(r));
+			if (hasFav) {
+				deleteStorageRunGroupPending = { group, action: 'delete_local' };
+				return;
+			}
 			await deleteLocalRunGroup(group);
 		}
 	}
@@ -1766,6 +2018,12 @@ let leftPanelCollapsedBeforeFocus = $state<boolean | null>(null);
 		deleteError = null;
 		if (byRun.size > 0) {
 		} else {
+			pruneStaleRunFavorites(group.runs);
+			const hasFav = group.runs.some((r) => favorites.has(r.id) && runHasDisplayableOutputs(r));
+			if (hasFav) {
+				deleteStorageRunGroupPending = { group, action: 'delete_all' };
+				return;
+			}
 			await deleteBothRunGroup(group);
 		}
 	}
@@ -1804,9 +2062,12 @@ let lightboxDeletePending = $state<
 				const remote_deleted = !!(img as { remote_deleted?: boolean }).remote_deleted;
 				const hasLocal = run.local_storage_status === 'saved' || run.local_storage_status === 'partial';
 				const hasRemote = !remote_deleted;
+				const fullUrl = imageUrl(img, run.id);
+				const thumbUrl = mt === 'video' ? videoThumbnailPreviewUrl(img, run.id) : undefined;
 				list.push({
 					id: imageKey(run.id, i),
-					url: imageUrl(img, run.id),
+					url: fullUrl,
+					thumbnailUrl: thumbUrl,
 					runId: run.id,
 					filename: img.filename,
 					mediaType: mt,
@@ -1838,6 +2099,8 @@ let lightboxDeletePending = $state<
 		document.querySelectorAll('audio').forEach((a) => a.pause());
 		document.querySelectorAll('video').forEach((v) => v.pause());
 		playingAudioThumbKey = null;
+		playingVideoThumbKey = null;
+		playingVideoThumbReady = false;
 
 		if (group?.groupId) setThumbKeysVisibleForGroup(group.groupId);
 		markThumbLoaded(group.groupId, run.id, imgIndex);
@@ -2751,8 +3014,8 @@ let lightboxDeletePending = $state<
 								</div>
 								<RunHeaderActions
 									storageSummary={storageSummary}
-									localStorageBytes={storageSummary != null ? group.runs.reduce((s, r) => s + (r.local_storage_bytes ?? 0), 0) : undefined}
-									remoteStorageBytes={storageSummary != null ? group.runs.reduce((s, r) => s + (r.remote_storage_bytes ?? 0), 0) : undefined}
+									localStorageBytes={storageSummary != null ? sumKnownStorageBytes(group, 'local_storage_bytes') : undefined}
+									remoteStorageBytes={storageSummary != null ? sumKnownStorageBytes(group, 'remote_storage_bytes') : undefined}
 									status={group.status}
 									createdAt={group.createdAt}
 									timeExtra=""
@@ -2921,10 +3184,10 @@ let lightboxDeletePending = $state<
 														if ((e.target as HTMLElement).closest('.output-thumb-audio-play-btn, .output-thumb-audio-controls-wrap')) return;
 														openLightboxFromImage(group, run, origI);
 													}}
-														onmouseenter={(e) => { if (isVideo) (e.currentTarget as HTMLElement).querySelector<HTMLVideoElement>('video')?.play().catch(() => {}); }}
-														onmouseleave={(e) => { if (isVideo) (e.currentTarget as HTMLElement).querySelector<HTMLVideoElement>('video')?.pause(); }}
+														onmouseenter={() => { if (isVideo) { playingVideoThumbReady = false; playingVideoThumbKey = thumbKey; } }}
+														onmouseleave={() => { if (isVideo && playingVideoThumbKey === thumbKey) playingVideoThumbKey = null; }}
 													>
-														<span class="thumb-loading" class:hide={isLoaded} aria-hidden="true">
+														<span class="thumb-loading" class:hide={isVideo && playingVideoThumbKey === thumbKey ? playingVideoThumbReady : isLoaded} aria-hidden="true">
 															<span class="thumb-loading-spinner" aria-hidden="true"></span>
 														</span>
 														{#if isDeleting}
@@ -2982,25 +3245,41 @@ let lightboxDeletePending = $state<
 																	</button>
 																</div>
 															{:else if isVideo}
-																<video
-																	src={thumbSrc(thumbKey, imageUrl(item, run.id))}
-																	preload="metadata"
-																	muted
-																	playsinline
-																	loop
-																	aria-hidden="true"
-																	onloadeddata={(e) => {
-																		const v = e.currentTarget;
-																		if (v) { v.currentTime = 0; v.pause(); }
-																		markThumbLoaded(group.groupId, run.id, origI);
-																	}}
-																	onloadedmetadata={(e) => {
-																		const v = e.currentTarget;
-																		if (v) { v.currentTime = 0; v.pause(); }
-																		markThumbLoaded(group.groupId, run.id, origI);
-																	}}
-																	onerror={() => { markThumbLoaded(group.groupId, run.id, origI); markThumbLoadFailed(thumbKey); }}
-																></video>
+																{#if playingVideoThumbKey === thumbKey}
+																	<video
+																		src={imageUrl(item, run.id)}
+																		preload="metadata"
+																		autoplay
+																		muted
+																		playsinline
+																		loop
+																		aria-hidden="true"
+																		onloadedmetadata={(e) => {
+																			// Only begin playback if the same thumb is still hovered.
+																			if (playingVideoThumbKey !== thumbKey) return;
+																			const v = e.currentTarget;
+																			if (v) {
+																				v.currentTime = 0;
+																			}
+																			playingVideoThumbReady = true;
+																			markThumbLoaded(group.groupId, run.id, origI);
+																		}}
+																		onerror={() => {
+																			if (playingVideoThumbKey !== thumbKey) return;
+																			playingVideoThumbReady = true;
+																			markThumbLoaded(group.groupId, run.id, origI);
+																			markThumbLoadFailed(thumbKey);
+																		}}
+																	></video>
+																{:else}
+																	<img
+																		src={thumbSrc(thumbKey, videoThumbnailPreviewUrl(item, run.id))}
+																		alt=""
+																		loading="lazy"
+																		onload={() => markThumbLoaded(group.groupId, run.id, origI)}
+																		onerror={() => { markThumbLoaded(group.groupId, run.id, origI); markThumbLoadFailed(thumbKey); }}
+																	/>
+																{/if}
 																<span class="output-thumb-play" aria-hidden="true" title="Play video">
 																	<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>
 																</span>
@@ -3181,6 +3460,59 @@ let lightboxDeletePending = $state<
 				onCancel={() => { deleteRunGroupPending = null; }}
 			/>
 		{/if}
+	{/if}
+
+	{#if deleteStorageRunGroupPending}
+		{@const pending = deleteStorageRunGroupPending}
+		{@const group = pending.group}
+		{@const action = pending.action}
+		{@const nonFavIds = group.runs.filter((r) => !favorites.has(r.id)).map((r) => r.id)}
+		{@const hasNonFav = nonFavIds.length > 0}
+		{@const title = action === 'delete_remote' ? 'Delete remote' : action === 'delete_local' ? 'Delete local' : 'Delete all'}
+		{@const scopeLine = action === 'delete_remote'
+			? 'Deletes files on the ComfyUI server where present.'
+			: action === 'delete_local'
+				? 'Deletes local files where present.'
+				: 'Deletes files on both local storage and the ComfyUI server where present.'}
+		{@const allLabel = action === 'delete_remote'
+			? 'Delete remote (including favorites)'
+			: action === 'delete_local'
+				? 'Delete local (including favorites)'
+				: 'Delete all (including favorites)'}
+		<div
+			class="confirm-delete-overlay"
+			role="dialog"
+			aria-modal="true"
+			aria-labelledby="delete-storage-nonfav-dialog-title"
+			tabindex="-1"
+			onclick={() => { deleteStorageRunGroupPending = null; }}
+			onkeydown={(e) => { if (e.key === 'Escape') deleteStorageRunGroupPending = null; }}
+		>
+			<div class="confirm-delete-card delete-run-fav-card" role="presentation" tabindex="-1" onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.stopPropagation()}>
+				<p id="delete-storage-nonfav-dialog-title" class="confirm-delete-title">{title}</p>
+				<p class="confirm-delete-msg">This run group includes favorited runs. What do you want to do?</p>
+				<p class="confirm-delete-msg">{scopeLine}</p>
+				<div class="delete-run-fav-actions">
+					<button
+						type="button"
+						class="confirm-delete-btn danger"
+						disabled={!hasNonFav}
+						title={!hasNonFav ? 'All runs in this group are favorited.' : undefined}
+						onclick={async () => { await confirmDeleteStorageRunGroup('non_favorites'); }}
+					>Delete non-favorites only</button>
+					<button
+						type="button"
+						class="confirm-delete-btn danger"
+						onclick={async () => { await confirmDeleteStorageRunGroup('all'); }}
+					>{allLabel}</button>
+					<button
+						type="button"
+						class="confirm-delete-btn secondary"
+						onclick={() => { deleteStorageRunGroupPending = null; }}
+					>Cancel</button>
+				</div>
+			</div>
+		</div>
 	{/if}
 
 	{#if deleteConfirmPending}
