@@ -4,6 +4,7 @@ import uuid
 import logging
 from pathlib import Path
 import shutil
+from typing import Any
 
 from fastapi import APIRouter, HTTPException, Depends, Response
 
@@ -24,6 +25,29 @@ from services.run_serialization import (
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+
+def _normalized_run_outputs(run) -> list[dict[str, Any]]:
+    """Return normalized run outputs for image/video/audio regardless of source JSON."""
+    entries = safe_json_loads(getattr(run, "media_json", None))
+    if not isinstance(entries, list) or not entries:
+        entries = safe_json_loads(getattr(run, "images_json", None), [])
+    if not isinstance(entries, list):
+        return []
+
+    normalized: list[dict[str, Any]] = []
+    for ent in entries:
+        if not isinstance(ent, dict):
+            continue
+        out = dict(ent)
+        raw_type = out.get("type")
+        raw_kind = out.get("kind")
+        if isinstance(raw_type, str) and raw_type.strip():
+            out["type"] = raw_type.strip().lower()
+        elif isinstance(raw_kind, str) and raw_kind.strip():
+            out["type"] = raw_kind.strip().lower()
+        normalized.append(out)
+    return normalized
 
 @router.post("/projects")
 def post_projects(body: dict, db=Depends(get_db), ctx=Depends(require_user)):
@@ -362,7 +386,7 @@ def list_project_runs(
             "queue_position": queue_position,
             "created_at": r.created_at,
             "seed": r.seed,
-            "images": safe_json_loads(r.images_json, []),
+            "images": _normalized_run_outputs(r),
             "execution_time": r.execution_time,
             "error": error,
             "run_group_id": r.run_group_id,
@@ -425,8 +449,8 @@ def get_project_runs_storage_sizes(
         result[rid] = {"local_storage_bytes": None, "remote_storage_bytes": None}
         if r.local_storage_status in ("saved", "partial"):
             result[rid]["local_storage_bytes"] = service.get_run_local_storage_bytes(r)
-        run_images = safe_json_loads(r.images_json, [])
-        if run_images:
+        run_outputs = _normalized_run_outputs(r)
+        if run_outputs:
             app = app_repo.get_app_by_id(r.app_id) if r.app_id else None
             raw_url = (r.comfyui_url or (app.comfyui_url if app else None) or COMFY_URL or "").strip()
             # Always try to resolve a ComfyUI URL for remote size when run has images
@@ -434,7 +458,7 @@ def get_project_runs_storage_sizes(
                 raw_url = (COMFY_URL or "http://localhost:8188/").strip()
             comfy_url = _normalize_comfy_url(raw_url).rstrip("/") if raw_url else ""
             if comfy_url:
-                runs_with_images.append((rid, comfy_url, run_images))
+                runs_with_images.append((rid, comfy_url, run_outputs))
     by_url: dict[str, list[tuple[str, list]]] = {}
     for rid, url, imgs in runs_with_images:
         by_url.setdefault(url, []).append((rid, imgs))

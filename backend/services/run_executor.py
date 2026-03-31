@@ -625,9 +625,11 @@ class RunExecutor:
             if raw_type == "video":
                 return "video"
             if raw_type == "output" and filename:
-                lower = filename.lower()
-                if any(lower.endswith(ext) for ext in (".mp3", ".wav", ".ogg", ".flac", ".m4a", ".webm")):
+                ext = Path(filename).suffix.lower()
+                if ext in {".mp3", ".wav", ".ogg", ".flac", ".m4a", ".aac", ".opus"}:
                     return "audio"
+                if ext in {".mp4", ".webm", ".mkv", ".mov", ".avi", ".wmv", ".m4v", ".mpg", ".mpeg"}:
+                    return "video"
             return raw_type if raw_type else "image"
 
         while True:
