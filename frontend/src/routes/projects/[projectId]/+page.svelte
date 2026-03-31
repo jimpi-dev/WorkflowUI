@@ -299,9 +299,19 @@ let runsScrollTopBeforeFocus = $state<number | null>(null);
 			// Use updated run but keep images from response (so remote_deleted/removed items are reflected)
 			const merged = { ...r, ...u, run_group_id: u.run_group_id ?? r.run_group_id };
 			if (Array.isArray(u.images)) merged.images = u.images;
-			// Preserve sizes when list response doesn't include them
-			if (u.local_storage_bytes === undefined) merged.local_storage_bytes = r.local_storage_bytes;
-			if (u.remote_storage_bytes === undefined) merged.remote_storage_bytes = r.remote_storage_bytes;
+			// Preserve already-known sizes when list response omits size info (null/undefined).
+			if (
+				(u.local_storage_bytes === undefined || u.local_storage_bytes === null) &&
+				typeof r.local_storage_bytes === 'number'
+			) {
+				merged.local_storage_bytes = r.local_storage_bytes;
+			}
+			if (
+				(u.remote_storage_bytes === undefined || u.remote_storage_bytes === null) &&
+				typeof r.remote_storage_bytes === 'number'
+			) {
+				merged.remote_storage_bytes = r.remote_storage_bytes;
+			}
 			return merged;
 		});
 	}
@@ -1211,6 +1221,8 @@ let runsScrollTopBeforeFocus = $state<number | null>(null);
 				const missing = newRuns.filter((r) => !existingIds.has(r.id));
 				if (missing.length) runs = [...missing, ...runs];
 				mergeUpdatedRuns(newRuns);
+				const idsToFetch = missing.map((r) => r.id);
+				if (idsToFetch.length) refetchStorageSizesForRunIds(idsToFetch, projectIdWeFetch);
 				// Ensure newly-arrived outputs actually get a `src` assigned (thumbSrc gating).
 				revealThumbKeysForRuns(newRuns);
 			}
