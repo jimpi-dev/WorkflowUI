@@ -40,6 +40,7 @@
 	let canAccessConsole = $derived(
 		!$authState.enabled || $authState.user?.role === 'admin'
 	);
+	let showAuthenticatedUi = $derived(!$authState.enabled || $authState.authenticated);
 	let authBlocked = $derived($authState.loaded && $authState.enabled && !$authState.authenticated);
 	let showAppShell = $derived(!authBlocked || isLoginRoute);
 	$effect(() => {
@@ -179,7 +180,7 @@
 
 <div class="app-layout has-status-bar" bind:this={layoutEl}>
 	<PluginWelcomeModal />
-	{#if showAppShell}
+	{#if showAuthenticatedUi && !isLoginRoute}
 		<AppHeader />
 	{/if}
 
@@ -245,7 +246,9 @@
 					<footer class="app-footer" bind:this={footerEl}>
 						<ComfyUIStatusBar />
 					</footer>
-					<QueueBadge />
+					{#if showAuthenticatedUi && !isLoginRoute}
+						<QueueBadge />
+					{/if}
 				</div>
 				{#if $queuePanelOpen}
 					<div class="app-footer-spacer" style="width: {$queuePanelWidth}px;"></div>

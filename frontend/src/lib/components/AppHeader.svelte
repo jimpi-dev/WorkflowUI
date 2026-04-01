@@ -363,6 +363,19 @@
 			<a href="/apps" data-sveltekit-preload-data="off" class:active={$page.url.pathname === '/apps' || $page.url.pathname.startsWith('/apps/')} onclick={closeMenu}>Apps</a>
 			<a href="/workflows" class:active={$page.url.pathname === '/workflows' || $page.url.pathname.startsWith('/workflows/')} onclick={closeMenu}>Workflows</a>
 			<a href="/import" class:active={$page.url.pathname === '/import'} onclick={closeMenu}>Import</a>
+			{#if $authState.enabled && $authState.authenticated}
+				<button
+					type="button"
+					class="nav-drawer-logout"
+					onclick={(e) => {
+						e.preventDefault();
+						closeMenu();
+						void logout();
+					}}
+				>
+					Logout
+				</button>
+			{/if}
 		{/if}
 	</nav>
 	{#if importDialogOpen && pendingImport}
@@ -1169,7 +1182,28 @@
 			font-weight: 500;
 			transition: color 0.2s ease, background 0.2s ease;
 		}
+		.nav-drawer-logout {
+			display: flex;
+			align-items: center;
+			padding: 0.75rem 1.25rem;
+			min-height: 44px;
+			color: var(--muted);
+			background: transparent;
+			border: none;
+			border-radius: 0;
+			text-decoration: none;
+			font-size: 1rem;
+			font-weight: 500;
+			text-align: left;
+			box-shadow: none;
+			cursor: pointer;
+			transition: color 0.2s ease, background 0.2s ease;
+		}
 		.nav-drawer a:hover {
+			color: var(--accent);
+			background: var(--accent-soft);
+		}
+		.nav-drawer-logout:hover {
 			color: var(--accent);
 			background: var(--accent-soft);
 		}
@@ -1298,7 +1332,28 @@
 			font-weight: 500;
 			transition: color 0.2s ease, background 0.2s ease;
 		}
+		.nav-drawer-logout {
+			display: flex;
+			align-items: center;
+			padding: 0.75rem 1.25rem;
+			min-height: 44px;
+			color: var(--muted);
+			background: transparent;
+			border: none;
+			border-radius: 0;
+			text-decoration: none;
+			font-size: 1rem;
+			font-weight: 500;
+			text-align: left;
+			box-shadow: none;
+			cursor: pointer;
+			transition: color 0.2s ease, background 0.2s ease;
+		}
 		.nav-drawer a:hover {
+			color: var(--accent);
+			background: var(--accent-soft);
+		}
+		.nav-drawer-logout:hover {
 			color: var(--accent);
 			background: var(--accent-soft);
 		}
