@@ -5,7 +5,7 @@ import { page } from '$app/stores';
 import { get } from 'svelte/store';
 	import { browser } from '$app/environment';
 	import { onMount, onDestroy, tick, untrack } from 'svelte';
-	import { getThumbFitModeCookie, getThumbSizeCookie, setThumbFitModeCookie, setThumbSizeCookie, getNotesCollapsedCookie, setNotesCollapsedCookie, getLeftPanelCollapsedCookie, setLeftPanelCollapsedCookie, getSkipDeleteConfirmCookie, setSkipDeleteConfirmCookie, type ThumbFitMode, type ThumbSize, type DeleteConfirmKey } from '$lib/cookie';
+	import { THUMB_SCALE_MAX, THUMB_SCALE_MIN, getThumbFitModeCookie, getThumbSizeCookie, setThumbFitModeCookie, setThumbSizeCookie, getNotesCollapsedCookie, setNotesCollapsedCookie, getLeftPanelCollapsedCookie, setLeftPanelCollapsedCookie, getSkipDeleteConfirmCookie, setSkipDeleteConfirmCookie, type ThumbFitMode, type DeleteConfirmKey } from '$lib/cookie';
 	import SendToAppDialog from '$lib/components/SendToAppDialog.svelte';
 	import MoveRunsDialog from '$lib/components/MoveRunsDialog.svelte';
 	import ThumbnailOverlay from '$lib/components/ThumbnailOverlay.svelte';
@@ -1522,10 +1522,11 @@ let runsScrollTopBeforeFocus = $state<number | null>(null);
 		return () => window.removeEventListener('keydown', onKeyDown);
 	});
 
-	let thumbnailSize = $state<ThumbSize>(browser ? getThumbSizeCookie() : 'medium');
-	function setThumbnailSize(size: ThumbSize) {
-		thumbnailSize = size;
-		if (browser) setThumbSizeCookie(size);
+	let thumbnailScale = $state<number>(browser ? getThumbSizeCookie() : 100);
+	function setThumbnailScale(value: number) {
+		const next = Math.min(THUMB_SCALE_MAX, Math.max(THUMB_SCALE_MIN, Math.round(value)));
+		thumbnailScale = next;
+		if (browser) setThumbSizeCookie(next);
 	}
 	let thumbnailFitMode = $state<ThumbFitMode>(browser ? getThumbFitModeCookie() : 'cover');
 	function setThumbnailFitMode(mode: ThumbFitMode) {
@@ -2857,52 +2858,19 @@ let lightboxDeletePending = $state<
 							<button type="button" class="collapse-all-btn" onclick={expandAll}>Expand all</button>
 						<button type="button" class="collapse-all-btn" onclick={collapseAll}>Collapse all</button>
 						<span class="gallery-size-divider" aria-hidden="true"></span>
-						<div class="gallery-thumb-size" role="group" aria-label="Thumbnail size">
-							<button
-								type="button"
-								class="collapse-all-btn thumb-size-btn"
-								class:active={thumbnailSize === 'small'}
-								onclick={() => setThumbnailSize('small')}
-								title="Small thumbnails"
-								aria-label="Small thumbnails"
-								aria-pressed={thumbnailSize === 'small'}
-							>
-								<svg class="thumb-size-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-									<rect x="2" y="2" width="8" height="8" rx="1"/>
-									<rect x="14" y="2" width="8" height="8" rx="1"/>
-									<rect x="2" y="14" width="8" height="8" rx="1"/>
-									<rect x="14" y="14" width="8" height="8" rx="1"/>
-								</svg>
-							</button>
-							<button
-								type="button"
-								class="collapse-all-btn thumb-size-btn"
-								class:active={thumbnailSize === 'medium'}
-								onclick={() => setThumbnailSize('medium')}
-								title="Medium thumbnails"
-								aria-label="Medium thumbnails"
-								aria-pressed={thumbnailSize === 'medium'}
-							>
-								<svg class="thumb-size-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-									<rect x="2" y="4" width="9" height="9" rx="1"/>
-									<rect x="13" y="4" width="9" height="9" rx="1"/>
-									<rect x="2" y="15" width="9" height="7" rx="1"/>
-									<rect x="13" y="15" width="9" height="7" rx="1"/>
-								</svg>
-							</button>
-							<button
-								type="button"
-								class="collapse-all-btn thumb-size-btn"
-								class:active={thumbnailSize === 'large'}
-								onclick={() => setThumbnailSize('large')}
-								title="Large thumbnails"
-								aria-label="Large thumbnails"
-								aria-pressed={thumbnailSize === 'large'}
-							>
-								<svg class="thumb-size-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-									<rect x="3" y="3" width="18" height="18" rx="2"/>
-								</svg>
-							</button>
+						<div class="gallery-thumb-size">
+							<label for="project-thumb-size">Thumbnail size</label>
+							<input
+								id="project-thumb-size"
+								type="range"
+								min={THUMB_SCALE_MIN}
+								max={THUMB_SCALE_MAX}
+								step="1"
+								value={thumbnailScale}
+								oninput={(e) => setThumbnailScale((e.currentTarget as HTMLInputElement).valueAsNumber)}
+								aria-label="Thumbnail size percentage"
+							/>
+							<span class="thumb-size-value">{thumbnailScale}%</span>
 						</div>
 						<span class="gallery-size-divider" aria-hidden="true"></span>
 						<div class="gallery-thumb-fit" role="group" aria-label="Thumbnail render mode">
@@ -3208,9 +3176,7 @@ let lightboxDeletePending = $state<
 										{/if}
 										<div
 											class="output-section-body"
-											class:thumb-size-small={thumbnailSize === 'small'}
-											class:thumb-size-medium={thumbnailSize === 'medium'}
-											class:thumb-size-large={thumbnailSize === 'large'}
+											style={`--thumb-size-scale:${thumbnailScale / 100};`}
 											class:thumb-fit-contain={thumbnailFitMode === 'contain'}
 										>
 											{#each group.runs as run (run.id)}
@@ -4804,25 +4770,25 @@ let lightboxDeletePending = $state<
 	.gallery-thumb-size {
 		display: flex;
 		align-items: center;
-		gap: 0.2rem;
+		gap: 0.5rem;
 	}
 	.gallery-thumb-fit {
 		display: flex;
 		align-items: center;
 		gap: 0.2rem;
 	}
-	.thumb-size-btn {
-		padding: 0.35rem 0.45rem;
+	.gallery-thumb-size label {
+		font-size: 0.8rem;
+		color: var(--muted);
 	}
-	.thumb-size-btn .thumb-size-icon {
-		width: 18px;
-		height: 18px;
-		display: block;
+	.gallery-thumb-size input[type='range'] {
+		width: min(280px, 48vw);
 	}
-	.thumb-size-btn.active {
-		background: color-mix(in srgb, var(--accent) 22%, var(--surface));
-		border-color: var(--accent);
-		color: var(--accent);
+	.thumb-size-value {
+		min-width: 3.5rem;
+		font-size: 0.8rem;
+		color: var(--muted);
+		text-align: right;
 	}
 	.thumb-fit-btn.active {
 		background: color-mix(in srgb, var(--accent) 22%, var(--surface));
@@ -5148,28 +5114,16 @@ let lightboxDeletePending = $state<
 		padding: 0.75rem;
 		border-top: 1px solid var(--border);
 	}
-	.output-section-body.thumb-size-small {
-		grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-	}
-	.output-section-body.thumb-size-medium {
-		grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
-	}
-	.output-section-body.thumb-size-large {
-		grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+	.output-section-body {
+		grid-template-columns: repeat(auto-fill, minmax(calc(260px * var(--thumb-size-scale, 1)), 1fr));
 	}
 	@media (max-width: 639px) {
 		.output-section-body {
 			gap: 0.5rem;
 			padding: 0.5rem;
 		}
-		.output-section-body.thumb-size-small {
-			grid-template-columns: repeat(auto-fill, minmax(92px, 1fr));
-		}
-		.output-section-body.thumb-size-medium {
-			grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
-		}
-		.output-section-body.thumb-size-large {
-			grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+		.output-section-body {
+			grid-template-columns: repeat(auto-fill, minmax(calc(120px * var(--thumb-size-scale, 1)), 1fr));
 		}
 		.run-section {
 			min-width: 0;
