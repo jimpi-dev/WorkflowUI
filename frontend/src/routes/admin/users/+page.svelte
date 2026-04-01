@@ -207,41 +207,44 @@
 			<p>No users.</p>
 		{:else}
 			{#each data.users as user (user.id)}
+				{@const edit = editById[user.id]}
 				<div class="user-row">
 					<div class="user-head">
 						<strong>{user.username}</strong>
 						<span>{user.id}</span>
 					</div>
-					<div class="grid">
-						<select bind:value={editById[user.id].role}>
-							<option value="user">user</option>
-							<option value="admin">admin</option>
-						</select>
-						<input placeholder="New password (optional)" type="password" bind:value={editById[user.id].password} />
-						<input
-							placeholder="Quick runs project id (optional)"
-							bind:value={editById[user.id].quick_runs_project_id}
-						/>
-						<label><input type="checkbox" bind:checked={editById[user.id].allow_all_apps} /> Allow all apps</label>
-						<label><input type="checkbox" bind:checked={editById[user.id].disabled} /> Disabled</label>
-					</div>
-					{#if !editById[user.id].allow_all_apps}
-						<div class="apps-picker">
-							{#each data.apps as app (app.id)}
-								<label>
-									<input
-										type="checkbox"
-										checked={editById[user.id].allowed_app_ids.includes(app.id)}
-										onchange={() => (editById[user.id].allowed_app_ids = toggleAllowedApp(editById[user.id].allowed_app_ids, app.id))}
-									/>
-									{app.title} ({app.slug})
-								</label>
-							{/each}
+					{#if edit}
+						<div class="grid">
+							<select bind:value={edit.role}>
+								<option value="user">user</option>
+								<option value="admin">admin</option>
+							</select>
+							<input placeholder="New password (optional)" type="password" bind:value={edit.password} />
+							<input
+								placeholder="Quick runs project id (optional)"
+								bind:value={edit.quick_runs_project_id}
+							/>
+							<label><input type="checkbox" bind:checked={edit.allow_all_apps} /> Allow all apps</label>
+							<label><input type="checkbox" bind:checked={edit.disabled} /> Disabled</label>
 						</div>
+						{#if !edit.allow_all_apps}
+							<div class="apps-picker">
+								{#each data.apps as app (app.id)}
+									<label>
+										<input
+											type="checkbox"
+											checked={edit.allowed_app_ids.includes(app.id)}
+											onchange={() => (edit.allowed_app_ids = toggleAllowedApp(edit.allowed_app_ids, app.id))}
+										/>
+										{app.title} ({app.slug})
+									</label>
+								{/each}
+							</div>
+						{/if}
+						<button disabled={saveBusyUserId === user.id} onclick={() => saveUser(user)}>
+							{saveBusyUserId === user.id ? 'Saving...' : 'Save'}
+						</button>
 					{/if}
-					<button disabled={saveBusyUserId === user.id} onclick={() => saveUser(user)}>
-						{saveBusyUserId === user.id ? 'Saving...' : 'Save'}
-					</button>
 				</div>
 			{/each}
 		{/if}
