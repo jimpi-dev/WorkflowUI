@@ -3,7 +3,7 @@
 	import { goto } from '$app/navigation';
 	import { onDestroy } from 'svelte';
 	import { getApiBase } from '$lib/config';
-	import { THUMB_SCALE_MAX, THUMB_SCALE_MIN, getThumbSizeCookie, setThumbSizeCookie } from '$lib/cookie';
+	import { THUMB_SCALE_MAX, THUMB_SCALE_MIN, getThumbFitModeCookie, getThumbSizeCookie, setThumbFitModeCookie, setThumbSizeCookie, type ThumbFitMode } from '$lib/cookie';
 	import { appBooting } from '$lib/stores/appBooting';
 	import { cancelRun, getQueue, getRecentRuns, type QueueItem, type RecentRunItem } from '$lib/queueApi';
 	import RunAppBadge from '$lib/components/RunAppBadge.svelte';
@@ -76,6 +76,8 @@
 	let filterStatus = $state('past');
 	let filterQuery = $state('');
 	let projectOptions = $state<ProjectOption[]>([]);
+	let projectPickerOpen = $state(false);
+	let projectPickerSearch = $state('');
 
 	let savingGroupIds = $state<string[]>([]);
 	let deletingGroupIds = $state<string[]>([]);
@@ -92,6 +94,7 @@
 	let sendToAppOutputIndex = $state<number | null>(null);
 	let sendToAppProjectId = $state<string | null>(null);
 	let thumbnailScale = $state<number>(browser ? getThumbSizeCookie() : 100);
+	let thumbnailFitMode = $state<ThumbFitMode>(browser ? getThumbFitModeCookie() : 'cover');
 	let lightboxOpen = $state(false);
 	let lightboxImages = $state<LightboxItem[]>([]);
 	let lightboxIndex = $state(0);
@@ -113,6 +116,12 @@
 
 	const activeCount = $derived((queue?.running ? 1 : 0) + (queue?.queued?.length ?? 0));
 	const hasMoreRecent = $derived(recentRuns.length < totalRecent);
+	const filteredProjectOptions = $derived.by(() => {
+		const q = projectPickerSearch.trim().toLowerCase();
+		if (!q) return projectOptions;
+		return projectOptions.filter((p) => p.name.toLowerCase().includes(q));
+	});
+	const selectedProject = $derived.by(() => projectOptions.find((p) => p.id === filterProjectId) ?? null);
 
 	function readProjectParam() {
 		if (!browser) return;
@@ -259,6 +268,11 @@
 		const next = Math.min(THUMB_SCALE_MAX, Math.max(THUMB_SCALE_MIN, Math.round(value)));
 		thumbnailScale = next;
 		if (browser) setThumbSizeCookie(next);
+	}
+
+	function setThumbnailFitMode(mode: ThumbFitMode) {
+		thumbnailFitMode = mode;
+		if (browser) setThumbFitModeCookie(mode);
 	}
 
 	function getProjectInfo(projectId: string | null, projectTitle: string | null): { name: string; color: string | null } {
@@ -901,9 +915,22 @@
 		recentPollId = null;
 	}
 
-	function applyFilters() {
-		loadRecent(0);
+	function selectProject(projectId: string) {
+		filterProjectId = projectId;
+		projectPickerOpen = false;
+		projectPickerSearch = '';
 	}
+
+	$effect(() => {
+		if (!browser) return;
+		filterProjectId;
+		filterStatus;
+		filterQuery;
+		const timer = setTimeout(() => {
+			loadRecent(0);
+		}, 220);
+		return () => clearTimeout(timer);
+	});
 
 	function useLoadMoreSentinel(node: HTMLElement) {
 		let observer: IntersectionObserver | null = null;
@@ -932,7 +959,6 @@
 		readProjectParam();
 		loadProjects();
 		loadQueue();
-		loadRecent(0);
 		startPolling();
 	}
 
@@ -947,6 +973,7 @@
 <section class="activity-page">
 	<header class="page-header">
 		<h1>Activity</h1>
+		<div class="gallery-controls-right">
 		<div class="gallery-thumb-size">
 			<label for="activity-thumb-size">Thumbnail size</label>
 			<input
@@ -960,6 +987,31 @@
 				aria-label="Thumbnail size percentage"
 			/>
 			<span class="thumb-size-value">{thumbnailScale}%</span>
+		</div>
+		<div class="gallery-thumb-fit" role="group" aria-label="Thumbnail render mode">
+			<button
+				type="button"
+				class="thumb-fit-btn"
+				class:active={thumbnailFitMode === 'cover'}
+				onclick={() => setThumbnailFitMode('cover')}
+				title="Default thumbnail"
+				aria-label="Default thumbnail"
+				aria-pressed={thumbnailFitMode === 'cover'}
+			>
+				Default thumbnail
+			</button>
+			<button
+				type="button"
+				class="thumb-fit-btn"
+				class:active={thumbnailFitMode === 'contain'}
+				onclick={() => setThumbnailFitMode('contain')}
+				title="Fit into thumbnail"
+				aria-label="Fit into thumbnail"
+				aria-pressed={thumbnailFitMode === 'contain'}
+			>
+				Fit into thumbnail
+			</button>
+		</div>
 		</div>
 	</header>
 
@@ -1057,7 +1109,7 @@
 								</button>
 							</div>
 						{/if}
-						<div class="output-section-body" style={`--thumb-size-scale:${thumbnailScale / 100};`}>
+						<div class="output-section-body" class:thumb-fit-contain={thumbnailFitMode === 'contain'} style={`--thumb-size-scale:${thumbnailScale / 100};`}>
 							{#each group.runs as run (run.id)}
 								{#each (run.images ?? []).filter((item) => !item.remote_deleted) as item, origI (run.id + '_' + origI)}
 									{@const isVideo = mediaType(item) === 'video'}
@@ -1153,33 +1205,54 @@
 			<span class="badge">{totalRecent} total</span>
 		</div>
 		<div class="filters">
-			<label>
-				Project
-				<select bind:value={filterProjectId}>
-					<option value="">All projects</option>
-					{#each projectOptions as p (p.id)}
-						<option value={p.id}>{p.name}</option>
-					{/each}
-				</select>
-			</label>
-			<label>
-				Status
-				<select bind:value={filterStatus}>
-					<option value="past">Past (done/error/cancelled)</option>
-					<option value="">All</option>
-					<option value="in_flight">Queued or running</option>
-					<option value="done">Done</option>
-					<option value="error">Error</option>
-					<option value="cancelled">Cancelled</option>
-				</select>
-			</label>
+			<div class="project-picker-wrap">
+				<label class="filter-label">Project</label>
+				<button
+					type="button"
+					class="project-picker-toggle"
+					onclick={() => (projectPickerOpen = !projectPickerOpen)}
+					aria-label="Filter by project"
+					aria-expanded={projectPickerOpen}
+				>
+					<span class="project-picker-label">
+						{#if selectedProject}
+							<span class="project-color-dot" style={selectedProject.headerColor ? `background:${selectedProject.headerColor}` : ''}></span>
+							<span class="project-picker-name">{selectedProject.name}</span>
+						{:else}
+							<span class="project-color-dot neutral"></span>
+							<span class="project-picker-name">All projects</span>
+						{/if}
+					</span>
+					<span class="project-picker-chevron">▾</span>
+				</button>
+				{#if projectPickerOpen}
+					<div class="project-picker-popover">
+						<input
+							type="search"
+							class="project-picker-search"
+							placeholder="Filter projects…"
+							bind:value={projectPickerSearch}
+							aria-label="Filter projects list"
+						/>
+						<div class="project-picker-list">
+							<button type="button" class="project-option" onclick={() => selectProject('')}>
+								<span class="project-color-dot neutral"></span>
+								<span class="project-option-name">All projects</span>
+							</button>
+							{#each filteredProjectOptions as p (p.id)}
+								<button type="button" class="project-option" onclick={() => selectProject(p.id)}>
+									<span class="project-color-dot" style={p.headerColor ? `background:${p.headerColor}` : ''}></span>
+									<span class="project-option-name">{p.name}</span>
+								</button>
+							{/each}
+						</div>
+					</div>
+				{/if}
+			</div>
 			<label class="search">
 				Search
 				<input bind:value={filterQuery} placeholder="App, metadata, or project id" />
 			</label>
-			<div class="filter-actions">
-				<button type="button" onclick={applyFilters}>Apply</button>
-			</div>
 		</div>
 		{#if recentLoading}
 			<p class="muted">Loading recent generations…</p>
@@ -1244,7 +1317,7 @@
 								<button type="button" class="run-action-btn" onclick={() => { selectedInGroup = { ...selectedInGroup, [group.groupId]: [] }; }}>Clear</button>
 							</div>
 						{/if}
-						<div class="output-section-body" style={`--thumb-size-scale:${thumbnailScale / 100};`}>
+						<div class="output-section-body" class:thumb-fit-contain={thumbnailFitMode === 'contain'} style={`--thumb-size-scale:${thumbnailScale / 100};`}>
 							{#each group.runs as run (run.id)}
 								{#each (run.images ?? []).filter((item) => !item.remote_deleted) as item, origI (run.id + '_' + origI)}
 									{@const isVideo = mediaType(item) === 'video'}
@@ -1405,18 +1478,79 @@
 	.activity-page { padding: 1rem; display: flex; flex-direction: column; gap: 1rem; }
 	.page-header { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; }
 	.page-header h1 { margin: 0; }
+	.gallery-controls-right { display: inline-flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; justify-content: flex-end; }
 	.subtitle { margin: 0.35rem 0 0; color: var(--muted); }
 	.gallery-thumb-size { display: inline-flex; align-items: center; gap: 0.5rem; }
 	.gallery-thumb-size label { font-size: 0.8rem; color: var(--muted); }
 	.gallery-thumb-size input[type='range'] { width: min(280px, 52vw); }
 	.thumb-size-value { min-width: 3.5rem; font-size: 0.8rem; color: var(--muted); text-align: right; }
+	.gallery-thumb-fit { display: inline-flex; align-items: center; gap: 0.35rem; }
+	.thumb-fit-btn { border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--muted); padding: 0.28rem 0.5rem; font: inherit; font-size: 0.78rem; cursor: pointer; }
+	.thumb-fit-btn.active { color: var(--text); border-color: color-mix(in srgb, var(--accent) 55%, var(--border)); box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 25%, transparent) inset; }
 	.card { border: 1px solid var(--border); border-radius: 12px; padding: 0.9rem; background: var(--card); }
 	.card-head { display: flex; align-items: center; justify-content: space-between; gap: 0.6rem; margin-bottom: 0.75rem; }
 	.badge { font-size: 0.78rem; padding: 0.18rem 0.45rem; border-radius: 999px; border: 1px solid var(--border); color: var(--muted); }
-	.filters { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0.6rem; margin-bottom: 0.8rem; }
+	.filters { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.6rem; margin-bottom: 0.8rem; }
 	.filters label { display: flex; flex-direction: column; gap: 0.25rem; font-size: 0.84rem; color: var(--muted); }
 	.filters select, .filters input, .filters button { background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 0.45rem 0.55rem; font: inherit; }
-	.filter-actions { display: flex; align-items: flex-end; }
+	.filter-label { display: inline-flex; margin-bottom: 0.25rem; font-size: 0.84rem; color: var(--muted); }
+	.project-picker-wrap { position: relative; min-width: 0; }
+	.project-picker-toggle {
+		width: 100%;
+		min-width: 0;
+		padding: 0.45rem 0.55rem;
+		border-radius: 8px;
+		border: 1px solid var(--border);
+		background: var(--surface);
+		color: var(--text);
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 0.5rem;
+		cursor: pointer;
+	}
+	.project-picker-label { min-width: 0; display: flex; align-items: center; gap: 0.45rem; }
+	.project-picker-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; }
+	.project-picker-chevron { color: var(--muted); flex-shrink: 0; }
+	.project-picker-popover {
+		position: absolute;
+		top: calc(100% + 0.35rem);
+		left: 0;
+		width: min(360px, 70vw);
+		border: 1px solid var(--border);
+		border-radius: 8px;
+		background: var(--card-bg, var(--card));
+		z-index: 200;
+		box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+		padding: 0.45rem;
+	}
+	.project-picker-search {
+		width: 100%;
+		margin-bottom: 0.4rem;
+		padding: 0.45rem 0.55rem;
+		border: 1px solid var(--border);
+		border-radius: 6px;
+		background: var(--surface);
+		color: var(--text);
+	}
+	.project-picker-list { max-height: 260px; overflow: auto; display: flex; flex-direction: column; gap: 0.2rem; }
+	.project-option {
+		width: 100%;
+		border: 1px solid transparent;
+		border-radius: 6px;
+		background: rgba(255, 255, 255, 0.02);
+		color: inherit;
+		cursor: pointer;
+		text-align: left;
+		padding: 0.35rem 0.45rem;
+		display: flex;
+		align-items: center;
+		gap: 0.45rem;
+	}
+	.project-option:hover { border-color: var(--accent); background: rgba(255, 255, 255, 0.05); }
+	.project-option-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+	.project-color-dot { width: 0.62rem; height: 0.62rem; border-radius: 999px; background: var(--muted); flex-shrink: 0; }
+	.project-color-dot.neutral { opacity: 0.6; }
 	.run-section { margin-bottom: 0.8rem; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; background: var(--card-bg, var(--card)); }
 	.run-header { display: flex; justify-content: space-between; gap: 0.6rem; padding: 0.5rem 0.6rem; border-bottom: 1px solid var(--border); }
 	.run-title { display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; min-width: 0; }
@@ -1443,6 +1577,8 @@
 	.output-thumb.thumb-selected { box-shadow: 0 0 0 2px var(--accent); }
 	.output-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
 	.output-thumb video { width: 100%; height: 100%; object-fit: cover; display: block; }
+	.output-section-body.thumb-fit-contain .output-thumb img,
+	.output-section-body.thumb-fit-contain .output-thumb video { object-fit: contain; background: #0b0b0b; }
 	.output-thumb audio { width: 100%; height: 100%; min-height: 70px; }
 	.output-thumb[role='button'] { cursor: pointer; }
 	.output-thumb-play { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; background: rgba(0, 0, 0, 0.2); pointer-events: none; transition: background 0.15s ease; }
@@ -1455,8 +1591,10 @@
 	.error { color: var(--error, #ef4444); }
 	@media (max-width: 900px) {
 		.page-header { flex-direction: column; align-items: flex-start; }
+		.gallery-controls-right { width: 100%; justify-content: flex-start; }
 		.filters { grid-template-columns: 1fr 1fr; }
 		.run-header { flex-direction: column; }
 		.output-section-body { grid-template-columns: repeat(auto-fill, minmax(calc(120px * var(--thumb-size-scale, 1)), 1fr)); }
+		.project-picker-popover { width: 100%; max-width: 100%; }
 	}
 </style>
