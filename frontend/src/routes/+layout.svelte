@@ -29,10 +29,14 @@
 	let mobileQueueTimeout: ReturnType<typeof setTimeout> | null = null;
 	let mobileConsoleTimeout: ReturnType<typeof setTimeout> | null = null;
 
+	function isLoginPath(path: string): boolean {
+		return path === '/login' || path.startsWith('/login/');
+	}
+
 	let isAppRoute = $derived(
 		$page.url.pathname === '/app' || $page.url.pathname.startsWith('/app/')
 	);
-	let isLoginRoute = $derived($page.url.pathname === '/login');
+	let isLoginRoute = $derived(isLoginPath($page.url.pathname));
 	let canAccessConsole = $derived(
 		!$authState.enabled || $authState.user?.role === 'admin'
 	);
@@ -82,8 +86,8 @@
 					loaded: true
 				});
 				const path = window.location.pathname;
-				if (enabled && !authenticated && path !== '/login') goto('/login');
-				if (enabled && authenticated && path === '/login') goto('/');
+				if (enabled && !authenticated && !isLoginPath(path)) goto('/login');
+				if (enabled && authenticated && isLoginPath(path)) goto('/');
 			})
 			.catch(() => {
 				authState.set({ enabled: false, authenticated: false, user: null, loaded: true });
@@ -93,11 +97,11 @@
 	$effect(() => {
 		if (!$authState.loaded) return;
 		const path = $page.url.pathname;
-		if ($authState.enabled && !$authState.authenticated && path !== '/login') {
+		if ($authState.enabled && !$authState.authenticated && !isLoginPath(path)) {
 			goto('/login');
 			return;
 		}
-		if ($authState.enabled && $authState.authenticated && path === '/login') {
+		if ($authState.enabled && $authState.authenticated && isLoginPath(path)) {
 			goto('/');
 		}
 	});
@@ -185,7 +189,12 @@
 				{#if showAppShell}
 					{@render children()}
 				{:else}
-					<div class="auth-loading" role="status" aria-live="polite">Redirecting to login...</div>
+					<div class="auth-loading" role="status" aria-live="polite">
+						<p>Redirecting to login...</p>
+						<button type="button" class="auth-loading-login-btn" onclick={() => goto('/login')}>
+							Go to login
+						</button>
+					</div>
 				{/if}
 			</main>
 			{#if isMobile}
@@ -438,6 +447,11 @@
 	.auth-loading {
 		padding: 1rem;
 		color: var(--muted);
+	}
+
+	.auth-loading-login-btn {
+		margin-top: 0.5rem;
+		width: auto;
 	}
 
 	@keyframes app-booting-fade-in {
