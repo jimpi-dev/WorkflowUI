@@ -1,6 +1,8 @@
 import requests
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
+
+from authz import require_user
 
 from dependencies import COMFY_URL
 
@@ -8,8 +10,10 @@ router = APIRouter()
 
 
 @router.get("/comfyui/logs/raw")
-def get_comfyui_logs_raw():
+def get_comfyui_logs_raw(ctx=Depends(require_user)):
     """Proxy to ComfyUI internal logs API (live terminal output). Requires ComfyUI Nov 2024+."""
+    if ctx.auth_enabled and (ctx.user is None or ctx.user.role != "admin"):
+        raise HTTPException(status_code=403, detail="Admin only")
     base = (COMFY_URL or "").rstrip("/")
     if not base:
         raise HTTPException(status_code=503, detail="ComfyUI URL not configured")

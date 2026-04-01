@@ -21,6 +21,7 @@
 
 	let entries = $state<LogEntry[]>([]);
 	let error = $state<string | null>(null);
+	let adminOnly = $state(false);
 	let loading = $state(true);
 	let autoScroll = $state(true);
 	let scrollEl: HTMLDivElement | null = $state(null);
@@ -147,6 +148,10 @@
 		try {
 			const res = await fetch(`${base}/comfyui/logs/raw`, { signal: AbortSignal.timeout(10000) });
 			if (!res.ok) {
+				if (res.status === 403) {
+					adminOnly = true;
+					throw new Error('ComfyUI console is admin-only when authentication is enabled.');
+				}
 				const data = await res.json().catch(() => ({}));
 				const detail = typeof data.detail === 'string' ? data.detail : `Status ${res.status}`;
 				throw new Error(detail);
@@ -158,6 +163,7 @@
 			}
 			entries = next;
 			error = null;
+			adminOnly = false;
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Failed to load console';
 			entries = [];
@@ -332,7 +338,11 @@
 			<div class="console-line console-muted">Loading…</div>
 		{:else if error}
 			<div class="console-line console-error">
-				Console unavailable. {error} Ensure ComfyUI is running and supports the logs API (Nov 2024+).
+				{#if adminOnly}
+					Console unavailable. {error}
+				{:else}
+					Console unavailable. {error} Ensure ComfyUI is running and supports the logs API (Nov 2024+).
+				{/if}
 			</div>
 		{:else if entries.length === 0}
 			<div class="console-line console-muted">No log output yet.</div>

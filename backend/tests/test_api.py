@@ -803,15 +803,15 @@ def test_cancel_queued_or_running_run(client):
                 "bindings": [],
             },
         )
-    run_id = run_r.json()["run_id"]
-    cancel_r = client.post(f"/runs/{run_id}/cancel")
-    assert cancel_r.status_code == 200
-    assert cancel_r.json() == {"ok": True, "status": "cancelled"}
+        run_id = run_r.json()["run_id"]
+        cancel_r = client.post(f"/runs/{run_id}/cancel")
+        assert cancel_r.status_code == 200
+        assert cancel_r.json() == {"ok": True, "status": "cancelled"}
 
-    status_r = client.get(f"/run/{run_id}/status")
-    assert status_r.status_code == 200
-    assert status_r.json().get("status") == "cancelled"
-    time.sleep(0.6)
+        status_r = client.get(f"/run/{run_id}/status")
+        assert status_r.status_code == 200
+        assert status_r.json().get("status") == "cancelled"
+        time.sleep(0.6)
 
 
 def test_cancel_run_invalid_status(client):

@@ -32,9 +32,18 @@
 	let isAppRoute = $derived(
 		$page.url.pathname === '/app' || $page.url.pathname.startsWith('/app/')
 	);
+	let canAccessConsole = $derived(
+		!$authState.enabled || $authState.user?.role === 'admin'
+	);
 	$effect(() => {
 		if (!isAppRoute) {
 			clearHeaderAppContext();
+		}
+	});
+
+	$effect(() => {
+		if (!canAccessConsole && $consolePanelOpen) {
+			consolePanelOpen.set(false);
 		}
 	});
 
@@ -166,12 +175,14 @@
 						role="presentation"
 						onclick={() => consolePanelOpen.set(false)}
 					/>
-					<div class="console-mobile-sheet" class:console-mobile-sheet--open={mobileConsoleOpen}>
-						<ComfyUIConsole open={$consolePanelOpen} onclose={() => consolePanelOpen.set(false)} mobileFullscreen />
-					</div>
+					{#if canAccessConsole}
+						<div class="console-mobile-sheet" class:console-mobile-sheet--open={mobileConsoleOpen}>
+							<ComfyUIConsole open={$consolePanelOpen} onclose={() => consolePanelOpen.set(false)} mobileFullscreen />
+						</div>
+					{/if}
 				{/if}
 			{:else}
-				{#if $consolePanelOpen}
+				{#if $consolePanelOpen && canAccessConsole}
 					<ComfyUIConsole open={$consolePanelOpen} onclose={() => consolePanelOpen.set(false)} />
 				{/if}
 			{/if}

@@ -339,7 +339,9 @@ def cancel_run(run_id: str, db=Depends(get_db), state=Depends(get_run_queue_stat
 
 
 @router.post("/runs/{run_id}/retry")
-def retry_run(run_id: str, state=Depends(get_run_queue_state)):
+def retry_run(run_id: str, db=Depends(get_db), state=Depends(get_run_queue_state), ctx=Depends(require_user)):
+    run_repo = db[3]
+    ensure_run_access(run_id, ctx, run_repo)
     with state.queue_lock:
         r = state.runs.get(run_id)
         if r is None:
@@ -369,7 +371,9 @@ def retry_run(run_id: str, state=Depends(get_run_queue_state)):
 
 
 @router.post("/runs/{run_id}/reorder")
-def reorder_run(run_id: str, body: dict, db=Depends(get_db), state=Depends(get_run_queue_state)):
+def reorder_run(run_id: str, body: dict, db=Depends(get_db), state=Depends(get_run_queue_state), ctx=Depends(require_user)):
+    run_repo = db[3]
+    ensure_run_access(run_id, ctx, run_repo)
     direction = body.get("direction")
     if direction not in ("up", "down"):
         raise HTTPException(status_code=400, detail="direction must be 'up' or 'down'")
@@ -387,7 +391,9 @@ def reorder_run(run_id: str, body: dict, db=Depends(get_db), state=Depends(get_r
 
 
 @router.post("/runs/{run_id}/move")
-def move_run(run_id: str, body: dict, db=Depends(get_db), state=Depends(get_run_queue_state)):
+def move_run(run_id: str, body: dict, db=Depends(get_db), state=Depends(get_run_queue_state), ctx=Depends(require_user)):
+    run_repo = db[3]
+    ensure_run_access(run_id, ctx, run_repo)
     position = body.get("position")
     if position is None or not isinstance(position, (int, float)):
         raise HTTPException(status_code=400, detail="position (1-based) required")
@@ -536,13 +542,21 @@ def get_queue(db=Depends(get_db), state=Depends(get_run_queue_state), ctx=Depend
     running_item = None
     if running_id:
         run_entity = run_repo.get_run(running_id) if run_repo else None
-        if run_entity and ((ctx.auth_enabled and ctx.user and run_entity.owner_user_id != ctx.user.id) or (not ctx.auth_enabled and run_entity.owner_user_id is not None)):
-            run_entity = None
-        running_item = _queue_item(running_id, run_entity, app_repo, project_repo, mem.get(running_id))
+        running_visible = True
+        if run_entity and (
+            (ctx.auth_enabled and (ctx.user is None or run_entity.owner_user_id != ctx.user.id))
+            or (not ctx.auth_enabled and run_entity.owner_user_id is not None)
+        ):
+            running_visible = False
+        if running_visible:
+            running_item = _queue_item(running_id, run_entity, app_repo, project_repo, mem.get(running_id))
     queued = []
     for run_id in queued_ids:
         run_entity = run_repo.get_run(run_id) if run_repo else None
-        if run_entity and ((ctx.auth_enabled and ctx.user and run_entity.owner_user_id != ctx.user.id) or (not ctx.auth_enabled and run_entity.owner_user_id is not None)):
+        if run_entity and (
+            (ctx.auth_enabled and (ctx.user is None or run_entity.owner_user_id != ctx.user.id))
+            or (not ctx.auth_enabled and run_entity.owner_user_id is not None)
+        ):
             continue
         queued.append(_queue_item(run_id, run_entity, app_repo, project_repo, mem.get(run_id)))
     _persist_queue(state, run_repo)
