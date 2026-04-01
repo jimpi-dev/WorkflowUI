@@ -32,9 +32,12 @@
 	let isAppRoute = $derived(
 		$page.url.pathname === '/app' || $page.url.pathname.startsWith('/app/')
 	);
+	let isLoginRoute = $derived($page.url.pathname === '/login');
 	let canAccessConsole = $derived(
 		!$authState.enabled || $authState.user?.role === 'admin'
 	);
+	let authBlocked = $derived($authState.loaded && $authState.enabled && !$authState.authenticated);
+	let showAppShell = $derived(!$authBlocked || isLoginRoute);
 	$effect(() => {
 		if (!isAppRoute) {
 			clearHeaderAppContext();
@@ -85,6 +88,18 @@
 			.catch(() => {
 				authState.set({ enabled: false, authenticated: false, user: null, loaded: true });
 			});
+	});
+
+	$effect(() => {
+		if (!$authState.loaded) return;
+		const path = $page.url.pathname;
+		if ($authState.enabled && !$authState.authenticated && path !== '/login') {
+			goto('/login');
+			return;
+		}
+		if ($authState.enabled && $authState.authenticated && path === '/login') {
+			goto('/');
+		}
 	});
 
 	onMount(() => {
@@ -160,12 +175,18 @@
 
 <div class="app-layout has-status-bar" bind:this={layoutEl}>
 	<PluginWelcomeModal />
-	<AppHeader />
+	{#if showAppShell}
+		<AppHeader />
+	{/if}
 
 	<div class="app-content-row">
 		<div class="app-content-main">
 			<main class="app-viewport">
-				{@render children()}
+				{#if showAppShell}
+					{@render children()}
+				{:else}
+					<div class="auth-loading" role="status" aria-live="polite">Redirecting to login...</div>
+				{/if}
 			</main>
 			{#if isMobile}
 				{#if mobileConsoleMounted}
@@ -208,19 +229,21 @@
 		{/if}
 	</div>
 
-	<div class="app-footer-area">
-		<div class="app-footer-row">
-			<div class="app-footer-main">
-				<footer class="app-footer" bind:this={footerEl}>
-					<ComfyUIStatusBar />
-				</footer>
-				<QueueBadge />
+	{#if showAppShell}
+		<div class="app-footer-area">
+			<div class="app-footer-row">
+				<div class="app-footer-main">
+					<footer class="app-footer" bind:this={footerEl}>
+						<ComfyUIStatusBar />
+					</footer>
+					<QueueBadge />
+				</div>
+				{#if $queuePanelOpen}
+					<div class="app-footer-spacer" style="width: {$queuePanelWidth}px;"></div>
+				{/if}
 			</div>
-			{#if $queuePanelOpen}
-				<div class="app-footer-spacer" style="width: {$queuePanelWidth}px;"></div>
-			{/if}
 		</div>
-	</div>
+	{/if}
 
 	{#if $appBooting}
 		<div class="app-booting-mask" role="status" aria-live="polite" aria-label="Loading app">
@@ -409,6 +432,11 @@
 	.app-booting-sub {
 		margin: 0;
 		font-size: 0.9rem;
+		color: var(--muted);
+	}
+
+	.auth-loading {
+		padding: 1rem;
 		color: var(--muted);
 	}
 
