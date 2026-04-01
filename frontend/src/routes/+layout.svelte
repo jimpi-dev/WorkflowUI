@@ -41,7 +41,7 @@
 		!$authState.enabled || $authState.user?.role === 'admin'
 	);
 	let authBlocked = $derived($authState.loaded && $authState.enabled && !$authState.authenticated);
-	let showAppShell = $derived(!$authBlocked || isLoginRoute);
+	let showAppShell = $derived(!authBlocked || isLoginRoute);
 	$effect(() => {
 		if (!isAppRoute) {
 			clearHeaderAppContext();
