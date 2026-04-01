@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
+	import { onDestroy, onMount } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { browser } from '$app/environment';
 	import { page } from '$app/stores';
@@ -11,6 +11,7 @@
 	import { headerAppContext } from '$lib/stores/headerAppContext';
 	import { presetHeaderStore, togglePresetHeaderCreation, requestOpenPresetList } from '$lib/stores/presetHeader';
 	import { projectSelectorOpen } from '$lib/stores/projectSelectorOpen';
+	import { getQueue } from '$lib/queueApi';
 	import PresetIcon from '$lib/components/PresetIcon.svelte';
 
 	let theme = $state('dark');
@@ -22,6 +23,15 @@
 			localStorage.getItem('theme') ??
 			(window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
 		document.documentElement.setAttribute('data-theme', theme);
+		refreshActivityCount();
+		activityPollId = setInterval(refreshActivityCount, 5000);
+	});
+
+	onDestroy(() => {
+		if (activityPollId) {
+			clearInterval(activityPollId);
+			activityPollId = null;
+		}
 	});
 
 	function toggleTheme() {
@@ -38,6 +48,8 @@
 	}
 
 	let menuOpen = $state(false);
+	let activityActiveCount = $state(0);
+	let activityPollId: ReturnType<typeof setInterval> | null = null;
 
 	function toggleMenu() {
 		menuOpen = !menuOpen;
@@ -45,6 +57,18 @@
 
 	function closeMenu() {
 		menuOpen = false;
+	}
+
+	async function refreshActivityCount() {
+		try {
+			const queue = await getQueue();
+			const ids = new Set<string>();
+			if (queue.running) ids.add(queue.running.run_group_id ?? queue.running.run_id);
+			for (const item of queue.queued ?? []) ids.add(item.run_group_id ?? item.run_id);
+			activityActiveCount = ids.size;
+		} catch {
+			activityActiveCount = 0;
+		}
 	}
 
 	async function logout() {
@@ -254,6 +278,13 @@
 				<svg class="top-nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
 				<span>Projects</span>
 			</a>
+			<a href="/activity" class:active={$page.url.pathname === '/activity'}>
+				<svg class="top-nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12h4l2-5 4 10 2-5h6"/></svg>
+				<span>Activity</span>
+				{#if activityActiveCount > 0}
+					<span class="nav-count-badge">{activityActiveCount}</span>
+				{/if}
+			</a>
 			<a href="/apps" data-sveltekit-preload-data="off" class:active={$page.url.pathname === '/apps' || $page.url.pathname.startsWith('/apps/')}>
 				<svg class="top-nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
 				<span>Apps</span>
@@ -324,6 +355,7 @@
 		<a href="/" class:active={$page.url.pathname === '/'} onclick={closeMenu}>Home</a>
 		<a href="/projects/{QUICK_RUNS_PROJECT_ID}" class:active={$page.url.pathname === '/projects/' + QUICK_RUNS_PROJECT_ID} onclick={closeMenu}>Quick runs</a>
 		<a href="/projects" data-sveltekit-preload-data="off" class:active={$page.url.pathname === '/projects' || ($page.url.pathname.startsWith('/projects/') && $page.url.pathname !== '/projects/' + QUICK_RUNS_PROJECT_ID)} onclick={closeMenu}>Projects</a>
+		<a href="/activity" class:active={$page.url.pathname === '/activity'} onclick={closeMenu}>Activity{#if activityActiveCount > 0} ({activityActiveCount}){/if}</a>
 		<a href="/apps" data-sveltekit-preload-data="off" class:active={$page.url.pathname === '/apps' || $page.url.pathname.startsWith('/apps/')} onclick={closeMenu}>Apps</a>
 		<a href="/workflows" class:active={$page.url.pathname === '/workflows' || $page.url.pathname.startsWith('/workflows/')} onclick={closeMenu}>Workflows</a>
 		<a href="/import" class:active={$page.url.pathname === '/import'} onclick={closeMenu}>Import</a>
@@ -743,6 +775,22 @@
 		height: 1.125em;
 		flex-shrink: 0;
 		transition: transform 0.2s ease;
+	}
+
+	.nav-count-badge {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		min-width: 1.2rem;
+		height: 1.2rem;
+		padding: 0 0.3rem;
+		border-radius: 999px;
+		background: color-mix(in srgb, var(--accent) 20%, transparent);
+		border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+		color: var(--text);
+		font-size: 0.72rem;
+		font-weight: 700;
+		line-height: 1;
 	}
 
 	.top-nav a:hover {
