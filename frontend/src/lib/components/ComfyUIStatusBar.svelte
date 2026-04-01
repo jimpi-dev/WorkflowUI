@@ -2,6 +2,7 @@
 import { getApiBase, appConfig } from '$lib/config';
 import { onMount, onDestroy } from 'svelte';
 import { get } from 'svelte/store';
+import { page } from '$app/stores';
 	import DbSizeBar from '$lib/components/DbSizeBar.svelte';
 	import { consolePanelOpen } from '$lib/stores/consolePanelOpen';
 	import { queuePanelOpen } from '$lib/stores/queuePanelOpen';
@@ -38,6 +39,16 @@ import { get } from 'svelte/store';
 	let intervalId: ReturnType<typeof setInterval> | null = null;
 	let configIntervalId: ReturnType<typeof setInterval> | null = null;
 
+	const isLoginRoute = $derived.by(() => {
+		const path = $page?.url?.pathname ?? '';
+		return path === '/login' || path.startsWith('/login/');
+	});
+	const canQueryRuntimeStatus = $derived.by(() => {
+		if (isLoginRoute) return false;
+		if (!$authState.enabled) return true;
+		return $authState.authenticated;
+	});
+
 	function formatLocalStorageLabel(bytes: number | null): string {
 		if (bytes == null) return '—';
 		const KB = 1024;
@@ -63,6 +74,7 @@ import { get } from 'svelte/store';
 	});
 
 	const shouldFetchConfig = $derived.by(() => {
+		if (!canQueryRuntimeStatus) return false;
 		if (typeof window === 'undefined') return true;
 		if (!window.location.pathname.startsWith('/activity')) return true;
 		if (!$authState.enabled) return true;
@@ -117,6 +129,11 @@ import { get } from 'svelte/store';
 	}
 
 	async function fetchStatus() {
+		if (!canQueryRuntimeStatus) {
+			status = null;
+			error = null;
+			return;
+		}
 		const base = getApiBase() || '';
 		try {
 			const res = await fetch(`${base}/comfyui/status`, { signal: AbortSignal.timeout(8000) });
@@ -131,6 +148,10 @@ import { get } from 'svelte/store';
 	}
 
 	async function fetchQueueSummary() {
+		if (!canQueryRuntimeStatus) {
+			queueSummary = null;
+			return;
+		}
 		if (get(queuePanelOpen)) {
 			return;
 		}
@@ -145,6 +166,7 @@ import { get } from 'svelte/store';
 	}
 
 	function startPolling() {
+		if (intervalId || configIntervalId) return;
 		if (typeof document === 'undefined') return;
 		const isHidden = () => document.visibilityState === 'hidden';
 		const ms = () => (isHidden() ? POLL_INTERVAL_HIDDEN_MS : POLL_INTERVAL_MS);
@@ -194,10 +216,29 @@ import { get } from 'svelte/store';
 	}
 
 	onMount(() => {
-		startPolling();
+		if (canQueryRuntimeStatus) startPolling();
 		if (typeof window !== 'undefined') {
 			window.addEventListener('workflowui-refresh-storage', fetchConfig);
 		}
+	});
+
+	$effect(() => {
+		if (canQueryRuntimeStatus) {
+			if (!intervalId && !configIntervalId) startPolling();
+			return;
+		}
+		stopPolling();
+		status = null;
+		queueSummary = null;
+		error = null;
+		workflowuiPluginAvailable = null;
+		workflowuiPluginIncompatible = false;
+		dbSizeBytes = null;
+		dbBreakdown = null;
+		workflowuiPluginMinVersion = null;
+		localStorageSizeBytes = null;
+		localStorageRootPath = null;
+		configVersion = null;
 	});
 
 	onDestroy(() => {
@@ -210,6 +251,7 @@ import { get } from 'svelte/store';
 
 <div class="status-bar" role="status" aria-label="ComfyUI queue and system status">
 	<span class="status-item app-info">{appConfig.appName} v{configVersion ?? appConfig.version}</span>
+	{#if canQueryRuntimeStatus}
 	{#if appConfig.githubRepoUrl}
 		<span class="status-sep" aria-hidden="true">|</span>
 		<a
@@ -334,6 +376,7 @@ import { get } from 'svelte/store';
 			/>
 		</span>
 	</span>
+	{/if}
 </div>
 
 <style>
