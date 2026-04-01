@@ -5,10 +5,10 @@
 	import { page } from '$app/stores';
 	import { browser } from '$app/environment';
 	import type { AppSummary, ProjectOption } from './+page';
-	import { QUICK_RUNS_PROJECT_ID } from '$lib/constants';
 	import { appBooting } from '$lib/stores/appBooting';
 	import { getApiBase } from '$lib/config';
 	import { getContrastForeground } from '$lib/utils/color';
+	import { quickRunsProject } from '$lib/stores/quickRunsProject';
 
 	const sendFromRun = $derived.by(() => {
 		try {
@@ -220,7 +220,7 @@
 
 	const projectsExcludingQuickRuns = $derived.by(() => {
 		return [...(data.projects ?? [])]
-			.filter((p) => p.id !== QUICK_RUNS_PROJECT_ID)
+			.filter((p) => p.id !== $quickRunsProject.id)
 			.sort((a, b) => (a.name ?? '').localeCompare(b.name ?? '', undefined, { sensitivity: 'base' }));
 	});
 
@@ -348,7 +348,7 @@
 
 	function appUrl(slug: string, projectId: string | null): string {
 		const params = new URLSearchParams();
-		if (projectId && projectId !== QUICK_RUNS_PROJECT_ID) params.set('project', projectId);
+		if (projectId && projectId !== $quickRunsProject.id) params.set('project', projectId);
 		if (sendToAppParams) {
 			sendToAppParams.forEach((v, k) => params.set(k, v));
 		}

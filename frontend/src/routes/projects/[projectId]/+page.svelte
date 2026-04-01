@@ -17,7 +17,7 @@ import { get } from 'svelte/store';
 	import ConfirmDeleteDialog from '$lib/components/ConfirmDeleteDialog.svelte';
 	import LightboxViewer, { type LightboxItem } from '$lib/components/LightboxViewer.svelte';
 	import { appBooting } from '$lib/stores/appBooting';
-	import { QUICK_RUNS_PROJECT_ID } from '$lib/constants';
+	import { quickRunsProject } from '$lib/stores/quickRunsProject';
 
 	let { data }: {
 		data: {
@@ -2547,7 +2547,7 @@ let lightboxDeletePending = $state<
 						<span class="save-hint">Saving…</span>
 					{/if}
 				</div>
-				{#if data.project.id !== QUICK_RUNS_PROJECT_ID}
+				{#if data.project.id !== $quickRunsProject.id}
 					<div class="delete-archive-section">
 						<button
 							type="button"

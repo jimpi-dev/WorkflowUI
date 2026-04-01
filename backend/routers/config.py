@@ -9,7 +9,6 @@ from fastapi import APIRouter, HTTPException, Depends
 from authz import require_user, require_admin
 from config import get_media_storage_config, get_workflowui_embed_config, update_media_storage_config
 from db.maintenance import vacuum_db
-from db.migrate import QUICK_RUNS_PROJECT_ID
 from services.comfyui_info import (
     get_workflowui_plugin_status,
     get_cached_status,
@@ -21,8 +20,9 @@ from services.comfyui_info import (
 from services.comfyui_workflow_fetch import fetch_workflow_from_comfyui
 from version import ENGINE_VERSION
 
-from dependencies import COMFY_URL, get_db, get_run_queue_state
+from dependencies import COMFY_URL, get_db, get_run_queue_state, get_user_repo
 import time
+from services.quick_runs import ensure_quick_runs_project_for_user
 
 logger = logging.getLogger(__name__)
 router = APIRouter(dependencies=[Depends(require_user)])
@@ -161,9 +161,17 @@ def get_comfyui_status(state=Depends(get_run_queue_state)):
 
 
 @router.get("/config")
-def get_config(db=Depends(get_db)):
+def get_config(db=Depends(get_db), ctx=Depends(require_user)):
     db_path = db[0]
     media_cfg = get_media_storage_config()
+    user_repo = get_user_repo()
+    project_repo = db[4]
+    quick_runs_project_id = ensure_quick_runs_project_for_user(
+        ctx.user if ctx.auth_enabled else None,
+        auth_enabled=bool(ctx.auth_enabled),
+        project_repo=project_repo,
+        user_repo=user_repo,
+    )
     comfyui_delete_supported, workflowui_plugin_available, workflowui_plugin_incompatible = get_workflowui_plugin_status(COMFY_URL)
     embed_cfg = get_workflowui_embed_config()
     frontend_version = _get_frontend_version()
@@ -172,7 +180,7 @@ def get_config(db=Depends(get_db)):
     local_storage_size = _get_local_storage_size_bytes(media_cfg.root_path)
     payload: dict[str, Any] = {
         "comfyui_url": COMFY_URL,
-        "quick_runs_project_id": QUICK_RUNS_PROJECT_ID,
+        "quick_runs_project_id": quick_runs_project_id,
         "engine_version": ENGINE_VERSION,
         "comfyuiDeleteSupported": comfyui_delete_supported,
         "workflowuiPluginAvailable": workflowui_plugin_available,

@@ -209,7 +209,8 @@ def migrate(db_path: Path | str) -> None:
                 role TEXT NOT NULL,
                 allow_all_apps INTEGER NOT NULL DEFAULT 0,
                 created_at INTEGER NOT NULL,
-                disabled_at INTEGER NULL
+                disabled_at INTEGER NULL,
+                quick_runs_project_id TEXT REFERENCES project(id)
             )
         """)
         conn.execute("""
@@ -339,6 +340,9 @@ def migrate(db_path: Path | str) -> None:
         app_cols = _run_columns(conn, "workflow_app")
         if "comfyui_url" not in app_cols:
             conn.execute("ALTER TABLE workflow_app ADD COLUMN comfyui_url TEXT")
+        user_cols = _run_columns(conn, "user_account")
+        if "quick_runs_project_id" not in user_cols:
+            conn.execute("ALTER TABLE user_account ADD COLUMN quick_runs_project_id TEXT REFERENCES project(id)")
         if "supported_input_kinds_json" not in app_cols:
             conn.execute("ALTER TABLE workflow_app ADD COLUMN supported_input_kinds_json TEXT")
         if "header_color" not in app_cols:

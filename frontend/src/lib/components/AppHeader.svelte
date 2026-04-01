@@ -3,7 +3,6 @@
 	import { goto } from '$app/navigation';
 	import { browser } from '$app/environment';
 	import { page } from '$app/stores';
-	import { QUICK_RUNS_PROJECT_ID } from '$lib/constants';
 	import { appConfig, getApiBase } from '$lib/config';
 	import { waitForAppToBeAvailable } from '$lib/api';
 	import { appBooting } from '$lib/stores/appBooting';
@@ -12,6 +11,7 @@
 	import { presetHeaderStore, togglePresetHeaderCreation, requestOpenPresetList } from '$lib/stores/presetHeader';
 	import { projectSelectorOpen } from '$lib/stores/projectSelectorOpen';
 	import { getQueue } from '$lib/queueApi';
+	import { quickRunsProject } from '$lib/stores/quickRunsProject';
 	import PresetIcon from '$lib/components/PresetIcon.svelte';
 
 	let theme = $state('dark');
@@ -272,11 +272,11 @@
 				<svg class="top-nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
 				<span>Home</span>
 			</a>
-			<a href="/projects/{QUICK_RUNS_PROJECT_ID}" class:active={$page.url.pathname === '/projects/' + QUICK_RUNS_PROJECT_ID}>
+			<a href="/projects/{$quickRunsProject.id}" class:active={$page.url.pathname === '/projects/' + $quickRunsProject.id}>
 				<svg class="top-nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
 				<span>Quick runs</span>
 			</a>
-			<a href="/projects" data-sveltekit-preload-data="off" class:active={$page.url.pathname === '/projects' || ($page.url.pathname.startsWith('/projects/') && $page.url.pathname !== '/projects/' + QUICK_RUNS_PROJECT_ID)}>
+			<a href="/projects" data-sveltekit-preload-data="off" class:active={$page.url.pathname === '/projects' || ($page.url.pathname.startsWith('/projects/') && $page.url.pathname !== '/projects/' + $quickRunsProject.id)}>
 				<svg class="top-nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
 				<span>Projects</span>
 			</a>
@@ -357,8 +357,8 @@
 	<nav class="nav-drawer" class:open={menuOpen} aria-label="Main navigation">
 		{#if showAuthNav}
 			<a href="/" class:active={$page.url.pathname === '/'} onclick={closeMenu}>Home</a>
-			<a href="/projects/{QUICK_RUNS_PROJECT_ID}" class:active={$page.url.pathname === '/projects/' + QUICK_RUNS_PROJECT_ID} onclick={closeMenu}>Quick runs</a>
-			<a href="/projects" data-sveltekit-preload-data="off" class:active={$page.url.pathname === '/projects' || ($page.url.pathname.startsWith('/projects/') && $page.url.pathname !== '/projects/' + QUICK_RUNS_PROJECT_ID)} onclick={closeMenu}>Projects</a>
+			<a href="/projects/{$quickRunsProject.id}" class:active={$page.url.pathname === '/projects/' + $quickRunsProject.id} onclick={closeMenu}>Quick runs</a>
+			<a href="/projects" data-sveltekit-preload-data="off" class:active={$page.url.pathname === '/projects' || ($page.url.pathname.startsWith('/projects/') && $page.url.pathname !== '/projects/' + $quickRunsProject.id)} onclick={closeMenu}>Projects</a>
 			<a href="/activity" class:active={$page.url.pathname === '/activity'} onclick={closeMenu}>Activity{#if activityActiveCount > 0} ({activityActiveCount}){/if}</a>
 			<a href="/apps" data-sveltekit-preload-data="off" class:active={$page.url.pathname === '/apps' || $page.url.pathname.startsWith('/apps/')} onclick={closeMenu}>Apps</a>
 			<a href="/workflows" class:active={$page.url.pathname === '/workflows' || $page.url.pathname.startsWith('/workflows/')} onclick={closeMenu}>Workflows</a>

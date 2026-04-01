@@ -16,6 +16,7 @@
 	import { goto } from '$app/navigation';
 	import { getApiBase } from '$lib/config';
 	import { authState } from '$lib/stores/auth';
+	import { quickRunsProject } from '$lib/stores/quickRunsProject';
 	import { tick, onMount } from 'svelte';
 	let { children } = $props();
 
@@ -86,12 +87,24 @@
 					user: d?.user ?? null,
 					loaded: true
 				});
+				if (!enabled || authenticated) {
+					fetch(`${base}/config`)
+						.then((cfgRes) => (cfgRes.ok ? cfgRes.json() : null))
+						.then((cfg) => {
+							if (cfg) quickRunsProject.setFromConfig(cfg);
+							else quickRunsProject.resetToDefault();
+						})
+						.catch(() => quickRunsProject.resetToDefault());
+				} else {
+					quickRunsProject.resetToDefault();
+				}
 				const path = window.location.pathname;
 				if (enabled && !authenticated && !isLoginPath(path)) goto('/login');
 				if (enabled && authenticated && isLoginPath(path)) goto('/');
 			})
 			.catch(() => {
 				authState.set({ enabled: false, authenticated: false, user: null, loaded: true });
+				quickRunsProject.resetToDefault();
 			});
 	});
 

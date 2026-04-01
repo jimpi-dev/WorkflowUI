@@ -9,7 +9,6 @@ from fastapi import APIRouter, HTTPException, Depends, Request
 from fastapi.responses import JSONResponse, FileResponse
 
 from authz import require_user, ensure_project_access, ensure_run_access, user_can_access_app
-from db.migrate import QUICK_RUNS_PROJECT_ID
 from services.comfyui_info import normalize_comfy_url as _normalize_comfy_url, get_run_remote_storage_bytes
 from services.run_queue import (
     queue_run as run_queue_queue_run,
@@ -28,6 +27,7 @@ from dependencies import (
     get_media_storage_service,
     get_executor,
     get_run_queue_state,
+    get_user_repo,
 )
 from routers.execution import load_run_output_content_bytes
 from services.comfyui_embedded_detect import file_has_embedded_comfyui_metadata
@@ -38,6 +38,7 @@ from services.run_serialization import (
     queue_item_summary_from_run,
     safe_json_loads,
 )
+from services.quick_runs import ensure_quick_runs_project_for_user
 
 router = APIRouter(dependencies=[Depends(require_user)])
 
@@ -223,6 +224,13 @@ def run_workflow(
         _persist_queue(state, db[3])
         return result
     _, workflow_repo, app_repo, run_repo, project_repo, _, _ = db
+    user_repo = get_user_repo()
+    quick_runs_project_id = ensure_quick_runs_project_for_user(
+        ctx.user if ctx.auth_enabled else None,
+        auth_enabled=bool(ctx.auth_enabled),
+        project_repo=project_repo,
+        user_repo=user_repo,
+    )
     app = app_repo.get_app_by_slug(workflow_id)
     if app:
         if not user_can_access_app(app.id, ctx):
@@ -235,7 +243,7 @@ def run_workflow(
             run_comfy_url = _normalize_comfy_url(app.comfyui_url or COMFY_URL)
             run_repo.create_run(
                 run_id,
-                QUICK_RUNS_PROJECT_ID,
+                quick_runs_project_id,
                 version.id,
                 app.id,
                 "queued",
