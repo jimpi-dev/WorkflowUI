@@ -444,6 +444,27 @@ def _queue_item(run_id: str, run_entity, app_repo, project_repo, mem_run: dict |
     return out
 
 
+def _normalized_run_outputs(run_entity) -> list[dict]:
+    entries = safe_json_loads(getattr(run_entity, "media_json", None))
+    if not isinstance(entries, list) or not entries:
+        entries = safe_json_loads(getattr(run_entity, "images_json", None), [])
+    if not isinstance(entries, list):
+        return []
+    normalized: list[dict] = []
+    for ent in entries:
+        if not isinstance(ent, dict):
+            continue
+        out = dict(ent)
+        raw_type = out.get("type")
+        raw_kind = out.get("kind")
+        if isinstance(raw_type, str) and raw_type.strip():
+            out["type"] = raw_type.strip().lower()
+        elif isinstance(raw_kind, str) and raw_kind.strip():
+            out["type"] = raw_kind.strip().lower()
+        normalized.append(out)
+    return normalized
+
+
 def _persist_queue(state, run_repo) -> None:
     """Write current queue (running + queued run_ids) to saved_queue so it restores on next load."""
     if not run_repo or not hasattr(run_repo, "set_saved_queue"):
@@ -560,6 +581,101 @@ def start_queue(state=Depends(get_run_queue_state)):
         state.processing_halted, get_executor(), get_db, get_media_storage_service,
     )
     return {"ok": True, "processing_halted": False}
+
+
+@router.get("/runs/recent")
+def list_recent_runs(
+    project_id: str | None = None,
+    app_id: str | None = None,
+    status: str | None = None,
+    q: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+    db=Depends(get_db),
+    state=Depends(get_run_queue_state),
+    ctx=Depends(require_user),
+):
+    _, _, app_repo, run_repo, project_repo, _, _ = db
+    safe_limit = max(1, min(int(limit), 200))
+    safe_offset = max(0, int(offset))
+    q_trim = q.strip() if isinstance(q, str) and q.strip() else None
+    statuses = [s.strip().lower() for s in (status or "").split(",") if s.strip()]
+    total = run_repo.count_recent_runs(
+        owner_user_id=ctx.user.id if (ctx.auth_enabled and ctx.user) else None,
+        auth_enabled=bool(ctx.auth_enabled),
+        project_id=project_id.strip() if isinstance(project_id, str) and project_id.strip() else None,
+        app_id=app_id.strip() if isinstance(app_id, str) and app_id.strip() else None,
+        statuses=statuses or None,
+        q=q_trim,
+    )
+    recent = run_repo.get_recent_runs(
+        owner_user_id=ctx.user.id if (ctx.auth_enabled and ctx.user) else None,
+        auth_enabled=bool(ctx.auth_enabled),
+        project_id=project_id.strip() if isinstance(project_id, str) and project_id.strip() else None,
+        app_id=app_id.strip() if isinstance(app_id, str) and app_id.strip() else None,
+        statuses=statuses or None,
+        q=q_trim,
+        limit=safe_limit,
+        offset=safe_offset,
+    )
+    with state.queue_lock:
+        mem = {rid: dict(r) if isinstance(r, dict) else {} for rid, r in state.runs.items()}
+
+    out = []
+    for r in recent:
+        app_slug = None
+        app_title = None
+        app_header_color = None
+        app_id_out = r.app_id
+        if r.app_id:
+            app = app_repo.get_app_by_id(r.app_id)
+            if app:
+                app_slug = app.slug
+                app_title = app.title
+                app_header_color = app.header_color
+            else:
+                app_id_out = None
+        project_title = None
+        if r.project_id:
+            proj = project_repo.get_project(r.project_id)
+            if proj:
+                project_title = getattr(proj, "name", None)
+        mem_run = mem.get(r.id) if mem else None
+        status_out = mem_run.get("status", r.status) if mem_run else r.status
+        error_out = mem_run.get("error", r.error) if mem_run else r.error
+        queue_position = mem_run.get("queue_position") if mem_run else None
+        comfyui_unreachable_warning = mem_run.get("comfyui_unreachable_warning") if mem_run else None
+        out.append(
+            {
+                "id": r.id,
+                "run_group_id": r.run_group_id,
+                "project_id": r.project_id,
+                "project_title": project_title,
+                "workflow_version_id": r.workflow_version_id,
+                "app_id": app_id_out,
+                "app_slug": app_slug,
+                "app_title": app_title,
+                "app_header_color": app_header_color,
+                "status": status_out,
+                "queue_position": queue_position,
+                "created_at": r.created_at,
+                "seed": r.seed,
+                "images": _normalized_run_outputs(r),
+                "execution_time": r.execution_time,
+                "error": error_out,
+                "local_storage_status": r.local_storage_status,
+                "remote_status": r.remote_status,
+                "local_path": r.local_path,
+                "local_storage_bytes": None,
+                "remote_storage_bytes": None,
+                "comfyui_unreachable_warning": comfyui_unreachable_warning,
+                "parent_run_id": r.parent_run_id,
+                "parent_media_id": r.parent_media_id,
+                "root_run_id": r.root_run_id,
+                "summary": queue_item_summary_from_run(r, r.input_snapshot_json),
+            }
+        )
+    return {"runs": out, "total": total}
 
 
 @router.get("/runs/{run_id}")

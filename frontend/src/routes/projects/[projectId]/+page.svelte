@@ -2460,6 +2460,19 @@ let lightboxDeletePending = $state<
 					</button>
 				{/if}
 				<p class="meta">Created {new Date(data.project.created_at).toLocaleDateString()} · {data.project.run_count} runs</p>
+				<p class="meta">
+					<button
+						type="button"
+						class="activity-link"
+						onclick={() => {
+							if (typeof window !== 'undefined') {
+								window.location.href = `/activity?project=${encodeURIComponent(data.project.id)}`;
+							}
+						}}
+					>
+						View project activity in global queue/recent feed
+					</button>
+				</p>
 				<label class="description-label">
 					<span class="filter-label">Description</span>
 					<textarea
@@ -4019,6 +4032,18 @@ let lightboxDeletePending = $state<
 		margin: 0 0 0.75rem 0;
 		font-size: 0.85rem;
 		color: var(--text-muted);
+	}
+	.activity-link {
+		background: none;
+		border: none;
+		padding: 0;
+		color: var(--accent);
+		text-decoration: none;
+		cursor: pointer;
+		font: inherit;
+	}
+	.activity-link:hover {
+		text-decoration: underline;
 	}
 	.tags {
 		display: flex;

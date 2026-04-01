@@ -1803,6 +1803,125 @@ class SqliteRunRepository:
         finally:
             conn.close()
 
+    def get_recent_runs(
+        self,
+        *,
+        owner_user_id: str | None,
+        auth_enabled: bool,
+        project_id: str | None = None,
+        app_id: str | None = None,
+        statuses: list[str] | None = None,
+        q: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[Run]:
+        conn = self._conn()
+        try:
+            where_parts: list[str] = ["g.deleted_at IS NULL"]
+            params: list[Any] = []
+
+            if auth_enabled:
+                if owner_user_id:
+                    where_parts.append("r.owner_user_id = ?")
+                    params.append(owner_user_id)
+                else:
+                    where_parts.append("1 = 0")
+            else:
+                where_parts.append("r.owner_user_id IS NULL")
+
+            if project_id:
+                where_parts.append("r.project_id = ?")
+                params.append(project_id)
+            if app_id:
+                where_parts.append("r.app_id = ?")
+                params.append(app_id)
+            if statuses:
+                normalized = [s.strip().lower() for s in statuses if isinstance(s, str) and s.strip()]
+                if normalized:
+                    placeholders = ",".join("?" * len(normalized))
+                    where_parts.append(f"g.status IN ({placeholders})")
+                    params.extend(normalized)
+            if q:
+                pattern = f"%{self._escape_like(q)}%"
+                where_parts.append(
+                    "("
+                    "r.metadata_snapshot_json LIKE ? ESCAPE '\\' OR "
+                    "r.input_snapshot_json LIKE ? ESCAPE '\\' OR "
+                    "r.project_id LIKE ? ESCAPE '\\'"
+                    ")"
+                )
+                params.extend([pattern, pattern, pattern])
+
+            where_sql = " AND ".join(where_parts)
+            sql = (
+                f"SELECT {_run_select_cols()} "
+                "FROM generation g "
+                "JOIN run r ON r.id = g.run_id "
+                f"WHERE {where_sql} "
+                "ORDER BY g.created_at DESC "
+                "LIMIT ? OFFSET ?"
+            )
+            rows = conn.execute(sql, params + [limit, offset]).fetchall()
+            return [_row_to_run(r) for r in rows]
+        finally:
+            conn.close()
+
+    def count_recent_runs(
+        self,
+        *,
+        owner_user_id: str | None,
+        auth_enabled: bool,
+        project_id: str | None = None,
+        app_id: str | None = None,
+        statuses: list[str] | None = None,
+        q: str | None = None,
+    ) -> int:
+        conn = self._conn()
+        try:
+            where_parts: list[str] = ["g.deleted_at IS NULL"]
+            params: list[Any] = []
+
+            if auth_enabled:
+                if owner_user_id:
+                    where_parts.append("r.owner_user_id = ?")
+                    params.append(owner_user_id)
+                else:
+                    where_parts.append("1 = 0")
+            else:
+                where_parts.append("r.owner_user_id IS NULL")
+
+            if project_id:
+                where_parts.append("r.project_id = ?")
+                params.append(project_id)
+            if app_id:
+                where_parts.append("r.app_id = ?")
+                params.append(app_id)
+            if statuses:
+                normalized = [s.strip().lower() for s in statuses if isinstance(s, str) and s.strip()]
+                if normalized:
+                    placeholders = ",".join("?" * len(normalized))
+                    where_parts.append(f"g.status IN ({placeholders})")
+                    params.extend(normalized)
+            if q:
+                pattern = f"%{self._escape_like(q)}%"
+                where_parts.append(
+                    "("
+                    "r.metadata_snapshot_json LIKE ? ESCAPE '\\' OR "
+                    "r.input_snapshot_json LIKE ? ESCAPE '\\' OR "
+                    "r.project_id LIKE ? ESCAPE '\\'"
+                    ")"
+                )
+                params.extend([pattern, pattern, pattern])
+
+            where_sql = " AND ".join(where_parts)
+            row = conn.execute(
+                "SELECT COUNT(*) FROM generation g JOIN run r ON r.id = g.run_id WHERE " + where_sql,
+                params,
+            ).fetchone()
+            return row[0] if row else 0
+        finally:
+            conn.close()
+
     def count_runs_by_project(self, project_id: str) -> int:
         conn = self._conn()
         try:
