@@ -3,7 +3,7 @@
 	import { goto } from '$app/navigation';
 	import { onDestroy } from 'svelte';
 	import { getApiBase } from '$lib/config';
-	import { getThumbSizeCookie, setThumbSizeCookie, type ThumbSize } from '$lib/cookie';
+	import { THUMB_SCALE_MAX, THUMB_SCALE_MIN, getThumbSizeCookie, setThumbSizeCookie } from '$lib/cookie';
 	import { appBooting } from '$lib/stores/appBooting';
 	import { cancelRun, getQueue, getRecentRuns, type QueueItem, type RecentRunItem } from '$lib/queueApi';
 	import RunAppBadge from '$lib/components/RunAppBadge.svelte';
@@ -91,7 +91,7 @@
 	let sendToAppRunId = $state<string | null>(null);
 	let sendToAppOutputIndex = $state<number | null>(null);
 	let sendToAppProjectId = $state<string | null>(null);
-	let thumbnailSize = $state<ThumbSize>(browser ? getThumbSizeCookie() : 'medium');
+	let thumbnailScale = $state<number>(browser ? getThumbSizeCookie() : 100);
 	let lightboxOpen = $state(false);
 	let lightboxImages = $state<LightboxItem[]>([]);
 	let lightboxIndex = $state(0);
@@ -255,9 +255,10 @@
 		return 'image';
 	}
 
-	function setThumbnailSize(size: ThumbSize) {
-		thumbnailSize = size;
-		if (browser) setThumbSizeCookie(size);
+	function setThumbnailScale(value: number) {
+		const next = Math.min(THUMB_SCALE_MAX, Math.max(THUMB_SCALE_MIN, Math.round(value)));
+		thumbnailScale = next;
+		if (browser) setThumbSizeCookie(next);
 	}
 
 	function getProjectInfo(projectId: string | null, projectTitle: string | null): { name: string; color: string | null } {
@@ -946,56 +947,21 @@
 <section class="activity-page">
 	<header class="page-header">
 		<h1>Activity</h1>
-		<p class="subtitle">Cross-project grouped runs with project-style actions.</p>
+		<div class="gallery-thumb-size">
+			<label for="activity-thumb-size">Thumbnail size</label>
+			<input
+				id="activity-thumb-size"
+				type="range"
+				min={THUMB_SCALE_MIN}
+				max={THUMB_SCALE_MAX}
+				step="1"
+				value={thumbnailScale}
+				oninput={(e) => setThumbnailScale((e.currentTarget as HTMLInputElement).valueAsNumber)}
+				aria-label="Thumbnail size percentage"
+			/>
+			<span class="thumb-size-value">{thumbnailScale}%</span>
+		</div>
 	</header>
-
-	<div class="gallery-thumb-size" role="group" aria-label="Thumbnail size">
-		<button
-			type="button"
-			class="thumb-size-btn"
-			class:active={thumbnailSize === 'small'}
-			onclick={() => setThumbnailSize('small')}
-			title="Small thumbnails"
-			aria-label="Small thumbnails"
-			aria-pressed={thumbnailSize === 'small'}
-		>
-			<svg class="thumb-size-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-				<rect x="2" y="2" width="8" height="8" rx="1"/>
-				<rect x="14" y="2" width="8" height="8" rx="1"/>
-				<rect x="2" y="14" width="8" height="8" rx="1"/>
-				<rect x="14" y="14" width="8" height="8" rx="1"/>
-			</svg>
-		</button>
-		<button
-			type="button"
-			class="thumb-size-btn"
-			class:active={thumbnailSize === 'medium'}
-			onclick={() => setThumbnailSize('medium')}
-			title="Medium thumbnails"
-			aria-label="Medium thumbnails"
-			aria-pressed={thumbnailSize === 'medium'}
-		>
-			<svg class="thumb-size-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-				<rect x="2" y="4" width="9" height="9" rx="1"/>
-				<rect x="13" y="4" width="9" height="9" rx="1"/>
-				<rect x="2" y="15" width="9" height="7" rx="1"/>
-				<rect x="13" y="15" width="9" height="7" rx="1"/>
-			</svg>
-		</button>
-		<button
-			type="button"
-			class="thumb-size-btn"
-			class:active={thumbnailSize === 'large'}
-			onclick={() => setThumbnailSize('large')}
-			title="Large thumbnails"
-			aria-label="Large thumbnails"
-			aria-pressed={thumbnailSize === 'large'}
-		>
-			<svg class="thumb-size-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-				<rect x="3" y="3" width="18" height="18" rx="2"/>
-			</svg>
-		</button>
-	</div>
 
 	<section class="card">
 		<div class="card-head">
@@ -1091,7 +1057,7 @@
 								</button>
 							</div>
 						{/if}
-						<div class="output-section-body" class:thumb-size-small={thumbnailSize === 'small'} class:thumb-size-medium={thumbnailSize === 'medium'} class:thumb-size-large={thumbnailSize === 'large'}>
+						<div class="output-section-body" style={`--thumb-size-scale:${thumbnailScale / 100};`}>
 							{#each group.runs as run (run.id)}
 								{#each (run.images ?? []).filter((item) => !item.remote_deleted) as item, origI (run.id + '_' + origI)}
 									{@const isVideo = mediaType(item) === 'video'}
@@ -1278,7 +1244,7 @@
 								<button type="button" class="run-action-btn" onclick={() => { selectedInGroup = { ...selectedInGroup, [group.groupId]: [] }; }}>Clear</button>
 							</div>
 						{/if}
-						<div class="output-section-body" class:thumb-size-small={thumbnailSize === 'small'} class:thumb-size-medium={thumbnailSize === 'medium'} class:thumb-size-large={thumbnailSize === 'large'}>
+						<div class="output-section-body" style={`--thumb-size-scale:${thumbnailScale / 100};`}>
 							{#each group.runs as run (run.id)}
 								{#each (run.images ?? []).filter((item) => !item.remote_deleted) as item, origI (run.id + '_' + origI)}
 									{@const isVideo = mediaType(item) === 'video'}
@@ -1437,12 +1403,13 @@
 
 <style>
 	.activity-page { padding: 1rem; display: flex; flex-direction: column; gap: 1rem; }
+	.page-header { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; }
 	.page-header h1 { margin: 0; }
 	.subtitle { margin: 0.35rem 0 0; color: var(--muted); }
-	.gallery-thumb-size { display: inline-flex; align-items: center; gap: 0.35rem; }
-	.thumb-size-btn { border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--muted); padding: 0.22rem 0.5rem; font: inherit; font-size: 0.78rem; line-height: 0; cursor: pointer; }
-	.thumb-size-btn .thumb-size-icon { width: 16px; height: 16px; display: block; }
-	.thumb-size-btn.active { color: var(--text); border-color: color-mix(in srgb, var(--accent) 55%, var(--border)); box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 25%, transparent) inset; }
+	.gallery-thumb-size { display: inline-flex; align-items: center; gap: 0.5rem; }
+	.gallery-thumb-size label { font-size: 0.8rem; color: var(--muted); }
+	.gallery-thumb-size input[type='range'] { width: min(280px, 52vw); }
+	.thumb-size-value { min-width: 3.5rem; font-size: 0.8rem; color: var(--muted); text-align: right; }
 	.card { border: 1px solid var(--border); border-radius: 12px; padding: 0.9rem; background: var(--card); }
 	.card-head { display: flex; align-items: center; justify-content: space-between; gap: 0.6rem; margin-bottom: 0.75rem; }
 	.badge { font-size: 0.78rem; padding: 0.18rem 0.45rem; border-radius: 999px; border: 1px solid var(--border); color: var(--muted); }
@@ -1471,9 +1438,7 @@
 	.run-action-btn.cancel { color: var(--error, #ef4444); }
 	.comfyui-unreachable-warning { border: 1px solid color-mix(in srgb, var(--warning, #eab308) 45%, var(--border)); border-radius: 8px; padding: 0.4rem 0.55rem; margin-bottom: 0.55rem; display: flex; justify-content: space-between; gap: 0.5rem; color: var(--warning, #eab308); }
 	.output-section-body { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 0.75rem; }
-	.output-section-body.thumb-size-small { grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); }
-	.output-section-body.thumb-size-medium { grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); }
-	.output-section-body.thumb-size-large { grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); }
+	.output-section-body { grid-template-columns: repeat(auto-fill, minmax(calc(260px * var(--thumb-size-scale, 1)), 1fr)); }
 	.output-thumb { position: relative; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; background: var(--surface); aspect-ratio: 1; display: block; }
 	.output-thumb.thumb-selected { box-shadow: 0 0 0 2px var(--accent); }
 	.output-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
@@ -1489,10 +1454,9 @@
 	.muted { color: var(--muted); }
 	.error { color: var(--error, #ef4444); }
 	@media (max-width: 900px) {
+		.page-header { flex-direction: column; align-items: flex-start; }
 		.filters { grid-template-columns: 1fr 1fr; }
 		.run-header { flex-direction: column; }
-		.output-section-body.thumb-size-small { grid-template-columns: repeat(auto-fill, minmax(92px, 1fr)); }
-		.output-section-body.thumb-size-medium { grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); }
-		.output-section-body.thumb-size-large { grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); }
+		.output-section-body { grid-template-columns: repeat(auto-fill, minmax(calc(120px * var(--thumb-size-scale, 1)), 1fr)); }
 	}
 </style>
