@@ -1323,6 +1323,7 @@ class SqliteRunRepository:
                         r.app_id AS app_id,
                         wa.title AS app_title,
                         g.created_at AS created_at,
+                        g.status AS run_status,
                         g.local_storage_status AS local_storage_status,
                         CAST(j.key AS INTEGER) AS output_index,
                         json_extract(j.value, '$.filename') AS filename,
@@ -1364,6 +1365,7 @@ class SqliteRunRepository:
                         r.app_id AS app_id,
                         wa.title AS app_title,
                         g.created_at AS created_at,
+                        g.status AS run_status,
                         g.local_storage_status AS local_storage_status,
                         -1 AS output_index,
                         CAST(v.value AS TEXT) AS filename,
@@ -1413,6 +1415,7 @@ class SqliteRunRepository:
                         app_id,
                         app_title,
                         created_at,
+                        run_status,
                         local_storage_status,
                         output_index,
                         filename,
@@ -1443,6 +1446,7 @@ class SqliteRunRepository:
                     FROM all_entries
                     WHERE filename IS NOT NULL
                       AND TRIM(filename) != ''
+                      AND run_status = 'done'
                       AND (media_type IS NULL OR media_type = '' OR media_type IN ('image', 'output', 'input'))
                       AND (remote_deleted = 0 OR local_storage_status IN ('saved', 'partial'))
                 )
@@ -1565,6 +1569,7 @@ class SqliteRunRepository:
                         p.name AS project_name,
                         p.header_color AS project_header_color,
                         g.created_at AS created_at,
+                        g.status AS run_status,
                         json_extract(j.value, '$.filename') AS filename,
                         LOWER(COALESCE(json_extract(j.value, '$.type'), json_extract(j.value, '$.kind'), 'image')) AS media_type,
                         COALESCE(CAST(json_extract(j.value, '$.remote_deleted') AS INTEGER), 0) AS remote_deleted,
@@ -1602,6 +1607,7 @@ class SqliteRunRepository:
                         p.name AS project_name,
                         p.header_color AS project_header_color,
                         g.created_at AS created_at,
+                        g.status AS run_status,
                         CAST(v.value AS TEXT) AS filename,
                         'input' AS media_type,
                         0 AS remote_deleted,
@@ -1651,6 +1657,7 @@ class SqliteRunRepository:
                     FROM all_entries
                     WHERE filename IS NOT NULL
                       AND TRIM(filename) != ''
+                      AND run_status = 'done'
                       AND (media_type IS NULL OR media_type = '' OR media_type IN ('image', 'output', 'input'))
                       AND (remote_deleted = 0 OR local_storage_status IN ('saved', 'partial'))
                 )

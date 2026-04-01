@@ -475,14 +475,18 @@
 		flex-wrap: wrap;
 		align-items: center;
 		align-self: flex-start;
+		width: 100%;
 		gap: 0.5rem;
+		min-width: 0;
 	}
 
 	.header-row.logo-container {
 		position: relative;
-		display: inline-block;
+		display: flex;
+		align-items: center;
 		cursor: default;
-		margin-bottom: -28px;
+		margin-bottom: 0;
+		flex-shrink: 0;
 	}
 
 	.logo-link {
@@ -492,8 +496,9 @@
 	}
 
 	.workflow-logo {
-		transform: scale(0.85);
-		transform-origin: left top;
+		display: block;
+		width: clamp(220px, 26vw, 380px);
+		height: auto;
 	}
 
 	.header-subtitle-row {
@@ -711,7 +716,11 @@
 		display: flex;
 		gap: 1rem;
 		align-items: center;
-		margin-left: 1rem;
+		flex: 1 1 auto;
+		min-width: 0;
+		margin-left: 0.25rem;
+		flex-wrap: wrap;
+		row-gap: 0.25rem;
 	}
 
 	.top-nav a {
@@ -720,6 +729,7 @@
 		gap: 0.4rem;
 		color: var(--muted);
 		text-decoration: none;
+		white-space: nowrap;
 		font-size: 1rem;
 		font-weight: 500;
 		padding: 0.5rem 0.75rem;
@@ -759,6 +769,7 @@
 		flex-direction: column;
 		align-items: flex-end;
 		gap: 0.25rem;
+		flex-shrink: 0;
 	}
 	.header-drop-zone {
 		display: flex;
@@ -947,6 +958,174 @@
 		display: none;
 	}
 
+	@media (max-width: 1440px) {
+		.top-nav {
+			gap: 0.35rem;
+			margin-left: 0.25rem;
+		}
+		.top-nav a {
+			font-size: 0.86rem;
+			padding: 0.35rem 0.42rem;
+		}
+	}
+
+	@media (max-width: 1280px) {
+		.workflow-logo {
+			width: clamp(200px, 24vw, 320px);
+		}
+		.top-nav {
+			gap: 0.25rem;
+			margin-left: 0.1rem;
+		}
+		.top-nav a {
+			font-size: 0.82rem;
+			padding: 0.32rem 0.36rem;
+		}
+		.header-drop-zone {
+			min-height: 44px;
+			min-width: 118px;
+			padding: 0.35rem 0.55rem;
+		}
+		.header-drop-zone-label {
+			font-size: 0.72rem;
+		}
+	}
+
+	@media (max-width: 1120px) {
+		.top-nav {
+			gap: 0.25rem;
+		}
+		.top-nav a {
+			font-size: 0.88rem;
+			padding: 0.38rem 0.42rem;
+		}
+		.header-drop-zone {
+			min-height: 40px;
+			min-width: 102px;
+			padding: 0.25rem 0.45rem;
+		}
+		.header-drop-zone-label {
+			font-size: 0.68rem;
+		}
+	}
+
+	/* Switch to drawer before links start clipping on medium widths. */
+	@media (max-width: 980px) {
+		.header-logo-section {
+			flex-wrap: nowrap;
+			width: 100%;
+			align-items: center;
+		}
+		.header-row.logo-container {
+			flex: 1;
+			min-width: 0;
+			margin-bottom: 0;
+			height: 4.8rem;
+			overflow: hidden;
+		}
+		.logo-link {
+			display: block;
+			min-width: 0;
+		}
+		.workflow-logo {
+			width: clamp(160px, 30vw, 240px);
+		}
+		.top-nav {
+			display: none;
+		}
+		.header-drop-zone-wrap {
+			display: flex;
+			margin-left: 0.35rem;
+			align-items: stretch;
+		}
+		.header-drop-zone {
+			min-height: 36px;
+			min-width: 86px;
+			padding: 0.2rem 0.35rem;
+		}
+		.header-drop-zone-label {
+			font-size: 0.62rem;
+		}
+		.nav-toggle {
+			display: inline-flex;
+			align-items: center;
+			justify-content: center;
+			width: 40px;
+			height: 40px;
+			margin-left: 0.35rem;
+			flex-shrink: 0;
+			padding: 0;
+			background: var(--surface);
+			border: 1px solid var(--border);
+			border-radius: 8px;
+			color: var(--text);
+			cursor: pointer;
+		}
+		.nav-toggle .nav-toggle-icon {
+			width: 20px;
+			height: 20px;
+		}
+		.nav-toggle:hover {
+			background: var(--accent-soft);
+			border-color: var(--accent);
+			color: var(--accent);
+		}
+		.nav-drawer-backdrop {
+			display: block;
+			position: fixed;
+			inset: 0;
+			z-index: 9998;
+			background: rgba(0, 0, 0, 0.5);
+			opacity: 0;
+			visibility: hidden;
+			transition: opacity 0.2s ease, visibility 0.2s ease;
+		}
+		.nav-drawer-backdrop.open {
+			opacity: 1;
+			visibility: visible;
+		}
+		.nav-drawer {
+			display: flex;
+			flex-direction: column;
+			position: fixed;
+			top: 0;
+			right: 0;
+			width: min(280px, 100vw - 2rem);
+			height: 100%;
+			z-index: 9999;
+			background: var(--card);
+			border-left: 1px solid var(--border);
+			box-shadow: -8px 0 24px rgba(0, 0, 0, 0.3);
+			padding: 1rem 0;
+			gap: 0.25rem;
+			transform: translateX(100%);
+			transition: transform 0.25s ease;
+			overflow-y: auto;
+		}
+		.nav-drawer.open {
+			transform: translateX(0);
+		}
+		.nav-drawer a {
+			display: flex;
+			align-items: center;
+			padding: 0.75rem 1.25rem;
+			min-height: 44px;
+			color: var(--muted);
+			text-decoration: none;
+			font-size: 1rem;
+			font-weight: 500;
+			transition: color 0.2s ease, background 0.2s ease;
+		}
+		.nav-drawer a:hover {
+			color: var(--accent);
+			background: var(--accent-soft);
+		}
+		.nav-drawer a.active {
+			color: var(--text);
+			background: var(--accent-soft);
+		}
+	}
+
 	@media (max-width: 639px) {
 		.app-header-wrap {
 			position: sticky;
@@ -972,8 +1151,7 @@
 			min-width: 0;
 		}
 		.workflow-logo {
-			transform: scale(0.55);
-			transform-origin: left top;
+			width: clamp(148px, 42vw, 220px);
 		}
 		.nav-toggle {
 			display: inline-flex;
@@ -1003,7 +1181,17 @@
 			display: none;
 		}
 		.header-drop-zone-wrap {
-			display: none;
+			display: flex;
+			margin-left: 0.3rem;
+			gap: 0;
+		}
+		.header-drop-zone {
+			min-height: 34px;
+			min-width: 74px;
+			padding: 0.15rem 0.25rem;
+		}
+		.header-drop-zone-label {
+			font-size: 0.58rem;
 		}
 		.header-subtitle-row {
 			padding-left: 0;
