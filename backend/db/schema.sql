@@ -59,7 +59,8 @@ CREATE TABLE IF NOT EXISTS user_account (
     role TEXT NOT NULL,
     allow_all_apps INTEGER NOT NULL DEFAULT 0,
     created_at INTEGER NOT NULL,
-    disabled_at INTEGER NULL
+    disabled_at INTEGER NULL,
+    quick_runs_project_id TEXT REFERENCES project(id)
 );
 
 CREATE TABLE IF NOT EXISTS user_app_access (

@@ -140,6 +140,7 @@ def _row_to_user(row: tuple) -> User:
         allow_all_apps=bool(row[4]),
         created_at=row[5],
         disabled_at=row[6] if len(row) > 6 else None,
+        quick_runs_project_id=row[7] if len(row) > 7 else None,
     )
 
 
@@ -787,18 +788,19 @@ class SqliteUserRepository:
         role: str,
         allow_all_apps: bool,
         created_at: int,
+        quick_runs_project_id: str | None = None,
     ) -> User:
         conn = self._conn()
         try:
             conn.execute(
                 """INSERT INTO user_account
-                   (id, username, password_hash, role, allow_all_apps, created_at, disabled_at)
-                   VALUES (?, ?, ?, ?, ?, ?, NULL)""",
-                (user_id, username, password_hash, role, 1 if allow_all_apps else 0, created_at),
+                   (id, username, password_hash, role, allow_all_apps, created_at, disabled_at, quick_runs_project_id)
+                   VALUES (?, ?, ?, ?, ?, ?, NULL, ?)""",
+                (user_id, username, password_hash, role, 1 if allow_all_apps else 0, created_at, quick_runs_project_id),
             )
             conn.commit()
             row = conn.execute(
-                "SELECT id, username, password_hash, role, allow_all_apps, created_at, disabled_at FROM user_account WHERE id = ?",
+                "SELECT id, username, password_hash, role, allow_all_apps, created_at, disabled_at, quick_runs_project_id FROM user_account WHERE id = ?",
                 (user_id,),
             ).fetchone()
             assert row is not None
@@ -810,7 +812,7 @@ class SqliteUserRepository:
         conn = self._conn()
         try:
             row = conn.execute(
-                "SELECT id, username, password_hash, role, allow_all_apps, created_at, disabled_at FROM user_account WHERE username = ?",
+                "SELECT id, username, password_hash, role, allow_all_apps, created_at, disabled_at, quick_runs_project_id FROM user_account WHERE username = ?",
                 (username,),
             ).fetchone()
             return _row_to_user(row) if row else None
@@ -821,7 +823,7 @@ class SqliteUserRepository:
         conn = self._conn()
         try:
             row = conn.execute(
-                "SELECT id, username, password_hash, role, allow_all_apps, created_at, disabled_at FROM user_account WHERE id = ?",
+                "SELECT id, username, password_hash, role, allow_all_apps, created_at, disabled_at, quick_runs_project_id FROM user_account WHERE id = ?",
                 (user_id,),
             ).fetchone()
             return _row_to_user(row) if row else None
@@ -832,7 +834,7 @@ class SqliteUserRepository:
         conn = self._conn()
         try:
             rows = conn.execute(
-                "SELECT id, username, password_hash, role, allow_all_apps, created_at, disabled_at FROM user_account ORDER BY created_at ASC"
+                "SELECT id, username, password_hash, role, allow_all_apps, created_at, disabled_at, quick_runs_project_id FROM user_account ORDER BY created_at ASC"
             ).fetchall()
             return [_row_to_user(r) for r in rows]
         finally:
@@ -847,6 +849,8 @@ class SqliteUserRepository:
         allow_all_apps: bool | None = None,
         disabled_at: int | None = None,
         set_disabled_at: bool = False,
+        quick_runs_project_id: str | None = None,
+        set_quick_runs_project_id: bool = False,
     ) -> User | None:
         updates: list[str] = []
         params: list[Any] = []
@@ -862,6 +866,9 @@ class SqliteUserRepository:
         if set_disabled_at:
             updates.append("disabled_at = ?")
             params.append(disabled_at)
+        if set_quick_runs_project_id:
+            updates.append("quick_runs_project_id = ?")
+            params.append(quick_runs_project_id)
         if not updates:
             return self.get_user_by_id(user_id)
         conn = self._conn()

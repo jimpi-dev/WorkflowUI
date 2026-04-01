@@ -21,6 +21,7 @@ def list_users(_=Depends(require_admin)):
             "role": u.role,
             "allow_all_apps": u.allow_all_apps,
             "disabled_at": u.disabled_at,
+            "quick_runs_project_id": u.quick_runs_project_id,
             "created_at": u.created_at,
             "allowed_app_ids": user_repo.list_user_app_ids(u.id),
         }
@@ -48,6 +49,11 @@ def create_user(body: dict, _=Depends(require_admin)):
         role=role,
         allow_all_apps=allow_all_apps,
         created_at=int(time.time() * 1000),
+        quick_runs_project_id=(
+            str(body.get("quick_runs_project_id")).strip()
+            if body.get("quick_runs_project_id")
+            else None
+        ),
     )
     app_ids = body.get("allowed_app_ids")
     if isinstance(app_ids, list) and not allow_all_apps:
@@ -78,6 +84,12 @@ def patch_user(user_id: str, body: dict, _=Depends(require_admin)):
         allow_all_apps=bool(allow_all_apps) if allow_all_apps is not None else None,
         disabled_at=disabled_at,
         set_disabled_at=("disabled_at" in body),
+        quick_runs_project_id=(
+            str(body.get("quick_runs_project_id")).strip()
+            if body.get("quick_runs_project_id")
+            else None
+        ),
+        set_quick_runs_project_id=("quick_runs_project_id" in body),
     )
     if not updated:
         raise HTTPException(status_code=404, detail="User not found")

@@ -9,15 +9,15 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Depends, Response
 
 from authz import require_user, ensure_project_access
-from db.migrate import QUICK_RUNS_PROJECT_ID
 from config import get_media_storage_config
 
-from dependencies import get_db, get_media_storage_service, get_run_queue_state, COMFY_URL
+from dependencies import get_db, get_media_storage_service, get_run_queue_state, COMFY_URL, get_user_repo
 from services.comfyui_info import (
     normalize_comfy_url as _normalize_comfy_url,
     get_runs_remote_storage_bytes_batch,
     get_runs_remote_storage_bytes_deduplicated,
 )
+from services.quick_runs import ensure_quick_runs_project_for_user
 from services.run_serialization import (
     safe_json_loads,
     latent_resolution_from_input_snapshot,
@@ -25,6 +25,15 @@ from services.run_serialization import (
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+
+def _quick_runs_project_id_for_ctx(ctx, project_repo) -> str:
+    return ensure_quick_runs_project_for_user(
+        ctx.user if ctx.auth_enabled else None,
+        auth_enabled=bool(ctx.auth_enabled),
+        project_repo=project_repo,
+        user_repo=get_user_repo(),
+    )
 
 
 def _normalized_run_outputs(run) -> list[dict[str, Any]]:
@@ -190,9 +199,10 @@ def get_project_detail(project_id: str, db=Depends(get_db), ctx=Depends(require_
 
 @router.patch("/projects/{project_id}")
 def patch_project(project_id: str, body: dict, db=Depends(get_db), ctx=Depends(require_user)):
-    if project_id == QUICK_RUNS_PROJECT_ID and "archived_at" in body:
-        raise HTTPException(status_code=400, detail="Quick runs project cannot be archived.")
     _, _, _, _, project_repo, _, _ = db
+    quick_runs_project_id = _quick_runs_project_id_for_ctx(ctx, project_repo)
+    if project_id == quick_runs_project_id and "archived_at" in body:
+        raise HTTPException(status_code=400, detail="Quick runs project cannot be archived.")
     ensure_project_access(project_id, ctx, project_repo)
     proj = project_repo.get_project(project_id)
     kwargs: dict = {"updated_at": int(time.time() * 1000)}
@@ -234,9 +244,10 @@ def patch_project(project_id: str, body: dict, db=Depends(get_db), ctx=Depends(r
 
 @router.delete("/projects/{project_id}")
 def delete_project(project_id: str, body: dict | None = None, db=Depends(get_db), ctx=Depends(require_user)):
-    if project_id == QUICK_RUNS_PROJECT_ID:
-        raise HTTPException(status_code=400, detail="Quick runs project cannot be deleted or archived.")
     _, workflow_repo, _, run_repo, project_repo, _, _ = db
+    quick_runs_project_id = _quick_runs_project_id_for_ctx(ctx, project_repo)
+    if project_id == quick_runs_project_id:
+        raise HTTPException(status_code=400, detail="Quick runs project cannot be deleted or archived.")
     ensure_project_access(project_id, ctx, project_repo)
     proj = project_repo.get_project(project_id)
     keep = (body or {}).get("keep", "none")

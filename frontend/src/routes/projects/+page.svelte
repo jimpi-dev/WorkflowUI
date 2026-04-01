@@ -5,7 +5,7 @@
 	import { page } from '$app/stores';
 	import { browser } from '$app/environment';
 	import { getApiBase } from '$lib/config';
-	import { QUICK_RUNS_PROJECT_ID } from '$lib/constants';
+	import { quickRunsProject } from '$lib/stores/quickRunsProject';
 	import { getContrastForeground } from '$lib/utils/color';
 	import DeleteProjectDialog from '$lib/components/DeleteProjectDialog.svelte';
 	import type { ProjectSummary } from './+page';
@@ -238,7 +238,7 @@
 				list.sort((a, b) => (b.updated_at ?? b.created_at ?? 0) - (a.updated_at ?? a.created_at ?? 0));
 				break;
 		}
-		const quickIdx = list.findIndex((p) => p.id === QUICK_RUNS_PROJECT_ID);
+		const quickIdx = list.findIndex((p) => p.id === $quickRunsProject.id);
 		if (quickIdx > 0) {
 			const [quick] = list.splice(quickIdx, 1);
 			list.unshift(quick);
@@ -442,7 +442,7 @@
 		<div class="projects-scroll-wrap">
 			<div class="projects-container" class:list-view={viewMode === 'list'}>
 			{#each sorted as p (p.id)}
-				<a href="/projects/{p.id}" class="project-card" class:quick-runs-card={p.id === QUICK_RUNS_PROJECT_ID}>
+				<a href="/projects/{p.id}" class="project-card" class:quick-runs-card={p.id === $quickRunsProject.id}>
 					<div
 						class="card-visual"
 						class:header-contrast-light={p.header_color && getContrastForeground(p.header_color) === 'light'}
@@ -452,7 +452,7 @@
 							: ''}
 					>
 						<span class="card-run-badge">{p.run_count} run{p.run_count === 1 ? '' : 's'}</span>
-						{#if p.id === QUICK_RUNS_PROJECT_ID}
+						{#if p.id === $quickRunsProject.id}
 							<span class="card-quick-badge" aria-label="Default for Just generate">Just generate</span>
 						{/if}
 						<div class="card-actions-visual" role="presentation" tabindex="-1" onclick={(e) => (e.preventDefault(), e.stopPropagation())} onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); } }}>
@@ -466,7 +466,7 @@
 								>
 									{unarchivingId === p.id ? '…' : 'Unarchive'}
 								</button>
-							{:else if p.id !== QUICK_RUNS_PROJECT_ID}
+							{:else if p.id !== $quickRunsProject.id}
 								<button
 									type="button"
 									class="card-action-btn delete-btn"
@@ -482,7 +482,7 @@
 						{#if viewMode === 'list'}
 							<div class="list-row">
 								<span class="list-run-badge">{p.run_count ?? 0} run{(p.run_count ?? 0) === 1 ? '' : 's'}</span>
-								{#if p.id === QUICK_RUNS_PROJECT_ID}
+								{#if p.id === $quickRunsProject.id}
 									<span class="card-quick-badge list-quick-badge" aria-label="Default for Just generate">Just generate</span>
 								{/if}
 								<h3 class="project-name list-name">{p.name ?? ''}</h3>
@@ -508,7 +508,7 @@
 										>
 											{unarchivingId === p.id ? '…' : 'Unarchive'}
 										</button>
-									{:else if p.id !== QUICK_RUNS_PROJECT_ID}
+									{:else if p.id !== $quickRunsProject.id}
 										<button
 											type="button"
 											class="list-action-btn delete-btn"
