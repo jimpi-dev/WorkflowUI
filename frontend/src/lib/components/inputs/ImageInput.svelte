@@ -324,4 +324,42 @@
         font-size: 0.8rem;
         color: var(--error, #e57373);
     }
+    @media (max-width: 639px) {
+        .image-row {
+            flex-direction: column;
+            align-items: stretch;
+            gap: 0.6rem;
+        }
+        .file-row {
+            flex-wrap: wrap;
+            align-items: stretch;
+            gap: 0.45rem;
+        }
+        .choose-file-btn,
+        .clear-btn {
+            min-height: 44px;
+        }
+        .choose-file-btn {
+            flex: 1 1 calc(50% - 0.25rem);
+            min-width: 130px;
+            font-size: 0.82rem;
+        }
+        .filename,
+        .no-file {
+            order: 3;
+            width: 100%;
+            white-space: nowrap;
+            font-size: 0.78rem;
+        }
+        .clear-btn {
+            order: 2;
+            min-width: 44px;
+        }
+        .preview-wrap {
+            width: 100%;
+            max-width: 220px;
+            height: auto;
+            aspect-ratio: 1 / 1;
+        }
+    }
 </style>

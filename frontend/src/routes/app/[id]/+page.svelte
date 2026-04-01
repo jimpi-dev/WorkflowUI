@@ -1834,8 +1834,8 @@
             background: var(--surface);
             border-bottom: 1px solid var(--border);
             position: sticky;
-            /* AppHeader is sticky at the top on mobile; offset tabs below it. */
-            top: 5.8rem;
+            /* Header is outside this scroll container, so keep tabs flush here. */
+            top: 0;
             z-index: 30;
         }
         .app-mobile-tab {
