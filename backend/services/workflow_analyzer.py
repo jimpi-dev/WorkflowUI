@@ -180,7 +180,7 @@ NODE_SPECS: dict[str, dict[str, Any]] = {
     },
     "CLIPTextEncode": {
         "fixedInputs": {
-            "text": {"type": "text", "label": "Prompt"},
+            "text": {"type": "text", "label": "Prompt", "multiline": True},
         }
     },
     "LoadImage": {
@@ -249,20 +249,29 @@ NODE_SPECS: dict[str, dict[str, Any]] = {
     },
     "SaveImage": {
         "fixedInputs": {
-            "filename_prefix": {"type": "text", "label": "Filename prefix"},
+            "filename_prefix": {"type": "text", "label": "Filename prefix", "multiline": False},
         },
         "outputs": {"type": "image"},
     },
-    "Save Image": {"fixedInputs": {"filename_prefix": {"type": "text", "label": "Filename prefix"}}, "outputs": {"type": "image"}},
-    "Save Image (api)": {"fixedInputs": {"filename_prefix": {"type": "text", "label": "Filename prefix"}}, "outputs": {"type": "image"}},
-    "SaveImageNode": {"fixedInputs": {"filename_prefix": {"type": "text", "label": "Filename prefix"}}, "outputs": {"type": "image"}},
+    "Save Image": {
+        "fixedInputs": {"filename_prefix": {"type": "text", "label": "Filename prefix", "multiline": False}},
+        "outputs": {"type": "image"},
+    },
+    "Save Image (api)": {
+        "fixedInputs": {"filename_prefix": {"type": "text", "label": "Filename prefix", "multiline": False}},
+        "outputs": {"type": "image"},
+    },
+    "SaveImageNode": {
+        "fixedInputs": {"filename_prefix": {"type": "text", "label": "Filename prefix", "multiline": False}},
+        "outputs": {"type": "image"},
+    },
     "VHS_VideoCombine": {"fixedInputs": {}, "outputs": {"type": "video"}},
     "VAEDecode": {
         "fixedInputs": {},
     },
     "PrimitiveStringMultiline": {
         "fixedInputs": {
-            "value": {"type": "text", "label": "Prompt"},
+            "value": {"type": "text", "label": "Prompt", "multiline": True},
         }
     },
     "Power Lora Loader (rgthree)": {
@@ -520,14 +529,14 @@ NODE_SPECS: dict[str, dict[str, Any]] = {
     },
     "TextEncodeAceStepAudio1.5": {
         "fixedInputs": {
-            "tags": {"type": "text", "label": "Tags / Description"},
-            "lyrics": {"type": "text", "label": "Lyrics"},
+            "tags": {"type": "text", "label": "Tags / Description", "multiline": True},
+            "lyrics": {"type": "text", "label": "Lyrics", "multiline": True},
             "seed": {"type": "seed", "label": "Seed"},
             "bpm": {"type": "number", "label": "BPM", "min": 1, "max": 300},
             "duration": {"type": "number", "label": "Duration (seconds)", "min": 1, "max": 600},
             "timesignature": {"type": "select", "label": "Time signature", "options": ["4", "3", "2", "6", "8"]},
             "language": {"type": "select", "label": "Language", "options": ["en", "zh", "ja", "de", "fr", "es", "it", "ko", "pt", "ru"]},
-            "keyscale": {"type": "text", "label": "Key / Scale"},
+            "keyscale": {"type": "text", "label": "Key / Scale", "multiline": False},
             "cfg_scale": {"type": "number", "label": "CFG scale", "min": 1, "max": 10},
             "temperature": {"type": "number", "label": "Temperature", "min": 0.1, "max": 2},
             "top_p": {"type": "number", "label": "Top P", "min": 0, "max": 1},
@@ -542,7 +551,7 @@ NODE_SPECS: dict[str, dict[str, Any]] = {
     },
     "SaveAudioMP3": {
         "fixedInputs": {
-            "filename_prefix": {"type": "text", "label": "Filename prefix"},
+            "filename_prefix": {"type": "text", "label": "Filename prefix", "multiline": False},
             "quality": {"type": "select", "label": "Quality", "options": ["V0", "V1", "V2", "V3", "V4", "V5", "V6", "V7", "V8", "V9"]},
         },
         "outputs": {"type": "audio"},
@@ -551,7 +560,7 @@ NODE_SPECS: dict[str, dict[str, Any]] = {
         "fixedInputs": {
             "enhancement_level": {"type": "number", "label": "Enhancement level", "min": 0, "max": 3},
             "use_source_separation": {"type": "select", "label": "Use source separation", "options": ["true", "false"]},
-            "demucs_model": {"type": "text", "label": "Demucs model"},
+            "demucs_model": {"type": "text", "label": "Demucs model", "multiline": False},
             "device": {"type": "select", "label": "Device", "optionSource": "devices"},
             "vocals_enhance": {"type": "number", "label": "Vocals", "min": 0, "max": 1},
             "drums_enhance": {"type": "number", "label": "Drums", "min": 0, "max": 1},
@@ -597,7 +606,7 @@ NODE_SPECS: dict[str, dict[str, Any]] = {
             "height": {"type": "number", "label": "Height", "min": 64, "max": 8192, "step": 8},
             "upscale_method": {"type": "select", "label": "Upscale method", "optionSource": "upscale_methods"},
             "keep_proportion": {"type": "select", "label": "Keep proportion", "options": ["resize", "crop", "pad"]},
-            "pad_color": {"type": "text", "label": "Pad color"},
+            "pad_color": {"type": "text", "label": "Pad color", "multiline": False},
             "crop_position": {"type": "select", "label": "Crop position", "options": ["center", "top", "bottom", "left", "right"]},
             "divisible_by": {"type": "number", "label": "Divisible by", "min": 1, "max": 64, "step": 1},
             "device": {"type": "select", "label": "Device", "optionSource": "devices"},
@@ -606,7 +615,7 @@ NODE_SPECS: dict[str, dict[str, Any]] = {
     },
     "Text Multiline": {
         "fixedInputs": {
-            "text": {"type": "text", "label": "Prompt"},
+            "text": {"type": "text", "label": "Prompt", "multiline": True},
         },
     },
 }
@@ -888,7 +897,7 @@ def _analyze_workflow_ui_link_node(
         }
         if name:
             inp["name"] = name
-        for k in ("min", "max", "step", "slider", "options", "optionSource"):
+        for k in ("min", "max", "step", "slider", "options", "optionSource", "multiline"):
             if k in item:
                 inp[k] = item[k]
         inputs.append(inp)
@@ -989,6 +998,7 @@ def analyze_workflow(workflow: dict[str, Any], use_workflow_ui_link: bool = Fals
                         "role": "parameter",
                         "parent": (meta.get("title") or class_type or node_id).replace("_", " "),
                         "type": "text",
+                        "multiline": True,
                         "default": node_inputs.get(text_field),
                         "nodeId": node_id,
                         "field": text_field,
@@ -1054,7 +1064,7 @@ def analyze_workflow(workflow: dict[str, Any], use_workflow_ui_link: bool = Fals
             }
             if defn.get("hideLabel") is True:
                 inp["hideLabel"] = True
-            for k in ("min", "max", "step", "slider", "options", "optionSource"):
+            for k in ("min", "max", "step", "slider", "options", "optionSource", "multiline"):
                 if k in defn:
                     inp[k] = defn[k]
             if layout is not None:
@@ -1101,7 +1111,7 @@ def analyze_workflow(workflow: dict[str, Any], use_workflow_ui_link: bool = Fals
                     }
                     if field_spec.get("hideLabel"):
                         inp["hideLabel"] = True
-                    for k in ("min", "max", "step", "slider", "options", "optionSource"):
+                    for k in ("min", "max", "step", "slider", "options", "optionSource", "multiline"):
                         if k in field_spec:
                             inp[k] = field_spec[k]
                     layout = grp_layout_map.get(field_key)
