@@ -40,7 +40,6 @@
 		allowed_app_ids: string[];
 		password: string;
 		disabled: boolean;
-		quick_runs_project_id: string;
 	};
 	let editById = $state<Record<string, EditState>>({});
 
@@ -52,8 +51,7 @@
 				allow_all_apps: !!u.allow_all_apps,
 				allowed_app_ids: [...(u.allowed_app_ids ?? [])],
 				password: '',
-				disabled: !!u.disabled_at,
-				quick_runs_project_id: (u.quick_runs_project_id ?? '').trim()
+				disabled: !!u.disabled_at
 			};
 		}
 		editById = next;
@@ -121,17 +119,14 @@
 		saveBusyUserId = user.id;
 		try {
 			const payload: Record<string, unknown> = {
-				role: edit.role,
 				allow_all_apps: edit.allow_all_apps,
 				allowed_app_ids: edit.allow_all_apps ? [] : edit.allowed_app_ids,
 				disabled_at: edit.disabled ? Date.now() : null
 			};
-			if (edit.password.trim()) payload.password = edit.password;
-			if (edit.quick_runs_project_id.trim()) {
-				payload.quick_runs_project_id = edit.quick_runs_project_id.trim();
-			} else {
-				payload.quick_runs_project_id = null;
+			if (!user.is_protected_admin) {
+				payload.role = edit.role;
 			}
+			if (edit.password.trim()) payload.password = edit.password;
 			const res = await fetch(`${apiBase}/admin/users/${user.id}`, {
 				method: 'PATCH',
 				headers: { 'Content-Type': 'application/json' },
@@ -153,9 +148,9 @@
 </script>
 
 <div class="admin-users-page">
-	<header>
+	<header class="page-header">
 		<h1>Users</h1>
-		<p>Manage accounts, roles, app access, and quick-runs binding.</p>
+		<p>Manage accounts, roles, and app access.</p>
 	</header>
 
 	{#if data.usersError}
@@ -171,7 +166,7 @@
 		<p class="ok">{statusMessage}</p>
 	{/if}
 
-	<section class="card">
+	<section class="card create-card">
 		<h2>Create user</h2>
 		<div class="grid">
 			<input placeholder="Username" bind:value={createForm.username} />
@@ -201,7 +196,7 @@
 		</button>
 	</section>
 
-	<section class="card">
+	<section class="card list-card">
 		<h2>Existing users</h2>
 		{#if data.users.length === 0}
 			<p>No users.</p>
@@ -210,23 +205,34 @@
 				{@const edit = editById[user.id]}
 				<div class="user-row">
 					<div class="user-head">
-						<strong>{user.username}</strong>
-						<span>{user.id}</span>
+						<div class="user-title">
+							<strong>{user.username}</strong>
+							{#if user.is_protected_admin}
+								<span class="badge">Protected admin</span>
+							{/if}
+						</div>
+						<span class="subtle-id">{user.id}</span>
 					</div>
 					{#if edit}
 						<div class="grid">
-							<select bind:value={edit.role}>
+							<select bind:value={edit.role} disabled={!!user.is_protected_admin} title={user.is_protected_admin ? 'Protected admin role cannot be changed' : ''}>
 								<option value="user">user</option>
 								<option value="admin">admin</option>
 							</select>
 							<input placeholder="New password (optional)" type="password" bind:value={edit.password} />
-							<input
-								placeholder="Quick runs project id (optional)"
-								bind:value={edit.quick_runs_project_id}
-							/>
 							<label><input type="checkbox" bind:checked={edit.allow_all_apps} /> Allow all apps</label>
-							<label><input type="checkbox" bind:checked={edit.disabled} /> Disabled</label>
+							<label>
+								<input
+									type="checkbox"
+									bind:checked={edit.disabled}
+									disabled={!!user.is_protected_admin}
+								/>
+								Disabled
+							</label>
 						</div>
+						{#if user.is_protected_admin}
+							<p class="hint">This protected admin account cannot be disabled and its role cannot be changed.</p>
+						{/if}
 						{#if !edit.allow_all_apps}
 							<div class="apps-picker">
 								{#each data.apps as app (app.id)}
@@ -252,12 +258,63 @@
 </div>
 
 <style>
-	.admin-users-page { padding: 1rem; display: grid; gap: 1rem; }
-	.card { border: 1px solid var(--border); border-radius: 8px; padding: 1rem; background: var(--card); }
-	.grid { display: grid; grid-template-columns: repeat(2, minmax(220px, 1fr)); gap: 0.5rem; margin-bottom: 0.5rem; }
-	.apps-picker { max-height: 180px; overflow: auto; border: 1px solid var(--border); padding: 0.5rem; border-radius: 6px; display: grid; gap: 0.25rem; margin-bottom: 0.5rem; }
-	.user-row { border-top: 1px solid var(--border); padding-top: 0.75rem; margin-top: 0.75rem; }
-	.user-head { display: flex; flex-direction: column; margin-bottom: 0.5rem; }
+	.admin-users-page {
+		padding: 1rem;
+		display: grid;
+		gap: 1rem;
+		max-width: 1100px;
+		margin: 0 auto;
+	}
+	.page-header p {
+		margin-top: 0.25rem;
+		color: var(--muted);
+	}
+	.card {
+		border: 1px solid var(--border);
+		border-radius: 10px;
+		padding: 1rem;
+		background: var(--card);
+	}
+	.grid {
+		display: grid;
+		grid-template-columns: repeat(auto-fit, minmax(260px, 380px));
+		gap: 0.6rem;
+		margin-bottom: 0.6rem;
+		align-items: center;
+	}
+	input,
+	select,
+	button {
+		max-width: 100%;
+	}
+	.apps-picker {
+		max-height: 180px;
+		overflow: auto;
+		border: 1px solid var(--border);
+		padding: 0.6rem;
+		border-radius: 6px;
+		display: grid;
+		gap: 0.25rem;
+		margin-bottom: 0.6rem;
+		max-width: 780px;
+	}
+	.user-row {
+		border-top: 1px solid var(--border);
+		padding-top: 0.85rem;
+		margin-top: 0.85rem;
+	}
+	.user-head { display: flex; flex-direction: column; margin-bottom: 0.45rem; }
+	.user-title { display: flex; gap: 0.5rem; align-items: center; }
+	.badge {
+		font-size: 0.75rem;
+		padding: 0.15rem 0.45rem;
+		border-radius: 999px;
+		border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+		background: color-mix(in srgb, var(--accent) 14%, transparent);
+		color: var(--text);
+	}
+	.subtle-id { color: var(--muted); font-size: 0.85rem; }
+	.hint { color: var(--muted); margin-top: -0.15rem; margin-bottom: 0.5rem; }
 	.error { color: #ff7373; }
 	.ok { color: #7cd992; }
 </style>

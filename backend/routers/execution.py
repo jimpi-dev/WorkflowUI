@@ -371,8 +371,19 @@ def load_run_output_content_bytes(
     ctx,
 ) -> tuple[bytes, str]:
     """Load raw bytes for GET /image (local or ComfyUI) without WorkflowUI embed injection."""
-    if ctx.auth_enabled and not run_id:
+    req_type = (type or "").strip().lower()
+    if ctx.auth_enabled and not run_id and req_type != "input":
         raise HTTPException(status_code=400, detail="run_id is required")
+    if not run_id and req_type == "input":
+        # Input uploads are stored locally under INPUT_DATA_DIR by hashed filename.
+        # Keep strict path checks to avoid traversal.
+        if not filename or "/" in filename or "\\" in filename:
+            raise HTTPException(status_code=400, detail="Invalid input filename")
+        base_dir = INPUT_DATA_DIR.resolve()
+        input_path = (INPUT_DATA_DIR / filename).resolve()
+        if not str(input_path).startswith(str(base_dir)) or not input_path.is_file():
+            raise HTTPException(status_code=404, detail="Input media file not found")
+        return input_path.read_bytes(), _media_type_for_path(input_path)
     is_video_thumbnail_preview = (
         (preview or "").strip().lower() == "webp"
         and (type or "").strip().lower() == "video"

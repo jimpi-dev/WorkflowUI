@@ -4,6 +4,7 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException
 
 from authz import require_admin
+from config import get_auth_config
 from dependencies import get_db, get_user_repo
 from services.auth_service import hash_password
 
@@ -14,6 +15,7 @@ router = APIRouter()
 def list_users(_=Depends(require_admin)):
     user_repo = get_user_repo()
     users = user_repo.list_users()
+    protected_admin_username = get_auth_config().admin_username
     return [
         {
             "id": u.id,
@@ -22,6 +24,7 @@ def list_users(_=Depends(require_admin)):
             "allow_all_apps": u.allow_all_apps,
             "disabled_at": u.disabled_at,
             "quick_runs_project_id": u.quick_runs_project_id,
+            "is_protected_admin": u.username == protected_admin_username,
             "created_at": u.created_at,
             "allowed_app_ids": user_repo.list_user_app_ids(u.id),
         }
@@ -67,6 +70,16 @@ def patch_user(user_id: str, body: dict, _=Depends(require_admin)):
     current = user_repo.get_user_by_id(user_id)
     if not current:
         raise HTTPException(status_code=404, detail="User not found")
+    protected_admin_username = get_auth_config().admin_username
+    is_protected_admin = current.username == protected_admin_username
+    if is_protected_admin and "role" in body:
+        role_val = body.get("role")
+        if role_val is not None and str(role_val).strip().lower() != "admin":
+            raise HTTPException(status_code=400, detail="Protected admin account role cannot be changed")
+    if is_protected_admin and "disabled_at" in body:
+        disabled_val = body.get("disabled_at")
+        if disabled_val is not None:
+            raise HTTPException(status_code=400, detail="Protected admin account cannot be disabled")
     role = body.get("role")
     if role is not None:
         role = str(role).strip().lower()
