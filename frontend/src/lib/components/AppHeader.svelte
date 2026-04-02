@@ -97,11 +97,27 @@
 			try {
 				sessionStorage.setItem(
 					'workflowui_import_prefill',
-					JSON.stringify({ slug: p.slug, input_snapshot: p.input_snapshot })
+					JSON.stringify({
+						slug: p.slug,
+						source: 'file_generation',
+						input_snapshot: p.input_snapshot
+					})
 				);
 			} catch {
 				// ignore
 			}
+		}
+		try {
+			sessionStorage.setItem(
+				'workflowui_import_display',
+				JSON.stringify({
+					slug: p.slug,
+					appTitle: p.appName,
+					workflowName: p.workflowName
+				})
+			);
+		} catch {
+			// ignore
 		}
 		appBooting.set(true);
 		await waitForAppToBeAvailable(p.slug);

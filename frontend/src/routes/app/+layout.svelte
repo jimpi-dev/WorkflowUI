@@ -51,9 +51,24 @@
 
 	$effect(() => {
 		const workflowId = data.workflowId ?? null;
+		let importDisplayTitle: string | null = null;
+		if (browser && workflowId) {
+			try {
+				const raw = sessionStorage.getItem('workflowui_import_display');
+				if (raw) {
+					const d = JSON.parse(raw) as { slug?: string; appTitle?: string };
+					if (d.slug === workflowId && typeof d.appTitle === 'string' && d.appTitle.trim()) {
+						importDisplayTitle = d.appTitle.trim();
+						sessionStorage.removeItem('workflowui_import_display');
+					}
+				}
+			} catch {
+				sessionStorage.removeItem('workflowui_import_display');
+			}
+		}
 		const current = workflowId ? data.workflows?.find((w) => w.id === workflowId) : null;
 		const displayName = workflowId
-			? (data.appTitle ?? current?.label ?? workflowId)
+			? (importDisplayTitle ?? data.appTitle ?? current?.label ?? workflowId)
 			: null;
 		headerAppContext.update((prev) => ({
 			...prev,

@@ -418,39 +418,28 @@ def load_run_output_content_bytes(
         if is_video_thumbnail_preview:
             if matched_index is None:
                 raise HTTPException(status_code=404, detail="Video preview not found")
+            # Always pass Comfy base URL so thumbnails can fall back to ComfyUI /view?preview=webp when ffmpeg is unavailable.
+            comfy_url = None
+            with state.queue_lock:
+                if run_id in state.runs and state.runs[run_id].get("comfyui_url"):
+                    comfy_url = state.runs[run_id]["comfyui_url"]
+            if comfy_url is None:
+                run_repo = get_db()[3]
+                run = run_repo.get_run(run_id) if run_repo else None
+                comfy_url = _normalize_comfy_url(run.comfyui_url or COMFY_URL) if run and run.comfyui_url else COMFY_URL
         stored_for_local = (matched_ent.get("type") or matched_ent.get("kind") or "output").strip().lower()
         local_path = service.get_local_image_path(run_id, filename, subfolder or "", stored_for_local)
         if is_video_thumbnail_preview:
-            thumb_bytes = None
-            if local_path is not None and local_path.is_file():
-                thumb_bytes = get_or_create_video_thumbnail_webp_bytes(
-                    run_entity=run_entity,
-                    output_index=matched_index,
-                    filename=filename,
-                    subfolder=subfolder or "",
-                    comfy_url=None,
-                    view_type="output",
-                    input_video_path=local_path,
-                )
-            else:
-                # Resolve comfy url for remote thumbnail generation.
-                comfy_url = None
-                with state.queue_lock:
-                    if run_id in state.runs and state.runs[run_id].get("comfyui_url"):
-                        comfy_url = state.runs[run_id]["comfyui_url"]
-                if comfy_url is None:
-                    run_repo = get_db()[3]
-                    run = run_repo.get_run(run_id) if run_repo else None
-                    comfy_url = _normalize_comfy_url(run.comfyui_url or COMFY_URL) if run and run.comfyui_url else COMFY_URL
-                thumb_bytes = get_or_create_video_thumbnail_webp_bytes(
-                    run_entity=run_entity,
-                    output_index=matched_index,
-                    filename=filename,
-                    subfolder=subfolder or "",
-                    comfy_url=comfy_url,
-                    view_type="output",
-                    input_video_path=None,
-                )
+            input_video_path = local_path if local_path is not None and local_path.is_file() else None
+            thumb_bytes = get_or_create_video_thumbnail_webp_bytes(
+                run_entity=run_entity,
+                output_index=matched_index,
+                filename=filename,
+                subfolder=subfolder or "",
+                comfy_url=comfy_url,
+                view_type="output",
+                input_video_path=input_video_path,
+            )
             assert thumb_bytes is not None
             return thumb_bytes, "image/webp"
 

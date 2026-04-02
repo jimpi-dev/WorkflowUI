@@ -32,6 +32,8 @@
     export let onRemoveLora: ((nodeId: string, groupKey: string) => void) | undefined = undefined;
     export let registerRun: ((fn: () => void) => void) | undefined = undefined;
     export let embedWorkflowuiMetadataOnDownload = false;
+    /** Keys present in a dropped file's input_snapshot; do not seed from app default_inputs for these. */
+    export let fileImportLockKeys: Set<string> | null = null;
 
     export let presetCreationOn = false;
     export let onPresetCreationToggle: (() => void) | undefined = undefined;
@@ -53,6 +55,12 @@
             const isSendFromMedia = isMedia && sendFromContext?.inputKey === input.key;
             if (isSendFromMedia) {
                 if (!(input.key in values)) values[input.key] = '';
+                continue;
+            }
+            if (fileImportLockKeys?.has(input.key)) {
+                if (!(input.key in values)) {
+                    values[input.key] = isMedia ? '' : input.type === 'number' ? 0 : '';
+                }
                 continue;
             }
             if (!(input.key in values)) {
