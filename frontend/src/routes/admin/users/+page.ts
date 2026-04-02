@@ -7,6 +7,7 @@ export type AdminUser = {
 	allow_all_apps: boolean;
 	disabled_at: number | null;
 	quick_runs_project_id?: string | null;
+	is_protected_admin?: boolean;
 	created_at: number;
 	allowed_app_ids: string[];
 };
