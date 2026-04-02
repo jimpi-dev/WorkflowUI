@@ -2822,83 +2822,175 @@ let lightboxDeletePending = $state<
 				</div>
 				{#if !loading}
 					<div class="runs-list-head-actions">
-						{#if visibleRunGroups.length > 0}
-						<div class="move-runs-actions">
-							<button
-								type="button"
-								class="move-to-project-btn"
-								disabled={selectedRunIds.size === 0}
-								title={selectedRunIds.size === 0 ? 'Select at least one run using the checkbox on each group, then click here to move runs to another project' : `Move ${selectedRunIds.size} run(s) to another project`}
-								aria-label={selectedRunIds.size === 0 ? 'Select at least one run using the checkbox on each group to enable move' : 'Move selected runs to another project'}
-								onclick={() => (moveDialogOpen = true)}
-							>
-								Move to project
-							</button>
-							<span class="gallery-size-divider" aria-hidden="true"></span>
+						<!-- Desktop: keep the existing inline controls -->
+						<div class="runs-list-head-actions-desktop">
+							{#if visibleRunGroups.length > 0}
+								<div class="move-runs-actions">
+									<button
+										type="button"
+										class="move-to-project-btn"
+										disabled={selectedRunIds.size === 0}
+										title={selectedRunIds.size === 0 ? 'Select at least one run using the checkbox on each group, then click here to move runs to another project' : `Move ${selectedRunIds.size} run(s) to another project`}
+										aria-label={selectedRunIds.size === 0 ? 'Select at least one run using the checkbox on each group to enable move' : 'Move selected runs to another project'}
+										onclick={() => (moveDialogOpen = true)}
+									>
+										Move to project
+									</button>
+									<span class="gallery-size-divider" aria-hidden="true"></span>
+								</div>
+							{/if}
+							<label class="favorites-filter-option" title="Show only favorited runs">
+								<span class="favorites-filter-label">Favorites only</span>
+								<button
+									type="button"
+									role="switch"
+									aria-checked={filterFavoritesOnly}
+									class="favorites-filter-toggle"
+									class:on={filterFavoritesOnly}
+									aria-label="Show only favorited runs"
+									onclick={() => (filterFavoritesOnly = !filterFavoritesOnly)}
+								>
+									<span class="favorites-filter-toggle-track">
+										<span class="favorites-filter-toggle-thumb"></span>
+									</span>
+								</button>
+							</label>
+							{#if runGroups.length > 0}
+								<div class="collapse-all-actions">
+									<button type="button" class="collapse-all-btn" onclick={expandAll}>Expand all</button>
+									<button type="button" class="collapse-all-btn" onclick={collapseAll}>Collapse all</button>
+									<span class="gallery-size-divider" aria-hidden="true"></span>
+									<div class="gallery-thumb-size">
+										<label for="project-thumb-size">Thumbnail size</label>
+										<input
+											id="project-thumb-size"
+											type="range"
+											min={THUMB_SCALE_MIN}
+											max={THUMB_SCALE_MAX}
+											step="1"
+											value={thumbnailScale}
+											oninput={(e) => setThumbnailScale((e.currentTarget as HTMLInputElement).valueAsNumber)}
+											aria-label="Thumbnail size percentage"
+										/>
+										<span class="thumb-size-value">{thumbnailScale}%</span>
+									</div>
+									<span class="gallery-size-divider" aria-hidden="true"></span>
+									<div class="gallery-thumb-fit" role="group" aria-label="Thumbnail render mode">
+										<button
+											type="button"
+											class="collapse-all-btn thumb-fit-btn"
+											class:active={thumbnailFitMode === 'cover'}
+											onclick={() => setThumbnailFitMode('cover')}
+											title="Default thumbnail"
+											aria-label="Default thumbnail"
+											aria-pressed={thumbnailFitMode === 'cover'}
+										>
+											Default thumbnail
+										</button>
+										<button
+											type="button"
+											class="collapse-all-btn thumb-fit-btn"
+											class:active={thumbnailFitMode === 'contain'}
+											onclick={() => setThumbnailFitMode('contain')}
+											title="Fit into thumbnail"
+											aria-label="Fit into thumbnail"
+											aria-pressed={thumbnailFitMode === 'contain'}
+										>
+											Fit into thumbnail
+										</button>
+									</div>
+								</div>
+							{/if}
 						</div>
-						{/if}
-						<label class="favorites-filter-option" title="Show only favorited runs">
-							<span class="favorites-filter-label">Favorites only</span>
-							<button
-								type="button"
-								role="switch"
-								aria-checked={filterFavoritesOnly}
-								class="favorites-filter-toggle"
-								class:on={filterFavoritesOnly}
-								aria-label="Show only favorited runs"
-								onclick={() => (filterFavoritesOnly = !filterFavoritesOnly)}
-							>
-								<span class="favorites-filter-toggle-track">
-									<span class="favorites-filter-toggle-thumb"></span>
-								</span>
-							</button>
-						</label>
-						{#if runGroups.length > 0}
-						<div class="collapse-all-actions">
-							<button type="button" class="collapse-all-btn" onclick={expandAll}>Expand all</button>
-						<button type="button" class="collapse-all-btn" onclick={collapseAll}>Collapse all</button>
-						<span class="gallery-size-divider" aria-hidden="true"></span>
-						<div class="gallery-thumb-size">
-							<label for="project-thumb-size">Thumbnail size</label>
-							<input
-								id="project-thumb-size"
-								type="range"
-								min={THUMB_SCALE_MIN}
-								max={THUMB_SCALE_MAX}
-								step="1"
-								value={thumbnailScale}
-								oninput={(e) => setThumbnailScale((e.currentTarget as HTMLInputElement).valueAsNumber)}
-								aria-label="Thumbnail size percentage"
-							/>
-							<span class="thumb-size-value">{thumbnailScale}%</span>
+
+						<!-- Mobile: collapse the "gallery controls" into a drawer -->
+						<div class="runs-list-head-actions-mobile">
+							<label class="favorites-filter-option" title="Show only favorited runs">
+								<span class="favorites-filter-label">Favorites only</span>
+								<button
+									type="button"
+									role="switch"
+									aria-checked={filterFavoritesOnly}
+									class="favorites-filter-toggle"
+									class:on={filterFavoritesOnly}
+									aria-label="Show only favorited runs"
+									onclick={() => (filterFavoritesOnly = !filterFavoritesOnly)}
+								>
+									<span class="favorites-filter-toggle-track">
+										<span class="favorites-filter-toggle-thumb"></span>
+									</span>
+								</button>
+							</label>
+
+							{#if runGroups.length > 0}
+								<details class="thumbnails-controls-drawer" aria-label="Thumbnail controls">
+									<summary aria-label="Open thumbnail controls">
+										<span>Thumbnails</span>
+										<span class="thumb-drawer-summary-value">{thumbnailScale}%</span>
+									</summary>
+
+									<div class="thumbnails-controls-inner">
+										{#if visibleRunGroups.length > 0}
+											<button
+												type="button"
+												class="move-to-project-btn"
+												disabled={selectedRunIds.size === 0}
+												title={selectedRunIds.size === 0 ? 'Select at least one run using the checkbox on each group, then click here to move runs to another project' : `Move ${selectedRunIds.size} run(s) to another project`}
+												aria-label={selectedRunIds.size === 0 ? 'Select at least one run using the checkbox on each group to enable move' : 'Move selected runs to another project'}
+												onclick={() => (moveDialogOpen = true)}
+											>
+												Move to project
+											</button>
+										{/if}
+
+										<div class="collapse-all-actions">
+											<button type="button" class="collapse-all-btn" onclick={expandAll}>Expand all</button>
+											<button type="button" class="collapse-all-btn" onclick={collapseAll}>Collapse all</button>
+										</div>
+
+										<div class="gallery-thumb-size">
+											<label for="project-thumb-size-mobile">Thumbnail size</label>
+											<input
+												id="project-thumb-size-mobile"
+												type="range"
+												min={THUMB_SCALE_MIN}
+												max={THUMB_SCALE_MAX}
+												step="1"
+												value={thumbnailScale}
+												oninput={(e) => setThumbnailScale((e.currentTarget as HTMLInputElement).valueAsNumber)}
+												aria-label="Thumbnail size percentage"
+											/>
+											<span class="thumb-size-value">{thumbnailScale}%</span>
+										</div>
+
+										<div class="gallery-thumb-fit" role="group" aria-label="Thumbnail render mode">
+											<button
+												type="button"
+												class="collapse-all-btn thumb-fit-btn"
+												class:active={thumbnailFitMode === 'cover'}
+												onclick={() => setThumbnailFitMode('cover')}
+												title="Default thumbnail"
+												aria-label="Default thumbnail"
+												aria-pressed={thumbnailFitMode === 'cover'}
+											>
+												Default thumbnail
+											</button>
+											<button
+												type="button"
+												class="collapse-all-btn thumb-fit-btn"
+												class:active={thumbnailFitMode === 'contain'}
+												onclick={() => setThumbnailFitMode('contain')}
+												title="Fit into thumbnail"
+												aria-label="Fit into thumbnail"
+												aria-pressed={thumbnailFitMode === 'contain'}
+											>
+												Fit into thumbnail
+											</button>
+										</div>
+									</div>
+								</details>
+							{/if}
 						</div>
-						<span class="gallery-size-divider" aria-hidden="true"></span>
-						<div class="gallery-thumb-fit" role="group" aria-label="Thumbnail render mode">
-							<button
-								type="button"
-								class="collapse-all-btn thumb-fit-btn"
-								class:active={thumbnailFitMode === 'cover'}
-								onclick={() => setThumbnailFitMode('cover')}
-								title="Default thumbnail"
-								aria-label="Default thumbnail"
-								aria-pressed={thumbnailFitMode === 'cover'}
-							>
-								Default thumbnail
-							</button>
-							<button
-								type="button"
-								class="collapse-all-btn thumb-fit-btn"
-								class:active={thumbnailFitMode === 'contain'}
-								onclick={() => setThumbnailFitMode('contain')}
-								title="Fit into thumbnail"
-								aria-label="Fit into thumbnail"
-								aria-pressed={thumbnailFitMode === 'contain'}
-							>
-								Fit into thumbnail
-							</button>
-						</div>
-						</div>
-						{/if}
 					</div>
 				{/if}
 			</div>
@@ -4595,6 +4687,18 @@ let lightboxDeletePending = $state<
 		gap: 0.5rem;
 		flex-wrap: wrap;
 	}
+	.runs-list-head-actions-desktop {
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+		flex-wrap: wrap;
+	}
+	.runs-list-head-actions-mobile {
+		display: none;
+		align-items: center;
+		gap: 0.5rem;
+		flex-wrap: wrap;
+	}
 	.move-runs-actions {
 		display: flex;
 		align-items: center;
@@ -4766,6 +4870,56 @@ let lightboxDeletePending = $state<
 		height: 1.25rem;
 		background: var(--border);
 		margin: 0 0.15rem;
+	}
+
+	/* Mobile: collapse gallery controls (thumb size/fit, expand/collapse all) */
+	@media (max-width: 639px) {
+		.runs-list-head-actions-desktop {
+			display: none;
+		}
+		.runs-list-head-actions-mobile {
+			display: flex;
+		}
+
+		.thumbnails-controls-drawer {
+			position: relative;
+			z-index: 25;
+		}
+		.thumbnails-controls-drawer > summary {
+			list-style: none;
+			cursor: pointer;
+			display: inline-flex;
+			align-items: center;
+			gap: 0.5rem;
+			padding: 0.4rem 0.6rem;
+			background: var(--surface);
+			border: 1px solid var(--border);
+			border-radius: 8px;
+			color: var(--text);
+			font-size: 0.85rem;
+			font-weight: 600;
+			user-select: none;
+		}
+		.thumbnails-controls-drawer > summary::-webkit-details-marker {
+			display: none;
+		}
+		.thumb-drawer-summary-value {
+			color: var(--muted);
+			font-weight: 600;
+			font-variant-numeric: tabular-nums;
+		}
+		.thumbnails-controls-inner {
+			margin-top: 0.5rem;
+			display: flex;
+			flex-direction: column;
+			gap: 0.75rem;
+			background: var(--card);
+			border: 1px solid var(--border);
+			border-radius: 10px;
+			padding: 0.75rem;
+			box-shadow: 0 10px 26px rgba(0, 0, 0, 0.25);
+			min-width: min(360px, 92vw);
+		}
 	}
 	.gallery-thumb-size {
 		display: flex;
