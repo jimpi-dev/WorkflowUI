@@ -5,11 +5,13 @@ export const TextEncodeAceStepAudio1_5Spec: NodeSpec = {
     fixedInputs: {
         tags: {
             type: 'text',
-            label: 'Tags / Description'
+            label: 'Tags / Description',
+            multiline: true
         },
         lyrics: {
             type: 'text',
-            label: 'Lyrics'
+            label: 'Lyrics',
+            multiline: true
         },
         seed: {
             type: 'seed',
@@ -39,7 +41,8 @@ export const TextEncodeAceStepAudio1_5Spec: NodeSpec = {
         },
         keyscale: {
             type: 'text',
-            label: 'Key / Scale'
+            label: 'Key / Scale',
+            multiline: false
         },
         cfg_scale: {
             type: 'number',

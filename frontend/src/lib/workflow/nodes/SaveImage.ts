@@ -5,7 +5,8 @@ export const SaveImageSpec: NodeSpec = {
     fixedInputs: {
         filename_prefix: {
             type: 'text',
-            label: 'Filename prefix'
+            label: 'Filename prefix',
+            multiline: false
         }
     },
     outputs: {

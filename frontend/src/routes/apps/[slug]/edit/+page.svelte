@@ -1,4 +1,6 @@
 <script lang="ts">
+	import type { WorkflowInput } from '$lib/workflow/types';
+	import { effectiveTextMultiline } from '$lib/workflow/inputMultiline';
 	import { goto } from '$app/navigation';
 	import { getApiBase } from '$lib/config';
 	import { browser } from '$app/environment';
@@ -235,7 +237,8 @@
 				inputKeys,
 				outputKeys,
 				app.ui_config as import('$lib/types/appBuilder').UIConfig | null,
-				app.default_inputs as Record<string, unknown> | null
+				app.default_inputs as Record<string, unknown> | null,
+				detectedInputs
 			);
 			draftInitialized = true;
 		}
@@ -689,6 +692,7 @@
 											availableVaeModels={availableVaeModels}
 											availableDevices={availableDevices}
 											optionSource={input.optionSource ?? ''}
+											multiline={effectiveTextMultiline(input as WorkflowInput)}
 											onVisibleChange={(v) => setInputVisible(appDraft!, input.key, v)}
 											onDefaultOverrideChange={(v) => {
 												setDefaultOverride(appDraft!, input.key, v);
