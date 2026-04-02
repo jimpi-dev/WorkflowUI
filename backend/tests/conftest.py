@@ -98,6 +98,7 @@ def client(tmp_path):
         SqliteRunRepository,
         SqliteProjectRepository,
         SqliteAppPresetRepository,
+        SqliteUserRepository,
     )
     from services.workflow_import_service import WorkflowImportService
     from services.media_storage_service import MediaStorageService
@@ -114,6 +115,7 @@ def client(tmp_path):
     run_repo = SqliteRunRepository(db_path)
     project_repo = SqliteProjectRepository(db_path)
     preset_repo = SqliteAppPresetRepository(db_path)
+    user_repo = SqliteUserRepository(db_path)
     import_service = WorkflowImportService(workflow_repo)
     media_storage_service = MediaStorageService(run_repo, project_repo, app_repo, workflow_repo)
 
@@ -123,6 +125,7 @@ def client(tmp_path):
     dependencies._run_repo = run_repo
     dependencies._project_repo = project_repo
     dependencies._preset_repo = preset_repo
+    dependencies._user_repo = user_repo
     dependencies._import_service = import_service
     dependencies._media_storage_service = media_storage_service
     dependencies._executor = None
