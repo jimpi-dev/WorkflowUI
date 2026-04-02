@@ -67,7 +67,10 @@
         if (filterFavoritesOnly) {
             next = next.filter((item) => item.source === 'generation' && item.is_favorite === true);
         }
-        return next.filter((item) => !failedThumbUrls[imageUrlFor(item)]);
+        return next.filter((item) => {
+            if (mediaKind(item) === 'audio') return true;
+            return !failedThumbUrls[thumbnailUrlFor(item)];
+        });
     });
     const querySignature = $derived(
         [
@@ -235,6 +238,23 @@
         return `${apiBase}/image?${params.toString()}`;
     }
 
+    /** Raster thumbnails: video bytes are not valid in `<img>`; use WebP preview like the project gallery. */
+    function thumbnailUrlFor(item: MediaBrowserItem): string {
+        const base = imageUrlFor(item);
+        const t = (item.type || '').toLowerCase();
+        if (t === 'video' && item.source === 'generation' && item.run_id) {
+            return `${base}&preview=webp`;
+        }
+        return base;
+    }
+
+    function mediaKind(item: MediaBrowserItem): 'image' | 'video' | 'audio' {
+        const t = (item.type || '').toLowerCase();
+        if (t === 'video') return 'video';
+        if (t === 'audio') return 'audio';
+        return 'image';
+    }
+
     function choose(item: MediaBrowserItem) {
         onSelect?.({
             source: item.source,
@@ -279,7 +299,7 @@
     }
 
     function onThumbError(item: MediaBrowserItem) {
-        const url = imageUrlFor(item);
+        const url = thumbnailUrlFor(item);
         if (failedThumbUrls[url]) return;
         failedThumbUrls = {
             ...failedThumbUrls,
@@ -750,14 +770,18 @@
                                     {@const dim = resolutionByKey[itemKey(item, idx)]}
                                     <div class="thumb-resolution-badge">{dim.width}×{dim.height}</div>
                                 {/if}
-                                <img
-                                    src={imageUrlFor(item)}
-                                    alt=""
-                                    loading="lazy"
-                                    referrerpolicy="no-referrer"
-                                    onload={(e) => onThumbLoad(item, idx, e)}
-                                    onerror={() => onThumbError(item)}
-                                />
+                                {#if mediaKind(item) === 'audio'}
+                                    <div class="media-thumb-audio-placeholder" aria-hidden="true">AUDIO</div>
+                                {:else}
+                                    <img
+                                        src={thumbnailUrlFor(item)}
+                                        alt=""
+                                        loading="lazy"
+                                        referrerpolicy="no-referrer"
+                                        onload={(e) => onThumbLoad(item, idx, e)}
+                                        onerror={() => onThumbError(item)}
+                                    />
+                                {/if}
                                 <div class="meta">
                                     <div class="name">{item.filename}</div>
                                     <div class="sub">
@@ -1157,6 +1181,18 @@
         display: block;
         border-radius: 6px;
         background: #111;
+    }
+    .media-thumb-audio-placeholder {
+        width: 100%;
+        aspect-ratio: 1/1;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 6px;
+        background: #111;
+        font-size: 0.75rem;
+        letter-spacing: 0.08em;
+        color: var(--muted, #888);
     }
     .thumb-preview-btn {
         position: absolute;

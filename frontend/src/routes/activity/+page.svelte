@@ -1111,9 +1111,10 @@
 						{/if}
 						<div class="output-section-body" class:thumb-fit-contain={thumbnailFitMode === 'contain'} style={`--thumb-size-scale:${thumbnailScale / 100};`}>
 							{#each group.runs as run (run.id)}
-								{#each (run.images ?? []).filter((item) => !item.remote_deleted) as item, origI (run.id + '_' + origI)}
+								{#each (run.images ?? []) as item, origI (run.id + '_' + origI)}
 									{@const isVideo = mediaType(item) === 'video'}
 									{@const thumbKey = `${group.groupId}-${run.id}-${origI}`}
+									{#if !item.remote_deleted}
 									<div
 										class="output-thumb thumb-media"
 										class:thumb-selected={isImageSelected(group.groupId, imageKey(run.id, origI))}
@@ -1187,6 +1188,7 @@
 											{/if}
 										</ThumbnailOverlay>
 									</div>
+									{/if}
 								{/each}
 							{/each}
 						</div>
@@ -1319,9 +1321,10 @@
 						{/if}
 						<div class="output-section-body" class:thumb-fit-contain={thumbnailFitMode === 'contain'} style={`--thumb-size-scale:${thumbnailScale / 100};`}>
 							{#each group.runs as run (run.id)}
-								{#each (run.images ?? []).filter((item) => !item.remote_deleted) as item, origI (run.id + '_' + origI)}
+								{#each (run.images ?? []) as item, origI (run.id + '_' + origI)}
 									{@const isVideo = mediaType(item) === 'video'}
 									{@const thumbKey = `${group.groupId}-${run.id}-${origI}`}
+									{#if !item.remote_deleted}
 									<div
 										class="output-thumb thumb-media"
 										class:thumb-selected={isImageSelected(group.groupId, imageKey(run.id, origI))}
@@ -1395,6 +1398,7 @@
 											{/if}
 										</ThumbnailOverlay>
 									</div>
+									{/if}
 								{/each}
 							{/each}
 						</div>
