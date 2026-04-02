@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+import shutil
 import subprocess
 import tempfile
 import threading
@@ -67,6 +68,38 @@ def thumb_cache_path(
     return run_dir / f"thumb_{output_index + 1}.webp"
 
 
+def _ffmpeg_executable() -> str | None:
+    return shutil.which("ffmpeg")
+
+
+def _try_comfy_view_preview_bytes(
+    *,
+    comfy_url: str,
+    filename: str,
+    subfolder: str,
+    view_type: str,
+    timeout: int = 120,
+) -> bytes | None:
+    """Ask ComfyUI for a preview image (no local ffmpeg). Comfy may still use ffmpeg on its host."""
+    url = comfy_url.rstrip("/") + "/view"
+    base_params: dict[str, str] = {
+        "filename": filename,
+        "subfolder": subfolder or "",
+        "type": view_type,
+    }
+    for preview_val in ("webp", "true", "1"):
+        params = {**base_params, "preview": preview_val}
+        try:
+            res = requests.get(url, params=params, timeout=timeout)
+            if res.ok and res.content and len(res.content) > 32:
+                return res.content
+        except requests.RequestException as e:
+            logger.warning("ComfyUI /view preview request failed (preview=%s): %s", preview_val, e)
+            break
+    logger.warning("ComfyUI /view preview failed for filename=%s", filename)
+    return None
+
+
 def _extract_first_frame_to_webp(
     *,
     input_path: Path,
@@ -97,6 +130,10 @@ def _extract_first_frame_to_webp(
         str(output_path),
     ]
 
+    ffmpeg_exe = _ffmpeg_executable()
+    if not ffmpeg_exe:
+        raise FileNotFoundError("ffmpeg")
+    cmd[0] = ffmpeg_exe
     proc = subprocess.run(cmd, capture_output=True, text=True)
     if proc.returncode != 0:
         raise RuntimeError(f"ffmpeg thumbnail extraction failed: {proc.stderr.strip() or proc.stdout.strip()}")
@@ -157,9 +194,58 @@ def get_or_create_video_thumbnail_webp_bytes(
         if thumb_path.is_file() and thumb_path.stat().st_size > 0:
             return thumb_path.read_bytes()
 
+        # No ffmpeg in container: ComfyUI can still serve a raster preview from /view.
+        if not _ffmpeg_executable() and comfy_url:
+            preview = _try_comfy_view_preview_bytes(
+                comfy_url=comfy_url,
+                filename=filename,
+                subfolder=subfolder,
+                view_type=view_type,
+            )
+            if preview:
+                thumb_path.parent.mkdir(parents=True, exist_ok=True)
+                thumb_path.write_bytes(preview)
+                return preview
+            logger.warning(
+                "ffmpeg not installed and ComfyUI did not return a preview; install ffmpeg in the WorkflowUI image "
+                "or ensure ComfyUI can serve /view?preview=webp for this output."
+            )
+
+        if not _ffmpeg_executable():
+            raise RuntimeError(
+                "Video thumbnails require ffmpeg in PATH, or a working ComfyUI /view?preview=webp for this file."
+            )
+
         with _THUMB_SEMAPHORE:
             if input_video_path is not None and input_video_path.is_file():
-                _extract_first_frame_to_webp(input_path=input_video_path, output_path=thumb_path, width=width)
+                try:
+                    _extract_first_frame_to_webp(input_path=input_video_path, output_path=thumb_path, width=width)
+                except FileNotFoundError:
+                    if comfy_url:
+                        preview = _try_comfy_view_preview_bytes(
+                            comfy_url=comfy_url,
+                            filename=filename,
+                            subfolder=subfolder,
+                            view_type=view_type,
+                        )
+                        if preview:
+                            thumb_path.parent.mkdir(parents=True, exist_ok=True)
+                            thumb_path.write_bytes(preview)
+                            return preview
+                    raise
+                except RuntimeError:
+                    if comfy_url:
+                        preview = _try_comfy_view_preview_bytes(
+                            comfy_url=comfy_url,
+                            filename=filename,
+                            subfolder=subfolder,
+                            view_type=view_type,
+                        )
+                        if preview:
+                            thumb_path.parent.mkdir(parents=True, exist_ok=True)
+                            thumb_path.write_bytes(preview)
+                            return preview
+                    raise
             else:
                 if not comfy_url:
                     raise RuntimeError("Cannot generate remote video thumbnail: missing comfy_url")
@@ -172,6 +258,30 @@ def get_or_create_video_thumbnail_webp_bytes(
                         view_type=view_type,
                     )
                     _extract_first_frame_to_webp(input_path=tmp_path, output_path=thumb_path, width=width)
+                except FileNotFoundError:
+                    preview = _try_comfy_view_preview_bytes(
+                        comfy_url=comfy_url,
+                        filename=filename,
+                        subfolder=subfolder,
+                        view_type=view_type,
+                    )
+                    if preview:
+                        thumb_path.parent.mkdir(parents=True, exist_ok=True)
+                        thumb_path.write_bytes(preview)
+                        return preview
+                    raise
+                except RuntimeError:
+                    preview = _try_comfy_view_preview_bytes(
+                        comfy_url=comfy_url,
+                        filename=filename,
+                        subfolder=subfolder,
+                        view_type=view_type,
+                    )
+                    if preview:
+                        thumb_path.parent.mkdir(parents=True, exist_ok=True)
+                        thumb_path.write_bytes(preview)
+                        return preview
+                    raise
                 finally:
                     if tmp_path is not None:
                         tmp_path.unlink(missing_ok=True)

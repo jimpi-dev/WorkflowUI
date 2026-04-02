@@ -12,6 +12,7 @@
     import { projectRunsInvalidate } from '$lib/stores/projectRunsInvalidate';
     import { appBooting } from '$lib/stores/appBooting';
     import { presetHeaderStore, setPresetHeaderCreation, clearPresetListRequest } from '$lib/stores/presetHeader';
+    import { browser } from '$app/environment';
     import { page } from '$app/stores';
     import { goto } from '$app/navigation';
     import { appConfig, getApiBase } from '$lib/config';
@@ -45,7 +46,7 @@
     let randomizeSeedOnSubmit = $state(false);
     let extraLoraSlots = $state<Record<string, string[]>>({});
     let prefilledRunId = $state<string | null>(null);
-    let prefilledFromImport = $state(false);
+    let fileImportLockKeys = $state<Set<string> | null>(null);
     let sendFromContext = $state<{ runId: string; outputIndex: number; inputKey: string; filename: string; subfolder?: string; type?: string } | null>(null);
     let prevWorkflowId = $state<string | undefined>(undefined);
     let prefilledSendFromKey = $state<string | null>(null);
@@ -173,6 +174,7 @@
         const appParam = $page.params.id;
         if (appParam === prevWorkflowId) return;
         prevWorkflowId = appParam;
+        fileImportLockKeys = null;
         formValues = { runs: 1 };
         extraLoraSlots = {};
         prefilledRunId = null;
@@ -194,6 +196,40 @@
         }
     });
 
+    /** Client-only: apply file-drop import prefill (survives SSR/hydration when slug effect early-returns). */
+    $effect(() => {
+        if (!browser) return;
+        const appParam = $page.params.id;
+        if (!appParam) return;
+        try {
+            const raw = sessionStorage.getItem('workflowui_import_prefill');
+            if (!raw) return;
+            const parsed = JSON.parse(raw) as {
+                slug?: string;
+                input_snapshot?: { values?: Record<string, unknown> };
+            };
+            if (
+                parsed.slug !== appParam ||
+                !parsed.input_snapshot?.values ||
+                typeof parsed.input_snapshot.values !== 'object'
+            ) {
+                return;
+            }
+            const v = parsed.input_snapshot.values as Record<string, unknown>;
+            const runs =
+                typeof v.runs === 'number' && Number.isFinite(v.runs) && v.runs >= 1
+                    ? Math.floor(Number(v.runs))
+                    : 1;
+            formValues = { ...v, runs } as Record<string, any>;
+            fileImportLockKeys = new Set(Object.keys(v));
+            sessionStorage.removeItem('workflowui_import_prefill');
+            sendFromContext = null;
+            prefilledSendFromKey = null;
+        } catch {
+            sessionStorage.removeItem('workflowui_import_prefill');
+        }
+    });
+
     $effect(() => {
         const runId = $page.url.searchParams.get('run_id');
         const workflowId = data.workflowId;
@@ -211,26 +247,6 @@
                 prefilledRunId = runId;
             })
             .catch(() => {});
-    });
-
-    $effect(() => {
-        if (prefilledFromImport || typeof document === 'undefined') return;
-        const workflowId = data.workflowId;
-        if (!workflowId) return;
-        try {
-            const raw = sessionStorage.getItem('workflowui_import_prefill');
-            if (!raw) return;
-            const parsed = JSON.parse(raw) as { slug?: string; input_snapshot?: { values?: Record<string, unknown> } };
-            if (parsed.slug !== workflowId || !parsed.input_snapshot?.values || typeof parsed.input_snapshot.values !== 'object') return;
-            const runValues = parsed.input_snapshot.values as Record<string, unknown>;
-            for (const [k, v] of Object.entries(runValues)) {
-                formValues[k] = v;
-            }
-            sessionStorage.removeItem('workflowui_import_prefill');
-            prefilledFromImport = true;
-        } catch {
-            sessionStorage.removeItem('workflowui_import_prefill');
-        }
     });
 
     function filenameFromRunOutput(ent: unknown): string | undefined {
@@ -1204,6 +1220,7 @@
                         onRunDone={markRunDone}
                         onRunError={onRunError}
                         embedWorkflowuiMetadataOnDownload={data.embedWorkflowuiMetadataOnDownload ?? false}
+                        fileImportLockKeys={fileImportLockKeys}
                         presetCreationOn={appConfig.presetsEnabled ? presetCreationOn : false}
                         presetKeysToSave={appConfig.presetsEnabled ? presetKeysToSaveList : []}
                         onPresetKeyToggle={appConfig.presetsEnabled ? handlePresetKeyToggle : undefined}
