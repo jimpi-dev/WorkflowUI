@@ -243,7 +243,48 @@ class MediaStorageService:
             run = self._run_repo.get_run(run_id)
             if not run:
                 return {"updated_run_ids": []}
-            images = json.loads(run.images_json) if run.images_json else []
+            images: list[dict[str, Any]] = []
+            used_media_as_source = False
+            if run.images_json:
+                try:
+                    raw = json.loads(run.images_json)
+                    if isinstance(raw, list) and raw:
+                        # Match frontend normalization: only dict entries are considered output slots.
+                        images = [e for e in raw if isinstance(e, dict)]
+                except Exception:
+                    images = []
+            if not images and run.media_json:
+                used_media_as_source = True
+                try:
+                    raw = json.loads(run.media_json)
+                    if isinstance(raw, list) and raw:
+                        images = [e for e in raw if isinstance(e, dict)]
+                except Exception:
+                    images = []
+
+            # Normalize into the shape expected by downstream codepaths.
+            for ent in images:
+                t = ent.get("type")
+                k = ent.get("kind")
+                if isinstance(t, str) and t.strip():
+                    ent["type"] = t.strip().lower()
+                elif isinstance(k, str) and k.strip():
+                    ent["type"] = k.strip().lower()
+                else:
+                    ent["type"] = (ent.get("type") or "output").strip().lower()
+
+                fn = ent.get("filename")
+                ent["filename"] = fn if isinstance(fn, str) else ""
+                sf = ent.get("subfolder")
+                ent["subfolder"] = sf if isinstance(sf, str) else ""
+
+            if used_media_as_source:
+                # Keep both JSON blobs aligned so indexing remains consistent.
+                payload = json.dumps(images)
+                self._run_repo.update_run(run_id, images_json=payload, media_json=payload)
+                run.images_json = payload
+                run.media_json = payload
+
             if not images or not attempted_indices:
                 return {"updated_run_ids": [run_id], "remote_delete_warning": remote_error}
             uniq = sorted({int(i) for i in attempted_indices if isinstance(i, int) and i >= 0})
@@ -346,10 +387,48 @@ class MediaStorageService:
         uniq = sorted({int(i) for i in image_indices if isinstance(i, int) and i >= 0})
         if not uniq:
             return {"ok": False, "error": "No valid indices"}
-        try:
-            images = json.loads(run.images_json) if run.images_json else []
-        except Exception:
-            images = []
+        images: list[dict[str, Any]] = []
+        used_media_as_source = False
+
+        if run.images_json:
+            try:
+                raw = json.loads(run.images_json)
+                if isinstance(raw, list) and raw:
+                    images = [e for e in raw if isinstance(e, dict)]
+            except Exception:
+                images = []
+        if not images and run.media_json:
+            used_media_as_source = True
+            try:
+                raw = json.loads(run.media_json)
+                if isinstance(raw, list) and raw:
+                    images = [e for e in raw if isinstance(e, dict)]
+            except Exception:
+                images = []
+
+        # Normalize into the shape expected by downstream codepaths.
+        for ent in images:
+            t = ent.get("type")
+            k = ent.get("kind")
+            if isinstance(t, str) and t.strip():
+                ent["type"] = t.strip().lower()
+            elif isinstance(k, str) and k.strip():
+                ent["type"] = k.strip().lower()
+            else:
+                ent["type"] = (ent.get("type") or "output").strip().lower()
+
+            fn = ent.get("filename")
+            ent["filename"] = fn if isinstance(fn, str) else ""
+            sf = ent.get("subfolder")
+            ent["subfolder"] = sf if isinstance(sf, str) else ""
+
+        if used_media_as_source:
+            # Persist synthesized images_json so prune (and other operations) use consistent indexing.
+            payload = json.dumps(images)
+            self._run_repo.update_run(run_id, images_json=payload, media_json=payload)
+            run.images_json = payload
+            run.media_json = payload
+
         if not images:
             return {"ok": False, "error": "No images on run"}
         for i in uniq:

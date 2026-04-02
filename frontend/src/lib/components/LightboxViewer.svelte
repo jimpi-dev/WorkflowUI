@@ -1056,6 +1056,37 @@ let {
 		line-height: 1.35;
 	}
 
+	@media (max-width: 639px) {
+		/* Mobile layout is already dense; remove the keyboard shortcut "legend" to free space. */
+		.lightbox-controls-shortcuts {
+			display: none;
+		}
+
+		/* Make the close ("X") button larger so it stays tappable even with fewer controls. */
+		.lightbox-controls .close {
+			width: 34px;
+			height: 34px;
+			padding: 0;
+			margin-left: 8px;
+			border-radius: 8px;
+			border-left: none;
+			border: 1px solid rgba(255, 255, 255, 0.22);
+			background: rgba(0, 0, 0, 0.35);
+			display: inline-flex;
+			flex-shrink: 0;
+			align-items: center;
+			justify-content: center;
+			font-size: 1.1rem;
+			line-height: 1;
+		}
+
+		/* Keep the icon visually centered if the "Close" label is shown for some call sites. */
+		.lightbox-controls .close :global(svg),
+		.lightbox-controls .close {
+			white-space: nowrap;
+		}
+	}
+
 	.lightbox-carousel-video-thumb {
 		position: relative;
 		display: block;
