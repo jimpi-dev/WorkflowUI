@@ -1410,6 +1410,15 @@ class SqliteRunRepository:
                         OR LOWER(TRIM(CAST(v.value AS TEXT))) LIKE '%.jpeg'
                         OR LOWER(TRIM(CAST(v.value AS TEXT))) LIKE '%.webp'
                         OR LOWER(TRIM(CAST(v.value AS TEXT))) LIKE '%.gif'
+                        OR LOWER(TRIM(CAST(v.value AS TEXT))) LIKE '%.mp4'
+                        OR LOWER(TRIM(CAST(v.value AS TEXT))) LIKE '%.webm'
+                        OR LOWER(TRIM(CAST(v.value AS TEXT))) LIKE '%.mkv'
+                        OR LOWER(TRIM(CAST(v.value AS TEXT))) LIKE '%.mov'
+                        OR LOWER(TRIM(CAST(v.value AS TEXT))) LIKE '%.mp3'
+                        OR LOWER(TRIM(CAST(v.value AS TEXT))) LIKE '%.wav'
+                        OR LOWER(TRIM(CAST(v.value AS TEXT))) LIKE '%.ogg'
+                        OR LOWER(TRIM(CAST(v.value AS TEXT))) LIKE '%.flac'
+                        OR LOWER(TRIM(CAST(v.value AS TEXT))) LIKE '%.m4a'
                       )
                     {base_where}
                 ),
@@ -1454,7 +1463,7 @@ class SqliteRunRepository:
                     WHERE filename IS NOT NULL
                       AND TRIM(filename) != ''
                       AND run_status = 'done'
-                      AND (media_type IS NULL OR media_type = '' OR media_type IN ('image', 'output', 'input'))
+                      AND (media_type IS NULL OR media_type = '' OR media_type IN ('image', 'output', 'input', 'video', 'audio'))
                       AND (remote_deleted = 0 OR local_storage_status IN ('saved', 'partial'))
                 )
             """
@@ -1651,6 +1660,15 @@ class SqliteRunRepository:
                         OR LOWER(TRIM(CAST(v.value AS TEXT))) LIKE '%.jpeg'
                         OR LOWER(TRIM(CAST(v.value AS TEXT))) LIKE '%.webp'
                         OR LOWER(TRIM(CAST(v.value AS TEXT))) LIKE '%.gif'
+                        OR LOWER(TRIM(CAST(v.value AS TEXT))) LIKE '%.mp4'
+                        OR LOWER(TRIM(CAST(v.value AS TEXT))) LIKE '%.webm'
+                        OR LOWER(TRIM(CAST(v.value AS TEXT))) LIKE '%.mkv'
+                        OR LOWER(TRIM(CAST(v.value AS TEXT))) LIKE '%.mov'
+                        OR LOWER(TRIM(CAST(v.value AS TEXT))) LIKE '%.mp3'
+                        OR LOWER(TRIM(CAST(v.value AS TEXT))) LIKE '%.wav'
+                        OR LOWER(TRIM(CAST(v.value AS TEXT))) LIKE '%.ogg'
+                        OR LOWER(TRIM(CAST(v.value AS TEXT))) LIKE '%.flac'
+                        OR LOWER(TRIM(CAST(v.value AS TEXT))) LIKE '%.m4a'
                       )
                     {base_where}
                 ),
@@ -1665,7 +1683,7 @@ class SqliteRunRepository:
                     WHERE filename IS NOT NULL
                       AND TRIM(filename) != ''
                       AND run_status = 'done'
-                      AND (media_type IS NULL OR media_type = '' OR media_type IN ('image', 'output', 'input'))
+                      AND (media_type IS NULL OR media_type = '' OR media_type IN ('image', 'output', 'input', 'video', 'audio'))
                       AND (remote_deleted = 0 OR local_storage_status IN ('saved', 'partial'))
                 )
             """
