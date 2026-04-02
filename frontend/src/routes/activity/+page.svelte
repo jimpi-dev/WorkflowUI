@@ -190,6 +190,17 @@
 		};
 	}
 
+	/** Queue + recent can list the same run while it is active; merge so {#each run (run.id)} keys stay unique. */
+	function mergeQueueRunWithRecent(queue: ActivityRun, recent: ActivityRun): ActivityRun {
+		return {
+			...recent,
+			status: queue.status,
+			queue_position: queue.queue_position ?? recent.queue_position,
+			comfyui_unreachable_warning: queue.comfyui_unreachable_warning ?? recent.comfyui_unreachable_warning,
+			source: queue.source
+		};
+	}
+
 	function buildGroups(list: ActivityRun[]): ActivityGroup[] {
 		const byGroup: Record<string, ActivityRun[]> = {};
 		for (const r of list) {
@@ -233,7 +244,13 @@
 		for (const q of queue?.queued ?? []) inFlight.push(normalizeQueue(q));
 		const activeGroupIds = inFlight.map((r) => r.run_group_id ?? r.id);
 		const relatedPast = recentRuns.filter((r) => activeGroupIds.includes(r.run_group_id ?? r.id));
-		return buildGroups([...inFlight, ...relatedPast]);
+		const byId = new Map<string, ActivityRun>();
+		for (const r of relatedPast) byId.set(r.id, r);
+		for (const q of inFlight) {
+			const existing = byId.get(q.id);
+			byId.set(q.id, existing ? mergeQueueRunWithRecent(q, existing) : q);
+		}
+		return buildGroups([...byId.values()]);
 	});
 
 	const recentGroups = $derived.by(() => {
@@ -1480,7 +1497,18 @@
 
 <style>
 	.activity-page { padding: 1rem; display: flex; flex-direction: column; gap: 1rem; }
-	.page-header { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; }
+	.page-header {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 0.75rem;
+		position: sticky;
+		top: 0;
+		z-index: 5;
+		background: var(--bg);
+		padding-bottom: 0.5rem;
+		border-bottom: 1px solid var(--border);
+	}
 	.page-header h1 { margin: 0; }
 	.gallery-controls-right { display: inline-flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; justify-content: flex-end; }
 	.subtitle { margin: 0.35rem 0 0; color: var(--muted); }
