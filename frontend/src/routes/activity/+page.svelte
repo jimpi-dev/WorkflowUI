@@ -3,7 +3,7 @@
 	import { goto } from '$app/navigation';
 	import { onDestroy } from 'svelte';
 	import { getApiBase } from '$lib/config';
-	import { THUMB_SCALE_MAX, THUMB_SCALE_MIN, getThumbFitModeCookie, getThumbSizeCookie, setThumbFitModeCookie, setThumbSizeCookie, type ThumbFitMode } from '$lib/cookie';
+	import { THUMB_SCALE_MAX, THUMB_SCALE_MIN, getThumbFitModeCookie, getThumbSizeCookie, setThumbFitModeCookie, setThumbSizeCookie, getThumbShowFilenameCookie, setThumbShowFilenameCookie, getSkipDeleteConfirmCookie, setSkipDeleteConfirmCookie, type ThumbFitMode } from '$lib/cookie';
 	import { appBooting } from '$lib/stores/appBooting';
 	import { cancelRun, getQueue, getRecentRuns, type QueueItem, type RecentRunItem } from '$lib/queueApi';
 	import RunAppBadge from '$lib/components/RunAppBadge.svelte';
@@ -12,6 +12,7 @@
 	import RunMetadataPanel from '$lib/components/RunMetadataPanel.svelte';
 	import SendToAppDialog from '$lib/components/SendToAppDialog.svelte';
 	import LightboxViewer, { type LightboxItem } from '$lib/components/LightboxViewer.svelte';
+	import ConfirmDeleteDialog from '$lib/components/ConfirmDeleteDialog.svelte';
 
 	type ProjectOption = { id: string; name: string; headerColor?: string | null };
 
@@ -95,6 +96,7 @@
 	let sendToAppProjectId = $state<string | null>(null);
 	let thumbnailScale = $state<number>(browser ? getThumbSizeCookie() : 100);
 	let thumbnailFitMode = $state<ThumbFitMode>(browser ? getThumbFitModeCookie() : 'cover');
+	let showThumbFilename = $state<boolean>(browser ? getThumbShowFilenameCookie() : false);
 	let lightboxOpen = $state(false);
 	let lightboxImages = $state<LightboxItem[]>([]);
 	let lightboxIndex = $state(0);
@@ -107,6 +109,7 @@
 	let deletingBothImageKeys = $state<string[]>([]);
 	let favorites = $state<Set<string>>(new Set());
 	let projectMetadataCache = $state<Record<string, { metadata: Record<string, unknown>; favorites: string[] }>>({});
+	let deleteRunGroupPending = $state<ActivityGroup | null>(null);
 
 	let queuePollId: ReturnType<typeof setInterval> | null = null;
 	let recentPollId: ReturnType<typeof setInterval> | null = null;
@@ -292,6 +295,11 @@
 		if (browser) setThumbFitModeCookie(mode);
 	}
 
+	function setShowThumbFilename(value: boolean) {
+		showThumbFilename = value;
+		if (browser) setThumbShowFilenameCookie(value);
+	}
+
 	function getProjectInfo(projectId: string | null, projectTitle: string | null): { name: string; color: string | null } {
 		if (!projectId) return { name: projectTitle ?? 'Unknown project', color: null };
 		const fromList = projectOptions.find((p) => p.id === projectId);
@@ -340,6 +348,105 @@
 			for (const r of g.runs) if (r.id === runId) return r;
 		}
 		return undefined;
+	}
+
+	function outputFavoriteKey(runId: string, outputIndex: number): string {
+		return `${runId}:${outputIndex}`;
+	}
+
+	function parseFavoriteEntry(entry: string): { runId: string; outputIndex: number | null } {
+		const lastColon = entry.lastIndexOf(':');
+		if (lastColon === -1) return { runId: entry, outputIndex: null };
+		const suffix = entry.slice(lastColon + 1);
+		if (!/^\d+$/.test(suffix)) return { runId: entry, outputIndex: null };
+		return { runId: entry.slice(0, lastColon), outputIndex: parseInt(suffix, 10) };
+	}
+
+	function runHasDisplayableOutputs(run: ActivityRun): boolean {
+		const imgs = run.images ?? [];
+		return imgs.some((item) => {
+			const rd = !!(item as { remote_deleted?: boolean }).remote_deleted;
+			if (!rd) return true;
+			return run.local_storage_status === 'saved' || run.local_storage_status === 'partial';
+		});
+	}
+
+	function outputIndexIsDisplayable(run: ActivityRun, index: number): boolean {
+		const item = run.images?.[index];
+		if (!item) return false;
+		const rd = !!(item as { remote_deleted?: boolean }).remote_deleted;
+		if (!rd) return true;
+		return run.local_storage_status === 'saved' || run.local_storage_status === 'partial';
+	}
+
+	function isOutputFavorite(runId: string, outputIndex: number): boolean {
+		if (favorites.has(outputFavoriteKey(runId, outputIndex))) return true;
+		if (favorites.has(runId)) return true;
+		return false;
+	}
+
+	function runHasFavoritedOutput(run: ActivityRun): boolean {
+		if (!runHasDisplayableOutputs(run)) return false;
+		if (favorites.has(run.id)) return true;
+		const n = run.images?.length ?? 0;
+		for (let i = 0; i < n; i++) {
+			if (!outputIndexIsDisplayable(run, i)) continue;
+			if (favorites.has(outputFavoriteKey(run.id, i))) return true;
+		}
+		return false;
+	}
+
+	function pruneStaleRunFavoritesForGroup(runsToCheck: ActivityRun[]) {
+		const toRemove = new Set<string>();
+		const idSet = new Set(runsToCheck.map((r) => r.id));
+		for (const r of runsToCheck) {
+			if (favorites.has(r.id) && !runHasDisplayableOutputs(r)) toRemove.add(r.id);
+			const n = r.images?.length ?? 0;
+			for (let i = 0; i < n; i++) {
+				const k = outputFavoriteKey(r.id, i);
+				if (favorites.has(k) && !outputIndexIsDisplayable(r, i)) toRemove.add(k);
+			}
+		}
+		for (const ent of favorites) {
+			const p = parseFavoriteEntry(ent);
+			if (p.outputIndex == null) continue;
+			if (!idSet.has(p.runId)) continue;
+			const r = runsToCheck.find((x) => x.id === p.runId);
+			if (!r) continue;
+			const n = r.images?.length ?? 0;
+			if (p.outputIndex < 0 || p.outputIndex >= n || !outputIndexIsDisplayable(r, p.outputIndex)) {
+				toRemove.add(ent);
+			}
+		}
+		if (!toRemove.size) return;
+		favorites = new Set([...favorites].filter((e) => !toRemove.has(e)));
+	}
+
+	async function persistFavoritesAfterDeletedRuns(deletedIds: Set<string>, affectedRuns: ActivityRun[]) {
+		if (!deletedIds.size) return;
+		favorites = new Set([...favorites].filter((ent) => !deletedIds.has(parseFavoriteEntry(ent).runId)));
+
+		const projectIds = new Set<string>();
+		for (const r of affectedRuns) {
+			if (r.project_id && deletedIds.has(r.id)) projectIds.add(r.project_id);
+		}
+		for (const projectId of projectIds) {
+			try {
+				const entry = await ensureProjectMetadata(projectId);
+				const nextFav = entry.favorites.filter((ent) => !deletedIds.has(parseFavoriteEntry(ent).runId));
+				if (nextFav.length === entry.favorites.length) continue;
+				const nextMeta = { ...entry.metadata, favorites: nextFav };
+				const res = await fetch(`${apiBase}/projects/${projectId}`, {
+					method: 'PATCH',
+					headers: { 'Content-Type': 'application/json' },
+					body: JSON.stringify({ metadata: nextMeta })
+				});
+				if (!res.ok) continue;
+				projectMetadataCache = { ...projectMetadataCache, [projectId]: { metadata: nextMeta, favorites: nextFav } };
+			} catch {
+				/* ignore */
+			}
+		}
 	}
 
 	function markDeleting(list: string[], keys: string[]): string[] {
@@ -543,6 +650,50 @@
 		return hasKnown ? total : null;
 	}
 
+	/** Batch-fetch sizes like the project page; group by project because the API is scoped per project. */
+	async function refetchStorageSizesForActivityRuns(runsBatch: ActivityRun[]) {
+		if (!runsBatch.length || !apiBase) return;
+		const byProject = new Map<string, string[]>();
+		for (const r of runsBatch) {
+			const pid = r.project_id?.trim();
+			if (!pid) continue;
+			let list = byProject.get(pid);
+			if (!list) {
+				list = [];
+				byProject.set(pid, list);
+			}
+			if (!list.includes(r.id)) list.push(r.id);
+		}
+		const allSizes: Record<string, { local_storage_bytes?: number | null; remote_storage_bytes?: number | null }> =
+			{};
+		await Promise.all(
+			[...byProject.entries()].map(async ([projectId, runIds]) => {
+				if (!runIds.length) return;
+				try {
+					const res = await fetch(
+						`${apiBase}/projects/${projectId}/runs/storage_sizes?run_ids=${encodeURIComponent(runIds.join(','))}`
+					);
+					if (!res.ok) return;
+					const sizes = await res.json().catch(() => ({}));
+					if (typeof sizes !== 'object' || sizes === null) return;
+					Object.assign(allSizes, sizes);
+				} catch {
+					// ignore
+				}
+			})
+		);
+		if (!Object.keys(allSizes).length) return;
+		recentRuns = recentRuns.map((r) => {
+			const s = allSizes[r.id];
+			if (!s) return r;
+			return {
+				...r,
+				local_storage_bytes: s.local_storage_bytes ?? null,
+				remote_storage_bytes: s.remote_storage_bytes ?? null
+			};
+		});
+	}
+
 	async function saveRunGroup(group: ActivityGroup) {
 		savingGroupIds = [...savingGroupIds, group.groupId];
 		try {
@@ -557,6 +708,7 @@
 					});
 				}
 			}
+			await refetchStorageSizesForActivityRuns(group.runs);
 		} finally {
 			savingGroupIds = savingGroupIds.filter((id) => id !== group.groupId);
 		}
@@ -690,20 +842,51 @@
 		}
 	}
 
-	async function deleteRunGroup(group: ActivityGroup) {
-		for (const id of group.runs.map((r) => r.id)) deletingRunIds = [...deletingRunIds, id];
+	async function deleteRunGroup(group: ActivityGroup, runIdsToDelete?: string[]) {
+		const runIds = runIdsToDelete ?? group.runs.map((r) => r.id);
+		if (runIds.length === 0) return;
+		const runIdsSet = new Set(runIds);
+		const affectedRuns = group.runs.filter((r) => runIdsSet.has(r.id));
+		for (const id of runIds) deletingRunIds = [...deletingRunIds, id];
+		const deletedIds = new Set<string>();
 		try {
-			for (const runId of group.runs.map((r) => r.id)) {
+			for (const runId of runIds) {
 				const res = await fetch(`${apiBase}/runs/${runId}/delete-run`, { method: 'POST' });
 				const data = await res.json().catch(() => ({}));
 				if (res.ok && data.deleted_run_id) {
 					recentRuns = recentRuns.filter((r) => r.id !== data.deleted_run_id);
+					deletedIds.add(data.deleted_run_id);
 				}
+				deletingRunIds = deletingRunIds.filter((id) => id !== runId);
 			}
+			if (deletedIds.size > 0) await persistFavoritesAfterDeletedRuns(deletedIds, affectedRuns);
 		} finally {
-			const ids = group.runs.map((r) => r.id);
-			deletingRunIds = deletingRunIds.filter((id) => !ids.includes(id));
-			await Promise.all([loadQueue(), loadRecent(0)]);
+			deletingRunIds = deletingRunIds.filter((id) => !runIds.includes(id));
+			await loadQueue();
+			await refreshRecentInPlace(true);
+		}
+	}
+
+	function requestDeleteRunGroup(group: ActivityGroup) {
+		pruneStaleRunFavoritesForGroup(group.runs);
+		const hasFav = group.runs.some((r) => runHasFavoritedOutput(r));
+		if (!hasFav && getSkipDeleteConfirmCookie('delete_run')) {
+			void deleteRunGroup(group);
+			return;
+		}
+		deleteRunGroupPending = group;
+	}
+
+	async function confirmDeleteRunGroup(mode: 'all' | 'non_favorites') {
+		const group = deleteRunGroupPending;
+		if (!group) return;
+		deleteRunGroupPending = null;
+		if (mode === 'non_favorites') {
+			const runIdsToDelete = group.runs.filter((r) => !runHasFavoritedOutput(r)).map((r) => r.id);
+			if (runIdsToDelete.length === 0) return;
+			await deleteRunGroup(group, runIdsToDelete);
+		} else {
+			await deleteRunGroup(group);
 		}
 	}
 
@@ -716,7 +899,8 @@
 				const res = await fetch(`${apiBase}/runs/${run.id}/cancel`, { method: 'POST' });
 				if (res.ok) updateRunStorage(run.id, { status: 'cancelled', error: 'Cancelled' });
 			}
-			await Promise.all([loadQueue(), loadRecent(0)]);
+			await loadQueue();
+			await refreshRecentInPlace(true);
 		} finally {
 			cancellingGroupIds = cancellingGroupIds.filter((id) => id !== group.groupId);
 		}
@@ -728,7 +912,8 @@
 		retryingGroupIds = [...retryingGroupIds, group.groupId];
 		try {
 			for (const run of toRetry) await fetch(`${apiBase}/runs/${run.id}/retry`, { method: 'POST' });
-			await Promise.all([loadQueue(), loadRecent(0)]);
+			await loadQueue();
+			await refreshRecentInPlace(true);
 		} finally {
 			retryingGroupIds = retryingGroupIds.filter((id) => id !== group.groupId);
 		}
@@ -739,7 +924,8 @@
 		cancellingRunIds = [...cancellingRunIds, runId];
 		try {
 			await cancelRun(runId);
-			await Promise.all([loadQueue(), loadRecent(0)]);
+			await loadQueue();
+			await refreshRecentInPlace(true);
 		} finally {
 			cancellingRunIds = cancellingRunIds.filter((id) => id !== runId);
 		}
@@ -885,6 +1071,7 @@
 			if (offset === 0) recentRuns = mapped;
 			else recentRuns = [...recentRuns, ...mapped];
 			totalRecent = typeof data.total === 'number' ? data.total : recentRuns.length;
+			void refetchStorageSizesForActivityRuns(mapped);
 		} catch (e) {
 			recentError = e instanceof Error ? e.message : 'Failed to load recent generations';
 			if (offset === 0) {
@@ -897,10 +1084,10 @@
 		}
 	}
 
-	async function refreshRecentInPlace() {
+	async function refreshRecentInPlace(ignoreLoadingGuard = false) {
 		// Keep infinite-scroll stability: refresh the top slice without
 		// replacing already loaded pages or collapsing list length.
-		if (recentLoading || recentLoadingMore) return;
+		if (!ignoreLoadingGuard && (recentLoading || recentLoadingMore)) return;
 		try {
 			const data = await getRecentRuns({
 				projectId: filterProjectId || undefined,
@@ -914,6 +1101,7 @@
 			const rest = recentRuns.filter((r) => !topIds.has(r.id));
 			recentRuns = [...top, ...rest];
 			totalRecent = typeof data.total === 'number' ? data.total : totalRecent;
+			void refetchStorageSizesForActivityRuns(top);
 		} catch {
 			return;
 		}
@@ -947,6 +1135,18 @@
 			loadRecent(0);
 		}, 220);
 		return () => clearTimeout(timer);
+	});
+
+	$effect(() => {
+		if (!deleteRunGroupPending || !browser) return;
+		const onKey = (e: KeyboardEvent) => {
+			if (e.key === 'Escape') {
+				e.preventDefault();
+				deleteRunGroupPending = null;
+			}
+		};
+		window.addEventListener('keydown', onKey);
+		return () => window.removeEventListener('keydown', onKey);
 	});
 
 	function useLoadMoreSentinel(node: HTMLElement) {
@@ -1029,6 +1229,22 @@
 				Fit into thumbnail
 			</button>
 		</div>
+		<label class="thumb-filename-option" title="Show output filenames on thumbnails">
+			<span class="thumb-filename-label">Filenames</span>
+			<button
+				type="button"
+				role="switch"
+				aria-checked={showThumbFilename}
+				class="thumb-filename-toggle"
+				class:on={showThumbFilename}
+				aria-label="Show filenames on thumbnails"
+				onclick={() => setShowThumbFilename(!showThumbFilename)}
+			>
+				<span class="thumb-filename-toggle-track">
+					<span class="thumb-filename-toggle-thumb"></span>
+				</span>
+			</button>
+		</label>
 		</div>
 	</header>
 
@@ -1091,7 +1307,7 @@
 							onDeleteAll={() => deleteBothSelectedOrGroup(group)}
 							deleteRunDisabled={group.runs.some((r) => deletingRunIds.includes(r.id))}
 							deleteRunLoading={group.runs.some((r) => deletingRunIds.includes(r.id))}
-							onDeleteRun={() => deleteRunGroup(group)}
+							onDeleteRun={() => requestDeleteRunGroup(group)}
 							showReplicate={!!group.app_slug}
 							onReplicate={() => openAppInProject(group)}
 							showShowMetadata={true}
@@ -1159,8 +1375,10 @@
 											mediaType={mediaType(item)}
 											seed={run.seed ?? undefined}
 											executionTimeSec={run.execution_time ?? undefined}
+											fileName={item.filename}
+											showFilenameAlways={showThumbFilename}
 											showMetadata={true}
-											isFavorite={favorites.has(run.id)}
+											isFavorite={isOutputFavorite(run.id, origI)}
 											isSelected={isImageSelected(group.groupId, imageKey(run.id, origI))}
 											showFavorite={true}
 											showSelection={true}
@@ -1321,7 +1539,7 @@
 							onDeleteAll={() => deleteBothSelectedOrGroup(group)}
 							deleteRunDisabled={group.runs.some((r) => deletingRunIds.includes(r.id))}
 							deleteRunLoading={group.runs.some((r) => deletingRunIds.includes(r.id))}
-							onDeleteRun={() => deleteRunGroup(group)}
+							onDeleteRun={() => requestDeleteRunGroup(group)}
 							showReplicate={!!group.app_slug}
 							onReplicate={() => openAppInProject(group)}
 							showShowMetadata={true}
@@ -1369,8 +1587,10 @@
 											mediaType={mediaType(item)}
 											seed={run.seed ?? undefined}
 											executionTimeSec={run.execution_time ?? undefined}
+											fileName={item.filename}
+											showFilenameAlways={showThumbFilename}
 											showMetadata={true}
-											isFavorite={favorites.has(run.id)}
+											isFavorite={isOutputFavorite(run.id, origI)}
 											isSelected={isImageSelected(group.groupId, imageKey(run.id, origI))}
 											showFavorite={true}
 											showSelection={true}
@@ -1437,6 +1657,61 @@
 	</section>
 </section>
 
+{#if deleteRunGroupPending}
+	{@const group = deleteRunGroupPending}
+	{@const runIds = group.runs.map((r) => r.id)}
+	{@const n = runIds.length}
+	{@const hasFav = group.runs.some((r) => runHasFavoritedOutput(r))}
+	{@const mainMsg = n > 1
+		? `Delete ${n} generations permanently? This cannot be undone.`
+		: 'Delete this prompt (and all its files) permanently? This cannot be undone.'}
+	{#if hasFav}
+		<div
+			class="confirm-delete-overlay activity-delete-run-overlay"
+			role="dialog"
+			aria-modal="true"
+			aria-labelledby="activity-delete-run-fav-title"
+			tabindex="-1"
+			onclick={() => { deleteRunGroupPending = null; }}
+			onkeydown={(e) => { if (e.key === 'Escape') deleteRunGroupPending = null; }}
+		>
+			<div class="confirm-delete-card delete-run-fav-card" role="presentation" tabindex="-1" onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.stopPropagation()}>
+				<p id="activity-delete-run-fav-title" class="confirm-delete-title">Delete Run</p>
+				<p class="confirm-delete-msg">This run includes favorited generations. What do you want to do?</p>
+				<div class="delete-run-fav-actions">
+					<button
+						type="button"
+						class="confirm-delete-btn danger"
+						onclick={async () => { await confirmDeleteRunGroup('non_favorites'); }}
+					>Delete non-favorites only</button>
+					<button
+						type="button"
+						class="confirm-delete-btn danger"
+						onclick={async () => { await confirmDeleteRunGroup('all'); }}
+					>Delete all (including favorites)</button>
+					<button
+						type="button"
+						class="confirm-delete-btn secondary"
+						onclick={() => { deleteRunGroupPending = null; }}
+					>Cancel</button>
+				</div>
+			</div>
+		</div>
+	{:else}
+		<ConfirmDeleteDialog
+			open={true}
+			title="Delete Run with all of its generations"
+			message={mainMsg}
+			confirmLabel="Delete Run"
+			onConfirm={async (dontShowAgain) => {
+				if (dontShowAgain) setSkipDeleteConfirmCookie('delete_run', true);
+				await confirmDeleteRunGroup('all');
+			}}
+			onCancel={() => { deleteRunGroupPending = null; }}
+		/>
+	{/if}
+{/if}
+
 {#if metadataPanelRunId}
 	<RunMetadataPanel
 		runId={metadataPanelRunId}
@@ -1471,7 +1746,8 @@
 		if (!run) return;
 		void toggleFavorite(run);
 	}}
-	isFavorite={(item) => !!item.runId && favorites.has(item.runId)}
+	isFavorite={(item) =>
+		!!item.runId && item.outputIndex != null && isOutputFavorite(item.runId, item.outputIndex)}
 	onToggleSelection={lightboxGroupId ? (item) => toggleImageSelection(lightboxGroupId, item.id) : undefined}
 	isSelected={lightboxGroupId ? (item) => isImageSelected(lightboxGroupId, item.id) : undefined}
 	onSendToApp={(item) => {
@@ -1517,6 +1793,61 @@
 	.gallery-thumb-size input[type='range'] { width: min(280px, 52vw); }
 	.thumb-size-value { min-width: 3.5rem; font-size: 0.8rem; color: var(--muted); text-align: right; }
 	.gallery-thumb-fit { display: inline-flex; align-items: center; gap: 0.35rem; }
+	.thumb-filename-option {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.5rem;
+		cursor: pointer;
+		user-select: none;
+		font-size: 0.8rem;
+		color: var(--text-muted, var(--muted));
+	}
+	.thumb-filename-label {
+		white-space: nowrap;
+		font-weight: 500;
+	}
+	.thumb-filename-toggle {
+		display: inline-flex;
+		align-items: center;
+		cursor: pointer;
+		background: none;
+		border: none;
+		padding: 0;
+		margin: 0;
+		color: inherit;
+	}
+	.thumb-filename-toggle:focus-visible {
+		outline: 1px solid var(--accent);
+		outline-offset: 2px;
+		border-radius: 4px;
+	}
+	.thumb-filename-toggle-track {
+		display: inline-flex;
+		align-items: center;
+		width: 32px;
+		height: 18px;
+		border-radius: 9px;
+		background: var(--border);
+		transition: background 0.2s;
+		padding: 2px;
+	}
+	.thumb-filename-toggle:hover .thumb-filename-toggle-track {
+		background: color-mix(in srgb, var(--text-muted) 25%, var(--border));
+	}
+	.thumb-filename-toggle.on .thumb-filename-toggle-track {
+		background: color-mix(in srgb, var(--accent) 60%, var(--border));
+	}
+	.thumb-filename-toggle-thumb {
+		width: 14px;
+		height: 14px;
+		border-radius: 50%;
+		background: var(--surface);
+		box-shadow: 0 1px 2px rgba(0,0,0,0.2);
+		transition: transform 0.2s ease;
+	}
+	.thumb-filename-toggle.on .thumb-filename-toggle-thumb {
+		transform: translateX(14px);
+	}
 	.thumb-fit-btn { border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--muted); padding: 0.28rem 0.5rem; font: inherit; font-size: 0.78rem; cursor: pointer; }
 	.thumb-fit-btn.active { color: var(--text); border-color: color-mix(in srgb, var(--accent) 55%, var(--border)); box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 25%, transparent) inset; }
 	.card { border: 1px solid var(--border); border-radius: 12px; padding: 0.9rem; background: var(--card); }
@@ -1621,6 +1952,74 @@
 	.load-more { margin-top: 0.75rem; }
 	.muted { color: var(--muted); }
 	.error { color: var(--error, #ef4444); }
+
+	/* Delete run group + favorites (align with project page) */
+	.activity-delete-run-overlay.confirm-delete-overlay {
+		z-index: 110000;
+	}
+	.confirm-delete-overlay {
+		position: fixed;
+		inset: 0;
+		background: rgba(0, 0, 0, 0.5);
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		z-index: 110000;
+	}
+	.confirm-delete-card.delete-run-fav-card {
+		background: var(--surface);
+		border: 1px solid var(--border);
+		border-radius: 8px;
+		padding: 0.75rem 1rem;
+		max-width: 22rem;
+		width: calc(100% - 2rem);
+		box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+	}
+	.confirm-delete-card .confirm-delete-title {
+		margin: 0 0 0.35rem 0;
+		font-size: 0.95rem;
+		font-weight: 600;
+		color: var(--text);
+	}
+	.confirm-delete-card .confirm-delete-msg {
+		margin: 0 0 0.75rem 0;
+		font-size: 0.85rem;
+		line-height: 1.35;
+		color: var(--muted);
+		white-space: pre-line;
+	}
+	.delete-run-fav-actions {
+		display: flex;
+		flex-direction: column;
+		gap: 0.5rem;
+		margin-top: 0.5rem;
+	}
+	.delete-run-fav-actions .confirm-delete-btn {
+		padding: 0.35rem 0.75rem;
+		border-radius: 6px;
+		font-size: 0.85rem;
+		font-weight: 500;
+		cursor: pointer;
+		border: 1px solid transparent;
+	}
+	.delete-run-fav-actions .confirm-delete-btn.secondary {
+		background: var(--surface);
+		color: var(--text);
+		border-color: var(--border);
+	}
+	.delete-run-fav-actions .confirm-delete-btn.secondary:hover {
+		background: color-mix(in srgb, var(--accent) 15%, var(--surface));
+		border-color: var(--accent);
+	}
+	.delete-run-fav-actions .confirm-delete-btn.danger {
+		background: var(--error, #c55);
+		color: white;
+		border-color: var(--error, #c55);
+	}
+	.delete-run-fav-actions .confirm-delete-btn.danger:hover {
+		background: var(--error-hover, #e55);
+		border-color: var(--error-hover, #e55);
+	}
 	@media (max-width: 900px) {
 		.page-header { flex-direction: column; align-items: flex-start; }
 		.gallery-controls-right { width: 100%; justify-content: flex-start; }

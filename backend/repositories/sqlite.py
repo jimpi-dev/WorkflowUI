@@ -1348,6 +1348,7 @@ class SqliteRunRepository:
                                 END
                             ) fav
                             WHERE CAST(fav.value AS TEXT) = g.id
+                               OR CAST(fav.value AS TEXT) = (g.id || ':' || CAST(CAST(j.key AS INTEGER) AS TEXT))
                         ) THEN 1 ELSE 0 END AS is_favorite
                     FROM generation g
                     JOIN run r ON r.id = g.run_id
@@ -1602,6 +1603,7 @@ class SqliteRunRepository:
                                 END
                             ) fav
                             WHERE CAST(fav.value AS TEXT) = g.id
+                               OR CAST(fav.value AS TEXT) = (g.id || ':' || CAST(CAST(j.key AS INTEGER) AS TEXT))
                         ) THEN 1 ELSE 0 END AS is_favorite
                     FROM generation g
                     JOIN run r ON r.id = g.run_id
