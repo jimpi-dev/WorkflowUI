@@ -3,6 +3,7 @@
     import FavoriteSash from '$lib/components/FavoriteSash.svelte';
     let {
         mediaType = 'image',
+        resolution = undefined as string | undefined,
         seed = undefined as number | string | undefined,
         executionTimeSec = undefined as number | null | undefined,
         isFavorite = false,
@@ -21,6 +22,7 @@
         children
     }: {
         mediaType?: 'image' | 'video' | 'audio';
+        resolution?: string;
         seed?: number | string;
         executionTimeSec?: number | null;
         isFavorite?: boolean;
@@ -111,13 +113,23 @@
         </div>
     {/if}
 
-    {#if (showSeed && seed !== undefined && seed !== null && String(seed).trim() !== '') || executionTimeSec != null}
-        <span class="thumb-overlay-seed" title={[showSeed && seed != null ? 'Seed value' : '', executionTimeSec != null ? 'Generation time' : ''].filter(Boolean).join(' · ') || undefined}>
+    {#if (mediaType !== 'audio' && resolution) || (showSeed && seed !== undefined && seed !== null && String(seed).trim() !== '') || executionTimeSec != null}
+        <span class="thumb-overlay-seed" title={[
+            mediaType !== 'audio' && resolution ? 'Media resolution' : '',
+            showSeed && seed != null ? 'Seed value' : '',
+            executionTimeSec != null ? 'Generation time' : ''
+        ].filter(Boolean).join(' · ') || undefined}>
+            {#if mediaType !== 'audio' && resolution}
+                <span class="thumb-overlay-resolution">{resolution}</span>
+            {/if}
             {#if showSeed && seed !== undefined && seed !== null && String(seed).trim() !== ''}
+                {#if mediaType !== 'audio' && resolution}
+                    <span class="thumb-overlay-sep" aria-hidden="true"> · </span>
+                {/if}
                 <span class="seed-value">{seed}</span>
             {/if}
             {#if executionTimeSec != null}
-                {#if showSeed && seed !== undefined && seed !== null && String(seed).trim() !== ''}
+                {#if (showSeed && seed !== undefined && seed !== null && String(seed).trim() !== '') || (mediaType !== 'audio' && resolution)}
                     <span class="thumb-overlay-sep" aria-hidden="true"> · </span>
                 {/if}
                 <span class="thumb-overlay-time">{Math.round(Number(executionTimeSec))} sec</span>
@@ -309,6 +321,9 @@
         opacity: 1;
     }
     .thumb-overlay-seed .seed-value {
+        font-weight: 500;
+    }
+    .thumb-overlay-seed .thumb-overlay-resolution {
         font-weight: 500;
     }
     .thumb-overlay-seed .thumb-overlay-sep {

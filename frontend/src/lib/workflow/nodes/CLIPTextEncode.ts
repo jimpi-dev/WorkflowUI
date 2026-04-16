@@ -5,7 +5,8 @@ export const CLIPTextEncodeSpec: NodeSpec = {
     fixedInputs: {
         text: {
             type: 'text',
-            label: 'Prompt'
+            label: 'Prompt',
+            multiline: true
         }
     }
 };

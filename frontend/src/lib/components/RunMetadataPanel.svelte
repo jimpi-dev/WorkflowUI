@@ -3,7 +3,20 @@
 	import { formatBytes } from '$lib/utils/format';
 	import SendToAppDialog from '$lib/components/SendToAppDialog.svelte';
 
-	let { runId, projectId = null, onClose, mode = 'output' }: { runId: string; projectId?: string | null; onClose: () => void; mode?: 'output' | 'run' } = $props();
+	let {
+		runId,
+		projectId = null,
+		onClose,
+		mode = 'output',
+		embedWorkflowuiMetadataOnDownload = false
+	}: {
+		runId: string;
+		projectId?: string | null;
+		onClose: () => void;
+		mode?: 'output' | 'run';
+		/** Match project grid URLs when metadata-on-download is enabled. */
+		embedWorkflowuiMetadataOnDownload?: boolean;
+	} = $props();
 
 	const apiBase = getApiBase() || '';
 
@@ -41,6 +54,8 @@
 	let sendToAppOutputIndex = $state<number | null>(null);
 	let imageLoadFailed = $state<Set<string>>(new Set());
 	let copiedId = $state<'run' | 'snapshot' | 'input' | null>(null);
+	/** ComfyUI metadata embedded in the output file (PNG / MP4). */
+	let fileEmbedComfyui = $state<'loading' | 'yes' | 'no' | 'na' | 'unavailable' | null>(null);
 
 	async function copyToClipboard(text: string, id: 'run' | 'snapshot' | 'input') {
 		try {
@@ -75,11 +90,67 @@
 			});
 	});
 
+	const outputList = $derived(run?.media?.length ? run.media : run?.images ?? []);
+
+	$effect(() => {
+		const id = runId;
+		const outs = outputList;
+		if (!id || !outs.length) {
+			fileEmbedComfyui = null;
+			return;
+		}
+		fileEmbedComfyui = 'loading';
+		let cancelled = false;
+		fetch(`${apiBase}/runs/${encodeURIComponent(id)}/output-workflowui-embedded?output_index=0`)
+			.then((res) => (res.ok ? res.json() : null))
+			.then(
+				(
+					j: {
+						hasWorkflowuiEmbeddedMetadata?: boolean | null;
+						hasEmbeddedWorkflowuiMetadata?: boolean | null;
+						hasComfyuiEmbeddedMetadata?: boolean | null;
+						comfyuiEmbeddedCheckApplicable?: boolean;
+						unavailable?: boolean;
+					} | null
+				) => {
+					if (cancelled || !j) {
+						if (!cancelled) fileEmbedComfyui = 'unavailable';
+						return;
+					}
+					if (j.unavailable) {
+						fileEmbedComfyui = 'unavailable';
+						return;
+					}
+					if (!j.comfyuiEmbeddedCheckApplicable) fileEmbedComfyui = 'na';
+					else if (j.hasComfyuiEmbeddedMetadata === true) fileEmbedComfyui = 'yes';
+					else fileEmbedComfyui = 'no';
+				}
+			)
+			.catch(() => {
+				if (!cancelled) fileEmbedComfyui = 'unavailable';
+			});
+		return () => {
+			cancelled = true;
+		};
+	});
+
+	function primaryMediaKind(o: { type?: string; filename?: string } | undefined): 'video' | 'audio' | 'image' {
+		if (!o) return 'image';
+		const t = (o.type ?? '').toLowerCase();
+		if (t === 'video') return 'video';
+		if (t === 'audio') return 'audio';
+		const fn = (o.filename ?? '').toLowerCase();
+		if (fn.endsWith('.mp4') || fn.endsWith('.webm') || fn.endsWith('.mkv') || fn.endsWith('.mov')) return 'video';
+		if (fn.endsWith('.mp3') || fn.endsWith('.wav') || fn.endsWith('.flac')) return 'audio';
+		return 'image';
+	}
+
 	function imageUrl(img: { filename: string; subfolder?: string; type?: string }, rid?: string) {
 		const subfolder = img.subfolder ?? '';
 		const type = img.type ?? 'output';
 		let url = `${apiBase}/image?filename=${encodeURIComponent(img.filename)}&subfolder=${encodeURIComponent(subfolder)}&type=${encodeURIComponent(type)}`;
 		if (rid) url += `&run_id=${encodeURIComponent(rid)}`;
+		if (rid && embedWorkflowuiMetadataOnDownload) url += '&embed_workflowui_metadata=1';
 		return url;
 	}
 
@@ -92,8 +163,8 @@
 	}
 
 	async function downloadPrimaryOutput() {
-		if (!run || !run.images?.length) return;
-		const img = run.images[0];
+		if (!run || !outputList.length) return;
+		const img = outputList[0];
 		if (img.remote_deleted) return;
 		const url = imageUrl(img, run.id);
 		const res = await fetch(url);
@@ -142,22 +213,65 @@
 		{:else if run}
 			<div class="metadata-panel-two-panel" class:run-only={mode === 'run'}>
 				<aside class="metadata-left-panel">
-					{#if mode === 'output' && run.images?.length}
+					{#if mode === 'output' && outputList.length}
+						<section class="generation-output-block" aria-labelledby="gen-out-heading">
+							<h3 id="gen-out-heading" class="generation-output-title">Generation output</h3>
 						<div class="image-card">
-							{#if run.images[0].remote_deleted && imageLoadFailed.has(imageKey(0))}
+							{#if outputList[0].remote_deleted && imageLoadFailed.has(imageKey(0))}
 								<div class="run-detail-deleted">Deleted</div>
-							{:else if run.images[0].type === 'video'}
-								<video src={imageUrl(run.images[0], run.id)} controls playsinline class="run-detail-media" onerror={() => markImageLoadFailed(0)}><track kind="captions" /></video>
+							{:else if primaryMediaKind(outputList[0]) === 'video'}
+								<video
+									src={imageUrl(outputList[0], run.id)}
+									controls
+									playsinline
+									class="run-detail-media"
+									preload="metadata"
+									onerror={() => markImageLoadFailed(0)}
+								></video>
+							{:else if primaryMediaKind(outputList[0]) === 'audio'}
+								<audio src={imageUrl(outputList[0], run.id)} controls class="run-detail-media run-detail-audio" onerror={() => markImageLoadFailed(0)}></audio>
 							{:else}
-								<img src={imageUrl(run.images[0], run.id)} alt="Generation output" class="run-detail-media" onerror={() => markImageLoadFailed(0)} />
+								<img src={imageUrl(outputList[0], run.id)} alt="Generation output" class="run-detail-media" onerror={() => markImageLoadFailed(0)} />
 							{/if}
-							{#if run.images.length > 1}
-								<p class="image-card-more">+{run.images.length - 1} more output{run.images.length === 2 ? '' : 's'}</p>
+							{#if outputList.length > 1}
+								<p class="image-card-more">+{outputList.length - 1} more output{outputList.length === 2 ? '' : 's'}</p>
 							{/if}
 							<div class="image-card-footer">
-								{#if run.images[0].filename}
-									<p class="image-card-filename" title={run.images[0].filename}>
-										{run.images[0].filename}
+								<div class="file-embed-rows" role="status" aria-live="polite">
+									<div class="file-embed-row">
+										<span class="embed-kind">ComfyUI</span>
+										{#if fileEmbedComfyui === 'loading'}
+											<span class="embed-pill embed-pill-loading">Checking…</span>
+										{:else if fileEmbedComfyui === 'yes'}
+											<span class="embed-pill embed-pill-yes" title="PNG contains ComfyUI prompt/workflow text chunks (Save Image)">
+												<svg class="embed-pill-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+													<path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" />
+													<polyline points="22 4 12 14.01 9 11.01" />
+												</svg>
+												Embedded in file
+											</span>
+										{:else if fileEmbedComfyui === 'no'}
+											<span class="embed-pill embed-pill-no" title="No ComfyUI metadata found (PNG text chunks or MP4 moov)">
+												<svg class="embed-pill-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+													<circle cx="12" cy="12" r="10" />
+													<path d="M4.93 4.93l14.14 14.14" />
+												</svg>
+												Not in file
+											</span>
+										{:else if fileEmbedComfyui === 'na'}
+											<span class="embed-pill embed-pill-na" title="ComfyUI metadata is detected in PNG (text chunks) and MP4 (moov). This file type is not scanned.">
+												N/A
+											</span>
+										{:else if fileEmbedComfyui === 'unavailable'}
+											<span class="embed-pill embed-pill-unknown" title="Could not read the file">
+												Unknown
+											</span>
+										{/if}
+									</div>
+								</div>
+								{#if outputList[0].filename}
+									<p class="image-card-filename" title={outputList[0].filename}>
+										{outputList[0].filename}
 									</p>
 								{/if}
 								<div class="image-card-actions">
@@ -190,6 +304,7 @@
 								</div>
 							</div>
 						</div>
+						</section>
 					{/if}
 					<div class="meta-card">
 						<div class="meta-card-heading">
@@ -238,13 +353,29 @@
 								<dt>Remote (ComfyUI)</dt>
 								<dd>{formatBytes(run.remote_storage_bytes)}</dd>
 							{/if}
-							{#if (run.images?.length ?? run.media?.length ?? 0) > 0}
+							{#if outputList.length > 0}
 								<dt>Outputs</dt>
-								<dd>{(run.images ?? run.media ?? []).length} image{(run.images ?? run.media ?? []).length === 1 ? '' : 's'}</dd>
+								<dd>{outputList.length} image{outputList.length === 1 ? '' : 's'}</dd>
 							{/if}
-							{#if mode === 'output' && run.images?.[0]?.filename}
+							{#if outputList.length > 0}
+								<dt>ComfyUI metadata</dt>
+								<dd class="embed-dd">
+									{#if fileEmbedComfyui === 'loading'}
+										<span class="muted">Checking…</span>
+									{:else if fileEmbedComfyui === 'yes'}
+										<span class="embed-inline embed-inline-yes">Embedded</span>
+									{:else if fileEmbedComfyui === 'no'}
+										<span class="embed-inline embed-inline-no">Not in file</span>
+									{:else if fileEmbedComfyui === 'na'}
+										<span class="muted">N/A</span>
+									{:else if fileEmbedComfyui === 'unavailable'}
+										<span class="muted">Unknown</span>
+									{/if}
+								</dd>
+							{/if}
+							{#if mode === 'output' && outputList[0]?.filename}
 								<dt>Filename</dt>
-								<dd>{run.images[0].filename}</dd>
+								<dd>{outputList[0].filename}</dd>
 							{/if}
 							{#if run.prompt_id}
 								<dt>Prompt ID</dt>
@@ -465,6 +596,22 @@
 		object-fit: contain;
 		background: var(--input-bg, var(--surface, #f6f9fc));
 	}
+	.run-detail-audio {
+		width: 100%;
+		min-height: 40px;
+	}
+	.generation-output-block {
+		display: flex;
+		flex-direction: column;
+		gap: 0.5rem;
+		min-width: 0;
+	}
+	.generation-output-title {
+		margin: 0;
+		font-size: 0.95rem;
+		font-weight: 600;
+		color: var(--text, #0f172a);
+	}
 	.run-detail-deleted {
 		min-height: 120px;
 		display: flex;
@@ -485,6 +632,81 @@
 		display: flex;
 		flex-direction: column;
 		gap: 0.35rem;
+	}
+	.file-embed-rows {
+		display: flex;
+		flex-direction: column;
+		gap: 0.35rem;
+	}
+	.file-embed-row {
+		display: flex;
+		align-items: center;
+		flex-wrap: wrap;
+		gap: 0.35rem 0.5rem;
+		min-height: 1.45rem;
+	}
+	.embed-kind {
+		font-size: 0.72rem;
+		font-weight: 700;
+		text-transform: uppercase;
+		letter-spacing: 0.03em;
+		color: var(--text-muted, var(--muted, #64748b));
+		min-width: 4.5rem;
+		flex-shrink: 0;
+	}
+	.embed-pill {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.35rem;
+		font-size: 0.75rem;
+		font-weight: 600;
+		padding: 0.2rem 0.5rem;
+		border-radius: 999px;
+		line-height: 1.2;
+	}
+	.embed-pill-icon {
+		width: 0.95rem;
+		height: 0.95rem;
+		flex-shrink: 0;
+	}
+	.embed-pill-yes {
+		background: rgba(22, 163, 74, 0.12);
+		color: var(--success, #15803d);
+		border: 1px solid rgba(22, 163, 74, 0.35);
+	}
+	.embed-pill-no {
+		background: rgba(100, 116, 139, 0.12);
+		color: var(--text-muted, var(--muted, #64748b));
+		border: 1px solid rgba(100, 116, 139, 0.25);
+	}
+	.embed-pill-loading {
+		color: var(--text-muted, var(--muted, #64748b));
+		font-weight: 500;
+	}
+	.embed-pill-unknown {
+		background: rgba(234, 179, 8, 0.12);
+		color: #a16207;
+		border: 1px solid rgba(234, 179, 8, 0.35);
+	}
+	.embed-pill-na {
+		background: rgba(148, 163, 184, 0.15);
+		color: var(--text-muted, var(--muted, #64748b));
+		border: 1px solid rgba(148, 163, 184, 0.35);
+		font-weight: 600;
+		font-size: 0.72rem;
+		padding: 0.2rem 0.45rem;
+	}
+	.embed-dd {
+		display: flex;
+		align-items: center;
+	}
+	.embed-inline-yes {
+		color: var(--success, #15803d);
+		font-weight: 600;
+	}
+	.embed-inline-no {
+		color: var(--text-muted, var(--muted, #64748b));
+		font-weight: 600;
 	}
 	.image-card-filename {
 		margin: 0;

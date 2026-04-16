@@ -106,3 +106,40 @@ def get_workflowui_embed_config() -> WorkflowUIEmbedConfig:
     if _WORKFLOWUI_EMBED_CONFIG is None:
         _WORKFLOWUI_EMBED_CONFIG = load_workflowui_embed_config()
     return _WORKFLOWUI_EMBED_CONFIG
+
+
+@dataclass(frozen=True)
+class AuthConfig:
+    enabled: bool
+    secret: str
+    token_ttl_seconds: int
+    admin_username: str
+    admin_password: str
+
+
+_AUTH_CONFIG: AuthConfig | None = None
+
+
+def load_auth_config() -> AuthConfig:
+    enabled = _parse_bool(os.environ.get("WORKFLOWUI_AUTH_ENABLED"), False)
+    secret = (os.environ.get("WORKFLOWUI_AUTH_SECRET") or "workflowui-dev-secret").strip()
+    try:
+        ttl = int((os.environ.get("WORKFLOWUI_AUTH_TOKEN_TTL_SECONDS") or "86400").strip())
+    except ValueError:
+        ttl = 86400
+    admin_username = (os.environ.get("WORKFLOWUI_AUTH_ADMIN_USERNAME") or "admin").strip()
+    admin_password = (os.environ.get("WORKFLOWUI_AUTH_ADMIN_PASSWORD") or "admin").strip()
+    return AuthConfig(
+        enabled=enabled,
+        secret=secret or "workflowui-dev-secret",
+        token_ttl_seconds=max(300, ttl),
+        admin_username=admin_username or "admin",
+        admin_password=admin_password or "admin",
+    )
+
+
+def get_auth_config() -> AuthConfig:
+    global _AUTH_CONFIG
+    if _AUTH_CONFIG is None:
+        _AUTH_CONFIG = load_auth_config()
+    return _AUTH_CONFIG

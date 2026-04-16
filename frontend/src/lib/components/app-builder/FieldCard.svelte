@@ -26,6 +26,8 @@
 		availableUpscaleModels?: string[];
 		availableUpscaleMethods?: string[];
 		optionSource?: string;
+		/** When true, default-value editor uses a textarea (prompt-style). */
+		multiline?: boolean;
 		onVisibleChange: (visible: boolean) => void;
 		onDefaultOverrideChange: (value: unknown) => void;
 		onOverrideChange: (override: InputOverride | null) => void;
@@ -52,6 +54,7 @@
 		availableUpscaleModels = [],
 		availableUpscaleMethods = [],
 		optionSource = '',
+		multiline = false,
 		onVisibleChange,
 		onDefaultOverrideChange,
 		onOverrideChange
@@ -744,6 +747,15 @@
 							</button>
 						{/if}
 					</div>
+				{:else if type === 'text' && multiline}
+					<textarea
+						class="default-input default-textarea"
+						rows="4"
+						placeholder="Default (optional)"
+						value={displayDefault}
+						oninput={(e) =>
+							onDefaultOverrideChange((e.target as HTMLTextAreaElement).value || undefined)}
+					></textarea>
 				{:else}
 					<input
 						type="text"
@@ -897,6 +909,13 @@
 		width: 100%;
 		padding: 0.35rem 0.5rem;
 		font-size: 0.9rem;
+	}
+	.default-textarea {
+		min-height: 5rem;
+		resize: vertical;
+		line-height: 1.4;
+		align-self: stretch;
+		font-family: inherit;
 	}
 	.expand-btn {
 		padding: 0.35rem 0.6rem;

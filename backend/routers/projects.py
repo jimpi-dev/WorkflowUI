@@ -4,18 +4,20 @@ import uuid
 import logging
 from pathlib import Path
 import shutil
+from typing import Any
 
 from fastapi import APIRouter, HTTPException, Depends, Response
 
-from db.migrate import QUICK_RUNS_PROJECT_ID
+from authz import require_user, ensure_project_access
 from config import get_media_storage_config
 
-from dependencies import get_db, get_media_storage_service, get_run_queue_state, COMFY_URL
+from dependencies import get_db, get_media_storage_service, get_run_queue_state, COMFY_URL, get_user_repo
 from services.comfyui_info import (
     normalize_comfy_url as _normalize_comfy_url,
     get_runs_remote_storage_bytes_batch,
     get_runs_remote_storage_bytes_deduplicated,
 )
+from services.quick_runs import ensure_quick_runs_project_for_user
 from services.run_serialization import (
     safe_json_loads,
     latent_resolution_from_input_snapshot,
@@ -24,8 +26,40 @@ from services.run_serialization import (
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
+
+def _quick_runs_project_id_for_ctx(ctx, project_repo) -> str:
+    return ensure_quick_runs_project_for_user(
+        ctx.user if ctx.auth_enabled else None,
+        auth_enabled=bool(ctx.auth_enabled),
+        project_repo=project_repo,
+        user_repo=get_user_repo(),
+    )
+
+
+def _normalized_run_outputs(run) -> list[dict[str, Any]]:
+    """Return normalized run outputs for image/video/audio regardless of source JSON."""
+    entries = safe_json_loads(getattr(run, "media_json", None))
+    if not isinstance(entries, list) or not entries:
+        entries = safe_json_loads(getattr(run, "images_json", None), [])
+    if not isinstance(entries, list):
+        return []
+
+    normalized: list[dict[str, Any]] = []
+    for ent in entries:
+        if not isinstance(ent, dict):
+            continue
+        out = dict(ent)
+        raw_type = out.get("type")
+        raw_kind = out.get("kind")
+        if isinstance(raw_type, str) and raw_type.strip():
+            out["type"] = raw_type.strip().lower()
+        elif isinstance(raw_kind, str) and raw_kind.strip():
+            out["type"] = raw_kind.strip().lower()
+        normalized.append(out)
+    return normalized
+
 @router.post("/projects")
-def post_projects(body: dict, db=Depends(get_db)):
+def post_projects(body: dict, db=Depends(get_db), ctx=Depends(require_user)):
     name = body.get("name")
     if not name or not isinstance(name, str) or not name.strip():
         raise HTTPException(status_code=400, detail="name is required")
@@ -56,6 +90,7 @@ def post_projects(body: dict, db=Depends(get_db)):
         tags_json,
         storage_mode,
         header_color=header_color.strip() if header_color else None,
+        owner_user_id=ctx.user.id if ctx.auth_enabled and ctx.user else None,
     )
     return {
         "id": created.id,
@@ -76,9 +111,14 @@ def list_projects(
     limit: int = 100,
     archived: bool = False,
     db=Depends(get_db),
+    ctx=Depends(require_user),
 ):
     _, _, _, run_repo, project_repo, _, _ = db
     projects = project_repo.list_projects(tag=tag, limit=limit, archived=archived)
+    if ctx.auth_enabled and ctx.user:
+        projects = [p for p in projects if getattr(p, "owner_user_id", None) == ctx.user.id]
+    elif not ctx.auth_enabled:
+        projects = [p for p in projects if getattr(p, "owner_user_id", None) is None]
     result = []
     for p in projects:
         run_count = run_repo.count_runs_by_project(p.id)
@@ -94,16 +134,16 @@ def list_projects(
             "run_count": run_count,
             "header_color": p.header_color,
             "archived_at": p.archived_at,
+            "owner_user_id": p.owner_user_id,
         })
     return result
 
 
 @router.get("/projects/{project_id}")
-def get_project_detail(project_id: str, db=Depends(get_db)):
+def get_project_detail(project_id: str, db=Depends(get_db), ctx=Depends(require_user)):
     _, _, app_repo, run_repo, project_repo, _, _ = db
+    ensure_project_access(project_id, ctx, project_repo)
     proj = project_repo.get_project(project_id)
-    if not proj:
-        raise HTTPException(status_code=404, detail="Project not found")
     run_count = run_repo.count_runs_by_project(project_id)
     runs_list = run_repo.get_runs_by_project(project_id, limit=1000)
     app_ids = set()
@@ -158,13 +198,13 @@ def get_project_detail(project_id: str, db=Depends(get_db)):
 
 
 @router.patch("/projects/{project_id}")
-def patch_project(project_id: str, body: dict, db=Depends(get_db)):
-    if project_id == QUICK_RUNS_PROJECT_ID and "archived_at" in body:
-        raise HTTPException(status_code=400, detail="Quick runs project cannot be archived.")
+def patch_project(project_id: str, body: dict, db=Depends(get_db), ctx=Depends(require_user)):
     _, _, _, _, project_repo, _, _ = db
+    quick_runs_project_id = _quick_runs_project_id_for_ctx(ctx, project_repo)
+    if project_id == quick_runs_project_id and "archived_at" in body:
+        raise HTTPException(status_code=400, detail="Quick runs project cannot be archived.")
+    ensure_project_access(project_id, ctx, project_repo)
     proj = project_repo.get_project(project_id)
-    if not proj:
-        raise HTTPException(status_code=404, detail="Project not found")
     kwargs: dict = {"updated_at": int(time.time() * 1000)}
     if "name" in body and body["name"] is not None:
         name = body["name"]
@@ -203,13 +243,13 @@ def patch_project(project_id: str, body: dict, db=Depends(get_db)):
 
 
 @router.delete("/projects/{project_id}")
-def delete_project(project_id: str, body: dict | None = None, db=Depends(get_db)):
-    if project_id == QUICK_RUNS_PROJECT_ID:
-        raise HTTPException(status_code=400, detail="Quick runs project cannot be deleted or archived.")
+def delete_project(project_id: str, body: dict | None = None, db=Depends(get_db), ctx=Depends(require_user)):
     _, workflow_repo, _, run_repo, project_repo, _, _ = db
+    quick_runs_project_id = _quick_runs_project_id_for_ctx(ctx, project_repo)
+    if project_id == quick_runs_project_id:
+        raise HTTPException(status_code=400, detail="Quick runs project cannot be deleted or archived.")
+    ensure_project_access(project_id, ctx, project_repo)
     proj = project_repo.get_project(project_id)
-    if not proj:
-        raise HTTPException(status_code=404, detail="Project not found")
     keep = (body or {}).get("keep", "none")
     if keep not in ("local", "remote", "none"):
         raise HTTPException(status_code=400, detail="keep must be local, remote, or none")
@@ -251,11 +291,12 @@ def delete_project(project_id: str, body: dict | None = None, db=Depends(get_db)
 
 
 @router.patch("/projects/{project_id}/storage")
-def patch_project_storage(project_id: str, body: dict, db=Depends(get_db)):
+def patch_project_storage(project_id: str, body: dict, db=Depends(get_db), ctx=Depends(require_user)):
     storage_mode = body.get("storage_mode") or body.get("storageMode")
     if storage_mode not in {"inherit", "local", "remote"}:
         raise HTTPException(status_code=400, detail="storage_mode must be inherit, local, or remote")
     _, _, _, _, project_repo, _, _ = db
+    ensure_project_access(project_id, ctx, project_repo)
     updated = project_repo.update_project(
         project_id,
         storage_mode=storage_mode,
@@ -283,11 +324,10 @@ def list_project_runs(
     offset: int = 0,
     db=Depends(get_db),
     state=Depends(get_run_queue_state),
+    ctx=Depends(require_user),
 ):
     _, _, app_repo, run_repo, project_repo, _, _ = db
-    proj = project_repo.get_project(project_id)
-    if not proj:
-        raise HTTPException(status_code=404, detail="Project not found")
+    ensure_project_access(project_id, ctx, project_repo)
     meta_q_trim = meta_q.strip() if meta_q and isinstance(meta_q, str) else None
     total = run_repo.count_runs_by_project_filtered(
         project_id,
@@ -357,7 +397,7 @@ def list_project_runs(
             "queue_position": queue_position,
             "created_at": r.created_at,
             "seed": r.seed,
-            "images": safe_json_loads(r.images_json, []),
+            "images": _normalized_run_outputs(r),
             "execution_time": r.execution_time,
             "error": error,
             "run_group_id": r.run_group_id,
@@ -390,6 +430,74 @@ def list_project_runs(
     return {"runs": out, "total": total}
 
 
+@router.get("/media-browser/images")
+def list_media_browser_images(
+    project_id: str | None = None,
+    source: str = "all",
+    app_id: str | None = None,
+    since: int | None = None,
+    until: int | None = None,
+    q: str | None = None,
+    favorites_only: bool = False,
+    limit: int = 60,
+    offset: int = 0,
+    db=Depends(get_db),
+    ctx=Depends(require_user),
+):
+    _, _, _, run_repo, _, _, _ = db
+    source_norm = (source or "all").strip().lower()
+    if source_norm not in {"all", "generation", "input"}:
+        raise HTTPException(status_code=400, detail="source must be one of: all, generation, input")
+    safe_limit = max(1, min(int(limit), 200))
+    safe_offset = max(0, int(offset))
+    query_text = q.strip() if isinstance(q, str) and q.strip() else None
+    items, total = run_repo.list_media_browser_images(
+        owner_user_id=ctx.user.id if (ctx.auth_enabled and ctx.user) else None,
+        auth_enabled=bool(ctx.auth_enabled),
+        project_id=project_id.strip() if isinstance(project_id, str) and project_id.strip() else None,
+        source=source_norm,
+        app_id=app_id.strip() if isinstance(app_id, str) and app_id.strip() else None,
+        since_ts=since,
+        until_ts=until,
+        q=query_text,
+        favorites_only=bool(favorites_only),
+        limit=safe_limit,
+        offset=safe_offset,
+    )
+    # No-leakage contract: totals and results are computed only from
+    # the current user's scoped dataset when auth is enabled.
+    return {"items": items, "total": total}
+
+
+@router.get("/media-browser/projects")
+def list_media_browser_projects(
+    source: str = "all",
+    app_id: str | None = None,
+    since: int | None = None,
+    until: int | None = None,
+    q: str | None = None,
+    favorites_only: bool = False,
+    db=Depends(get_db),
+    ctx=Depends(require_user),
+):
+    _, _, _, run_repo, _, _, _ = db
+    source_norm = (source or "all").strip().lower()
+    if source_norm not in {"all", "generation", "input"}:
+        raise HTTPException(status_code=400, detail="source must be one of: all, generation, input")
+    query_text = q.strip() if isinstance(q, str) and q.strip() else None
+    items = run_repo.list_media_browser_projects(
+        owner_user_id=ctx.user.id if (ctx.auth_enabled and ctx.user) else None,
+        auth_enabled=bool(ctx.auth_enabled),
+        source=source_norm,
+        app_id=app_id.strip() if isinstance(app_id, str) and app_id.strip() else None,
+        since_ts=since,
+        until_ts=until,
+        q=query_text,
+        favorites_only=bool(favorites_only),
+    )
+    return {"items": items}
+
+
 def _format_run_date_ms(ms: int) -> str:
     try:
         return time.strftime("%Y-%m-%d", time.gmtime(ms / 1000))
@@ -403,12 +511,11 @@ def get_project_runs_storage_sizes(
     run_ids: str,
     db=Depends(get_db),
     service=Depends(get_media_storage_service),
+    ctx=Depends(require_user),
 ):
     """Return local and remote storage bytes for the given run IDs (comma-separated). Runs must belong to the project."""
     _, _, app_repo, run_repo, project_repo, _, _ = db
-    proj = project_repo.get_project(project_id)
-    if not proj:
-        raise HTTPException(status_code=404, detail="Project not found")
+    ensure_project_access(project_id, ctx, project_repo)
     ids = [rid.strip() for rid in (run_ids or "").split(",") if rid.strip()]
     if not ids:
         return {}
@@ -421,8 +528,8 @@ def get_project_runs_storage_sizes(
         result[rid] = {"local_storage_bytes": None, "remote_storage_bytes": None}
         if r.local_storage_status in ("saved", "partial"):
             result[rid]["local_storage_bytes"] = service.get_run_local_storage_bytes(r)
-        run_images = safe_json_loads(r.images_json, [])
-        if run_images:
+        run_outputs = _normalized_run_outputs(r)
+        if run_outputs:
             app = app_repo.get_app_by_id(r.app_id) if r.app_id else None
             raw_url = (r.comfyui_url or (app.comfyui_url if app else None) or COMFY_URL or "").strip()
             # Always try to resolve a ComfyUI URL for remote size when run has images
@@ -430,7 +537,7 @@ def get_project_runs_storage_sizes(
                 raw_url = (COMFY_URL or "http://localhost:8188/").strip()
             comfy_url = _normalize_comfy_url(raw_url).rstrip("/") if raw_url else ""
             if comfy_url:
-                runs_with_images.append((rid, comfy_url, run_images))
+                runs_with_images.append((rid, comfy_url, run_outputs))
     by_url: dict[str, list[tuple[str, list]]] = {}
     for rid, url, imgs in runs_with_images:
         by_url.setdefault(url, []).append((rid, imgs))
@@ -450,6 +557,7 @@ def move_runs_to_project(
     project_id: str,
     body: dict,
     db=Depends(get_db),
+    ctx=Depends(require_user),
 ):
     run_ids = body.get("run_ids")
     target_project_id = body.get("target_project_id")
@@ -462,15 +570,13 @@ def move_runs_to_project(
         raise HTTPException(status_code=400, detail="Target project must be different from source project")
 
     _, _, _, run_repo, project_repo, _, _ = db
+    ensure_project_access(project_id, ctx, project_repo)
     source_proj = project_repo.get_project(project_id)
-    if not source_proj:
-        raise HTTPException(status_code=404, detail="Source project not found")
     if getattr(source_proj, "archived_at", None) is not None:
         raise HTTPException(status_code=400, detail="Cannot move runs from an archived project")
 
+    ensure_project_access(target_project_id, ctx, project_repo)
     target_proj = project_repo.get_project(target_project_id)
-    if not target_proj:
-        raise HTTPException(status_code=404, detail="Target project not found")
     if getattr(target_proj, "archived_at", None) is not None:
         raise HTTPException(status_code=400, detail="Cannot move runs into an archived project")
 
@@ -530,11 +636,10 @@ def get_project_runs_stats(
     meta_q: str | None = None,
     deleted_app: bool | None = None,
     db=Depends(get_db),
+    ctx=Depends(require_user),
 ):
     _, _, _, run_repo, project_repo, _, _ = db
-    proj = project_repo.get_project(project_id)
-    if not proj:
-        raise HTTPException(status_code=404, detail="Project not found")
+    ensure_project_access(project_id, ctx, project_repo)
     meta_q_trim = meta_q.strip() if meta_q and isinstance(meta_q, str) else None
     total_generations = run_repo.count_runs_by_project_filtered(
         project_id,

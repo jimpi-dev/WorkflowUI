@@ -13,6 +13,10 @@
 	import { consolePanelOpen } from '$lib/stores/consolePanelOpen';
 	import { queuePanelOpen } from '$lib/stores/queuePanelOpen';
 	import { queuePanelWidth } from '$lib/stores/queuePanelWidth';
+	import { goto } from '$app/navigation';
+	import { getApiBase } from '$lib/config';
+	import { authState } from '$lib/stores/auth';
+	import { quickRunsProject } from '$lib/stores/quickRunsProject';
 	import { tick, onMount } from 'svelte';
 	let { children } = $props();
 
@@ -26,12 +30,29 @@
 	let mobileQueueTimeout: ReturnType<typeof setTimeout> | null = null;
 	let mobileConsoleTimeout: ReturnType<typeof setTimeout> | null = null;
 
+	function isLoginPath(path: string): boolean {
+		return path === '/login' || path.startsWith('/login/');
+	}
+
 	let isAppRoute = $derived(
 		$page.url.pathname === '/app' || $page.url.pathname.startsWith('/app/')
 	);
+	let isLoginRoute = $derived(isLoginPath($page.url.pathname));
+	let canAccessConsole = $derived(
+		!$authState.enabled || $authState.user?.role === 'admin'
+	);
+	let showAuthenticatedUi = $derived(!$authState.enabled || $authState.authenticated);
+	let authBlocked = $derived($authState.loaded && $authState.enabled && !$authState.authenticated);
+	let showAppShell = $derived(!authBlocked || isLoginRoute);
 	$effect(() => {
 		if (!isAppRoute) {
 			clearHeaderAppContext();
+		}
+	});
+
+	$effect(() => {
+		if (!canAccessConsole && $consolePanelOpen) {
+			consolePanelOpen.set(false);
 		}
 	});
 
@@ -42,11 +63,61 @@
 	}
 
 	onMount(() => {
+		const originalFetch = window.fetch.bind(window);
+		window.fetch = ((input: RequestInfo | URL, init?: RequestInit) =>
+			originalFetch(input, { ...(init ?? {}), credentials: init?.credentials ?? 'include' })) as typeof window.fetch;
+
 		if (!footerEl || !layoutEl) return;
 		setFooterHeightVar();
 		const ro = new ResizeObserver(setFooterHeightVar);
 		ro.observe(footerEl);
 		return () => ro.disconnect();
+	});
+
+	onMount(() => {
+		const base = getApiBase() || '';
+		fetch(`${base}/auth/me`)
+			.then((r) => (r.ok ? r.json() : null))
+			.then((d) => {
+				const enabled = !!d?.enabled;
+				const authenticated = !!d?.authenticated;
+				authState.set({
+					enabled,
+					authenticated,
+					user: d?.user ?? null,
+					loaded: true
+				});
+				if (!enabled || authenticated) {
+					fetch(`${base}/config`)
+						.then((cfgRes) => (cfgRes.ok ? cfgRes.json() : null))
+						.then((cfg) => {
+							if (cfg) quickRunsProject.setFromConfig(cfg);
+							else quickRunsProject.resetToDefault();
+						})
+						.catch(() => quickRunsProject.resetToDefault());
+				} else {
+					quickRunsProject.resetToDefault();
+				}
+				const path = window.location.pathname;
+				if (enabled && !authenticated && !isLoginPath(path)) goto('/login');
+				if (enabled && authenticated && isLoginPath(path)) goto('/');
+			})
+			.catch(() => {
+				authState.set({ enabled: false, authenticated: false, user: null, loaded: true });
+				quickRunsProject.resetToDefault();
+			});
+	});
+
+	$effect(() => {
+		if (!$authState.loaded) return;
+		const path = $page.url.pathname;
+		if ($authState.enabled && !$authState.authenticated && !isLoginPath(path)) {
+			goto('/login');
+			return;
+		}
+		if ($authState.enabled && $authState.authenticated && isLoginPath(path)) {
+			goto('/');
+		}
 	});
 
 	onMount(() => {
@@ -122,12 +193,23 @@
 
 <div class="app-layout has-status-bar" bind:this={layoutEl}>
 	<PluginWelcomeModal />
-	<AppHeader />
+	{#if showAuthenticatedUi && !isLoginRoute}
+		<AppHeader />
+	{/if}
 
 	<div class="app-content-row">
 		<div class="app-content-main">
 			<main class="app-viewport">
-				{@render children()}
+				{#if showAppShell}
+					{@render children()}
+				{:else}
+					<div class="auth-loading" role="status" aria-live="polite">
+						<p>Redirecting to login...</p>
+						<button type="button" class="auth-loading-login-btn" onclick={() => goto('/login')}>
+							Go to login
+						</button>
+					</div>
+				{/if}
 			</main>
 			{#if isMobile}
 				{#if mobileConsoleMounted}
@@ -137,12 +219,14 @@
 						role="presentation"
 						onclick={() => consolePanelOpen.set(false)}
 					/>
-					<div class="console-mobile-sheet" class:console-mobile-sheet--open={mobileConsoleOpen}>
-						<ComfyUIConsole open={$consolePanelOpen} onclose={() => consolePanelOpen.set(false)} mobileFullscreen />
-					</div>
+					{#if canAccessConsole}
+						<div class="console-mobile-sheet" class:console-mobile-sheet--open={mobileConsoleOpen}>
+							<ComfyUIConsole open={$consolePanelOpen} onclose={() => consolePanelOpen.set(false)} mobileFullscreen />
+						</div>
+					{/if}
 				{/if}
 			{:else}
-				{#if $consolePanelOpen}
+				{#if $consolePanelOpen && canAccessConsole}
 					<ComfyUIConsole open={$consolePanelOpen} onclose={() => consolePanelOpen.set(false)} />
 				{/if}
 			{/if}
@@ -168,19 +252,23 @@
 		{/if}
 	</div>
 
-	<div class="app-footer-area">
-		<div class="app-footer-row">
-			<div class="app-footer-main">
-				<footer class="app-footer" bind:this={footerEl}>
-					<ComfyUIStatusBar />
-				</footer>
-				<QueueBadge />
+	{#if showAppShell}
+		<div class="app-footer-area">
+			<div class="app-footer-row">
+				<div class="app-footer-main">
+					<footer class="app-footer" bind:this={footerEl}>
+						<ComfyUIStatusBar />
+					</footer>
+					{#if showAuthenticatedUi && !isLoginRoute}
+						<QueueBadge />
+					{/if}
+				</div>
+				{#if $queuePanelOpen}
+					<div class="app-footer-spacer" style="width: {$queuePanelWidth}px;"></div>
+				{/if}
 			</div>
-			{#if $queuePanelOpen}
-				<div class="app-footer-spacer" style="width: {$queuePanelWidth}px;"></div>
-			{/if}
 		</div>
-	</div>
+	{/if}
 
 	{#if $appBooting}
 		<div class="app-booting-mask" role="status" aria-live="polite" aria-label="Loading app">
@@ -370,6 +458,16 @@
 		margin: 0;
 		font-size: 0.9rem;
 		color: var(--muted);
+	}
+
+	.auth-loading {
+		padding: 1rem;
+		color: var(--muted);
+	}
+
+	.auth-loading-login-btn {
+		margin-top: 0.5rem;
+		width: auto;
 	}
 
 	@keyframes app-booting-fade-in {

@@ -1,13 +1,14 @@
 import json
+import mimetypes
 import time
 import uuid
 from pathlib import Path
 
 import requests
 from fastapi import APIRouter, HTTPException, Depends, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
 
-from db.migrate import QUICK_RUNS_PROJECT_ID
+from authz import require_user, ensure_project_access, ensure_run_access, user_can_access_app
 from services.comfyui_info import normalize_comfy_url as _normalize_comfy_url, get_run_remote_storage_bytes
 from services.run_queue import (
     queue_run as run_queue_queue_run,
@@ -26,14 +27,20 @@ from dependencies import (
     get_media_storage_service,
     get_executor,
     get_run_queue_state,
+    get_user_repo,
 )
+from routers.execution import load_run_output_content_bytes
+from services.comfyui_embedded_detect import file_has_embedded_comfyui_metadata
+from services.workflowui_embedded_detect import file_has_embedded_workflowui_metadata
 from services.run_serialization import (
     build_updated_runs_response,
+    queue_item_details_from_run,
     queue_item_summary_from_run,
     safe_json_loads,
 )
+from services.quick_runs import ensure_quick_runs_project_for_user
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_user)])
 
 def _queue_run(job: dict, state, get_db_fn, get_media_fn, auto_start: bool = True):
     executor = get_executor()
@@ -56,6 +63,7 @@ def run_workflow_versioned(
     payload: dict,
     db=Depends(get_db),
     state=Depends(get_run_queue_state),
+    ctx=Depends(require_user),
 ):
     _values = payload.get("values") or {}
     _bindings = payload.get("bindings") or []
@@ -79,15 +87,15 @@ def run_workflow_versioned(
     if not app_id and not workflow_version_id:
         raise HTTPException(status_code=400, detail="Provide app_id or workflow_version_id")
     _, workflow_repo, app_repo, run_repo, project_repo, _, _ = db
-    proj = project_repo.get_project(project_id)
-    if not proj:
-        raise HTTPException(status_code=404, detail="Project not found")
+    ensure_project_access(project_id, ctx, project_repo)
     version_id = workflow_version_id
     default_inputs = None
     app = None
     if app_id:
         app = app_repo.get_app_by_id(app_id)
         if not app:
+            raise HTTPException(status_code=404, detail="App not found")
+        if not user_can_access_app(app.id, ctx):
             raise HTTPException(status_code=404, detail="App not found")
         version_id = app.workflow_version_id
         if app.default_inputs_json:
@@ -178,6 +186,7 @@ def run_workflow_versioned(
         parent_run_id=parent_run_id,
         parent_media_id=parent_media_id,
         root_run_id=root_run_id,
+        owner_user_id=ctx.user.id if ctx.user else None,
     )
     project_repo.update_project(project_id, updated_at=created_at)
     job = {
@@ -200,6 +209,7 @@ def run_workflow(
     payload: dict,
     db=Depends(get_db),
     state=Depends(get_run_queue_state),
+    ctx=Depends(require_user),
 ):
     run_id = payload.get("run_id") or str(uuid.uuid4())
     path = Path("workflows") / f"{workflow_id}.json"
@@ -214,8 +224,17 @@ def run_workflow(
         _persist_queue(state, db[3])
         return result
     _, workflow_repo, app_repo, run_repo, project_repo, _, _ = db
+    user_repo = get_user_repo()
+    quick_runs_project_id = ensure_quick_runs_project_for_user(
+        ctx.user if ctx.auth_enabled else None,
+        auth_enabled=bool(ctx.auth_enabled),
+        project_repo=project_repo,
+        user_repo=user_repo,
+    )
     app = app_repo.get_app_by_slug(workflow_id)
     if app:
+        if not user_can_access_app(app.id, ctx):
+            raise HTTPException(status_code=404, detail="Workflow not found")
         version = workflow_repo.get_workflow_version(app.workflow_version_id)
         if version:
             graph = json.loads(version.original_graph_json)
@@ -224,13 +243,14 @@ def run_workflow(
             run_comfy_url = _normalize_comfy_url(app.comfyui_url or COMFY_URL)
             run_repo.create_run(
                 run_id,
-                QUICK_RUNS_PROJECT_ID,
+                quick_runs_project_id,
                 version.id,
                 app.id,
                 "queued",
                 created_at,
                 queue_position=len(state.run_queue) + 1,
                 comfyui_url=run_comfy_url,
+                owner_user_id=ctx.user.id if ctx.user else None,
             )
             job = {
                 "run_id": run_id,
@@ -246,14 +266,14 @@ def run_workflow(
 
 
 @router.get("/run/{run_id}/status")
-def get_run_status(run_id: str, db=Depends(get_db), state=Depends(get_run_queue_state)):
+def get_run_status(run_id: str, db=Depends(get_db), state=Depends(get_run_queue_state), ctx=Depends(require_user)):
     with state.queue_lock:
         r = state.runs.get(run_id)
     run_entity = None
     if r is None:
         run_repo = db[3]
         if run_repo:
-            run_entity = run_repo.get_run(run_id)
+            run_entity = ensure_run_access(run_id, ctx, run_repo)
             if run_entity:
                 r = {
                     "status": run_entity.status,
@@ -266,7 +286,7 @@ def get_run_status(run_id: str, db=Depends(get_db), state=Depends(get_run_queue_
                 }
     else:
         run_repo = db[3]
-        run_entity = run_repo.get_run(run_id) if run_repo else None
+        run_entity = ensure_run_access(run_id, ctx, run_repo) if run_repo else None
     if r is None:
         return {"status": "not_found"}
     r = r.copy()
@@ -291,8 +311,9 @@ def get_run_status(run_id: str, db=Depends(get_db), state=Depends(get_run_queue_
 
 
 @router.post("/runs/{run_id}/cancel")
-def cancel_run(run_id: str, db=Depends(get_db), state=Depends(get_run_queue_state)):
+def cancel_run(run_id: str, db=Depends(get_db), state=Depends(get_run_queue_state), ctx=Depends(require_user)):
     run_repo = db[3]
+    ensure_run_access(run_id, ctx, run_repo)
     with state.queue_lock:
         r = state.runs.get(run_id)
         if r is None and run_repo and run_repo.get_run(run_id):
@@ -326,7 +347,9 @@ def cancel_run(run_id: str, db=Depends(get_db), state=Depends(get_run_queue_stat
 
 
 @router.post("/runs/{run_id}/retry")
-def retry_run(run_id: str, state=Depends(get_run_queue_state)):
+def retry_run(run_id: str, db=Depends(get_db), state=Depends(get_run_queue_state), ctx=Depends(require_user)):
+    run_repo = db[3]
+    ensure_run_access(run_id, ctx, run_repo)
     with state.queue_lock:
         r = state.runs.get(run_id)
         if r is None:
@@ -356,7 +379,9 @@ def retry_run(run_id: str, state=Depends(get_run_queue_state)):
 
 
 @router.post("/runs/{run_id}/reorder")
-def reorder_run(run_id: str, body: dict, db=Depends(get_db), state=Depends(get_run_queue_state)):
+def reorder_run(run_id: str, body: dict, db=Depends(get_db), state=Depends(get_run_queue_state), ctx=Depends(require_user)):
+    run_repo = db[3]
+    ensure_run_access(run_id, ctx, run_repo)
     direction = body.get("direction")
     if direction not in ("up", "down"):
         raise HTTPException(status_code=400, detail="direction must be 'up' or 'down'")
@@ -374,7 +399,9 @@ def reorder_run(run_id: str, body: dict, db=Depends(get_db), state=Depends(get_r
 
 
 @router.post("/runs/{run_id}/move")
-def move_run(run_id: str, body: dict, db=Depends(get_db), state=Depends(get_run_queue_state)):
+def move_run(run_id: str, body: dict, db=Depends(get_db), state=Depends(get_run_queue_state), ctx=Depends(require_user)):
+    run_repo = db[3]
+    ensure_run_access(run_id, ctx, run_repo)
     position = body.get("position")
     if position is None or not isinstance(position, (int, float)):
         raise HTTPException(status_code=400, detail="position (1-based) required")
@@ -420,9 +447,36 @@ def _queue_item(run_id: str, run_entity, app_repo, project_repo, mem_run: dict |
     }
     if run_entity:
         out["summary"] = queue_item_summary_from_run(run_entity, run_entity.input_snapshot_json)
+        out["details"] = queue_item_details_from_run(run_entity, run_entity.input_snapshot_json)
     else:
         out["summary"] = {}
+        out["details"] = {
+            "total_inputs": 0,
+            "media_count": 0,
+            "groups": {"core": [], "text": [], "numeric": [], "boolean": [], "media": [], "other": []},
+        }
     return out
+
+
+def _normalized_run_outputs(run_entity) -> list[dict]:
+    entries = safe_json_loads(getattr(run_entity, "media_json", None))
+    if not isinstance(entries, list) or not entries:
+        entries = safe_json_loads(getattr(run_entity, "images_json", None), [])
+    if not isinstance(entries, list):
+        return []
+    normalized: list[dict] = []
+    for ent in entries:
+        if not isinstance(ent, dict):
+            continue
+        out = dict(ent)
+        raw_type = out.get("type")
+        raw_kind = out.get("kind")
+        if isinstance(raw_type, str) and raw_type.strip():
+            out["type"] = raw_type.strip().lower()
+        elif isinstance(raw_kind, str) and raw_kind.strip():
+            out["type"] = raw_kind.strip().lower()
+        normalized.append(out)
+    return normalized
 
 
 def _persist_queue(state, run_repo) -> None:
@@ -478,7 +532,7 @@ def _restore_queue_from_saved(state, get_db_fn, run_repo) -> bool:
 
 
 @router.get("/queue")
-def get_queue(db=Depends(get_db), state=Depends(get_run_queue_state)):
+def get_queue(db=Depends(get_db), state=Depends(get_run_queue_state), ctx=Depends(require_user)):
     _, _, app_repo, run_repo, project_repo, _, _ = db
     try:
         _restore_queue_from_saved(state, get_db, run_repo)
@@ -496,10 +550,22 @@ def get_queue(db=Depends(get_db), state=Depends(get_run_queue_state)):
     running_item = None
     if running_id:
         run_entity = run_repo.get_run(running_id) if run_repo else None
-        running_item = _queue_item(running_id, run_entity, app_repo, project_repo, mem.get(running_id))
+        running_visible = True
+        if run_entity and (
+            (ctx.auth_enabled and (ctx.user is None or run_entity.owner_user_id != ctx.user.id))
+            or (not ctx.auth_enabled and run_entity.owner_user_id is not None)
+        ):
+            running_visible = False
+        if running_visible:
+            running_item = _queue_item(running_id, run_entity, app_repo, project_repo, mem.get(running_id))
     queued = []
     for run_id in queued_ids:
         run_entity = run_repo.get_run(run_id) if run_repo else None
+        if run_entity and (
+            (ctx.auth_enabled and (ctx.user is None or run_entity.owner_user_id != ctx.user.id))
+            or (not ctx.auth_enabled and run_entity.owner_user_id is not None)
+        ):
+            continue
         queued.append(_queue_item(run_id, run_entity, app_repo, project_repo, mem.get(run_id)))
     _persist_queue(state, run_repo)
     return {
@@ -539,12 +605,105 @@ def start_queue(state=Depends(get_run_queue_state)):
     return {"ok": True, "processing_halted": False}
 
 
+@router.get("/runs/recent")
+def list_recent_runs(
+    project_id: str | None = None,
+    app_id: str | None = None,
+    status: str | None = None,
+    q: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+    db=Depends(get_db),
+    state=Depends(get_run_queue_state),
+    ctx=Depends(require_user),
+):
+    _, _, app_repo, run_repo, project_repo, _, _ = db
+    safe_limit = max(1, min(int(limit), 200))
+    safe_offset = max(0, int(offset))
+    q_trim = q.strip() if isinstance(q, str) and q.strip() else None
+    statuses = [s.strip().lower() for s in (status or "").split(",") if s.strip()]
+    total = run_repo.count_recent_runs(
+        owner_user_id=ctx.user.id if (ctx.auth_enabled and ctx.user) else None,
+        auth_enabled=bool(ctx.auth_enabled),
+        project_id=project_id.strip() if isinstance(project_id, str) and project_id.strip() else None,
+        app_id=app_id.strip() if isinstance(app_id, str) and app_id.strip() else None,
+        statuses=statuses or None,
+        q=q_trim,
+    )
+    recent = run_repo.get_recent_runs(
+        owner_user_id=ctx.user.id if (ctx.auth_enabled and ctx.user) else None,
+        auth_enabled=bool(ctx.auth_enabled),
+        project_id=project_id.strip() if isinstance(project_id, str) and project_id.strip() else None,
+        app_id=app_id.strip() if isinstance(app_id, str) and app_id.strip() else None,
+        statuses=statuses or None,
+        q=q_trim,
+        limit=safe_limit,
+        offset=safe_offset,
+    )
+    with state.queue_lock:
+        mem = {rid: dict(r) if isinstance(r, dict) else {} for rid, r in state.runs.items()}
+
+    out = []
+    for r in recent:
+        app_slug = None
+        app_title = None
+        app_header_color = None
+        app_id_out = r.app_id
+        if r.app_id:
+            app = app_repo.get_app_by_id(r.app_id)
+            if app:
+                app_slug = app.slug
+                app_title = app.title
+                app_header_color = app.header_color
+            else:
+                app_id_out = None
+        project_title = None
+        if r.project_id:
+            proj = project_repo.get_project(r.project_id)
+            if proj:
+                project_title = getattr(proj, "name", None)
+        mem_run = mem.get(r.id) if mem else None
+        status_out = mem_run.get("status", r.status) if mem_run else r.status
+        error_out = mem_run.get("error", r.error) if mem_run else r.error
+        queue_position = mem_run.get("queue_position") if mem_run else None
+        comfyui_unreachable_warning = mem_run.get("comfyui_unreachable_warning") if mem_run else None
+        out.append(
+            {
+                "id": r.id,
+                "run_group_id": r.run_group_id,
+                "project_id": r.project_id,
+                "project_title": project_title,
+                "workflow_version_id": r.workflow_version_id,
+                "app_id": app_id_out,
+                "app_slug": app_slug,
+                "app_title": app_title,
+                "app_header_color": app_header_color,
+                "status": status_out,
+                "queue_position": queue_position,
+                "created_at": r.created_at,
+                "seed": r.seed,
+                "images": _normalized_run_outputs(r),
+                "execution_time": r.execution_time,
+                "error": error_out,
+                "local_storage_status": r.local_storage_status,
+                "remote_status": r.remote_status,
+                "local_path": r.local_path,
+                "local_storage_bytes": None,
+                "remote_storage_bytes": None,
+                "comfyui_unreachable_warning": comfyui_unreachable_warning,
+                "parent_run_id": r.parent_run_id,
+                "parent_media_id": r.parent_media_id,
+                "root_run_id": r.root_run_id,
+                "summary": queue_item_summary_from_run(r, r.input_snapshot_json),
+            }
+        )
+    return {"runs": out, "total": total}
+
+
 @router.get("/runs/{run_id}")
-def get_run_detail(run_id: str, db=Depends(get_db), service: MediaStorageService = Depends(get_media_storage_service)):
+def get_run_detail(run_id: str, db=Depends(get_db), service: MediaStorageService = Depends(get_media_storage_service), ctx=Depends(require_user)):
     _, _, app_repo, run_repo, _, _, _ = db
-    run_entity = run_repo.get_run(run_id)
-    if not run_entity:
-        raise HTTPException(status_code=404, detail="Run not found")
+    run_entity = ensure_run_access(run_id, ctx, run_repo)
     parent_app_title = None
     if run_entity.parent_run_id and app_repo:
         parent_run = run_repo.get_run(run_entity.parent_run_id)
@@ -594,6 +753,102 @@ def get_run_detail(run_id: str, db=Depends(get_db), service: MediaStorageService
         "child_run_ids": [r.id for r in run_repo.get_child_runs(run_id)] if run_repo else [],
     }
     return out
+
+
+@router.get("/runs/{run_id}/output-workflowui-embedded")
+def get_run_output_workflowui_embedded(
+    run_id: str,
+    output_index: int = 0,
+    state=Depends(get_run_queue_state),
+    service: MediaStorageService = Depends(get_media_storage_service),
+    db=Depends(get_db),
+    ctx=Depends(require_user),
+):
+    """Embedded metadata: WorkflowUI (restore JSON) vs ComfyUI (PNG chunks or MP4 moov JSON)."""
+    _, _, _, run_repo, _, _, _ = db
+    run_entity = ensure_run_access(run_id, ctx, run_repo)
+    entries = []
+    try:
+        if run_entity.media_json:
+            entries = json.loads(run_entity.media_json)
+        elif run_entity.images_json:
+            entries = json.loads(run_entity.images_json)
+    except Exception:
+        entries = []
+    if not isinstance(entries, list) or output_index < 0 or output_index >= len(entries):
+        raise HTTPException(status_code=400, detail="Invalid output index")
+    ent = entries[output_index]
+    if not isinstance(ent, dict):
+        raise HTTPException(status_code=400, detail="Invalid output")
+    if ent.get("remote_deleted"):
+        return {
+            "hasEmbeddedWorkflowuiMetadata": False,
+            "hasWorkflowuiEmbeddedMetadata": False,
+            "hasComfyuiEmbeddedMetadata": False,
+            "comfyuiEmbeddedCheckApplicable": False,
+            "unavailable": True,
+            "reason": "remote_deleted",
+        }
+    filename = str(ent.get("filename") or "")
+    subfolder = str(ent.get("subfolder") or "")
+    typ = str(ent.get("type") or ent.get("kind") or "output")
+    try:
+        content, _ = load_run_output_content_bytes(
+            filename,
+            subfolder,
+            typ,
+            run_id,
+            preview=None,
+            state=state,
+            service=service,
+            db=db,
+            ctx=ctx,
+        )
+    except HTTPException:
+        raise
+    except Exception:
+        return {
+            "hasEmbeddedWorkflowuiMetadata": None,
+            "hasWorkflowuiEmbeddedMetadata": None,
+            "hasComfyuiEmbeddedMetadata": None,
+            "comfyuiEmbeddedCheckApplicable": False,
+            "unavailable": True,
+            "reason": "fetch_failed",
+        }
+    has_wf = file_has_embedded_workflowui_metadata(content, filename, typ)
+    has_comfy, comfy_applicable = file_has_embedded_comfyui_metadata(content)
+    return {
+        "hasEmbeddedWorkflowuiMetadata": has_wf,
+        "hasWorkflowuiEmbeddedMetadata": has_wf,
+        "hasComfyuiEmbeddedMetadata": has_comfy,
+        "comfyuiEmbeddedCheckApplicable": comfy_applicable,
+    }
+
+
+@router.get("/runs/{run_id}/input-media")
+def get_run_input_media(run_id: str, filename: str, db=Depends(get_db), ctx=Depends(require_user)):
+    """Serve input media used by a run, guarded by run access checks."""
+    _, _, _, run_repo, _, _, _ = db
+    run_entity = ensure_run_access(run_id, ctx, run_repo)
+    if not filename or "/" in filename or "\\" in filename:
+        raise HTTPException(status_code=400, detail="Invalid filename")
+    allowed = False
+    if run_entity.input_snapshot_json:
+        try:
+            snap = json.loads(run_entity.input_snapshot_json)
+            values = snap.get("values") if isinstance(snap, dict) else {}
+            if isinstance(values, dict):
+                allowed = filename in {str(v) for v in values.values() if isinstance(v, str)}
+        except Exception:
+            allowed = False
+    if not allowed:
+        raise HTTPException(status_code=404, detail="Input media not found")
+    base = INPUT_DATA_DIR.resolve()
+    file_path = (INPUT_DATA_DIR / filename).resolve()
+    if not str(file_path).startswith(str(base)) or not file_path.is_file():
+        raise HTTPException(status_code=404, detail="Input media file not found")
+    media_type = mimetypes.guess_type(str(file_path))[0] or "application/octet-stream"
+    return FileResponse(path=str(file_path), media_type=media_type, filename=filename)
 
 
 @router.post("/runs/{run_id}/save")
@@ -674,6 +929,32 @@ async def delete_run_remote_images(run_id: str, request: Request, db=Depends(get
     if not result.get("ok"):
         err = result.get("error") or result.get("remote_status") or "Remote delete failed"
         raise HTTPException(status_code=400, detail=err)
+    _, _, app_repo, run_repo, _, _, _ = db
+    return build_updated_runs_response(result, app_repo, run_repo)
+
+
+@router.post("/runs/{run_id}/remove-outputs")
+async def remove_run_outputs(run_id: str, request: Request, db=Depends(get_db), service: MediaStorageService = Depends(get_media_storage_service)):
+    try:
+        raw = await request.body()
+        body = json.loads(raw) if raw else {}
+    except Exception:
+        body = {}
+    indices = body.get("indices")
+    if not isinstance(indices, list):
+        raise HTTPException(
+            status_code=400,
+            detail="Body must be JSON with an 'indices' array, e.g. {\"indices\": [0]}",
+        )
+    try:
+        indices = [int(x) for x in indices]
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="indices must be integers")
+    if any(i < 0 for i in indices):
+        raise HTTPException(status_code=400, detail="indices must be non-negative")
+    result = service.remove_outputs_without_local_copy(run_id, indices)
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=result.get("error", "Remove failed"))
     _, _, app_repo, run_repo, _, _, _ = db
     return build_updated_runs_response(result, app_repo, run_repo)
 
