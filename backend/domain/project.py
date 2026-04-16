@@ -12,3 +12,4 @@ class Project:
     storage_mode: str | None = "inherit"
     header_color: str | None = None
     archived_at: int | None = None
+    owner_user_id: str | None = None

@@ -11,7 +11,7 @@ export const load = async ({ params, fetch }) => {
 		created_at: number;
 		prompt_id: string | null;
 		seed: number | null;
-		images: { filename: string; subfolder: string; type: string }[];
+		images: { filename: string; subfolder: string; type: string; remote_deleted?: boolean }[];
 		execution_time: number | null;
 		error: string | null;
 		input_snapshot: { values?: Record<string, unknown>; bindings?: unknown[] } | null;

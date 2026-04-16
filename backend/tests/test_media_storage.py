@@ -4,6 +4,7 @@ from pathlib import Path
 import uuid
 
 import pytest
+import requests
 from db.init import init_db
 from repositories.sqlite import SqliteProjectRepository, SqliteRunRepository, SqliteWorkflowAppRepository
 from services.media_storage_service import MediaStorageService
@@ -136,3 +137,48 @@ def test_get_run_local_storage_bytes(monkeypatch, service, repos):
     total = media_service.get_run_local_storage_bytes(run)
     assert total is not None
     assert total == 4  # single image, 4 bytes
+
+
+def test_delete_remote_comfy_404_still_updates_db(monkeypatch, service, repos):
+    """Manual delete on Comfy: /delete returns 404; run metadata should still update."""
+    media_service, _root = service
+    project_repo, run_repo, _ = repos
+    project = project_repo.create_project(str(uuid.uuid4()), "p", None, 0, 0)
+    run_id = create_run(run_repo, project.id)
+
+    def post_404(_url, **_kwargs):
+        resp = requests.Response()
+        resp.status_code = 404
+        raise requests.exceptions.HTTPError(response=resp)
+
+    monkeypatch.setattr("services.media_storage_service.requests.post", post_404)
+    result = media_service.delete_remote(run_id, image_index=0)
+    assert result.get("ok") is True
+    run = run_repo.get_run(run_id)
+    images = json.loads(run.images_json) if run.images_json else []
+    assert images == []
+
+
+def test_remove_outputs_without_local_copy_prunes(service, repos):
+    media_service, _root = service
+    project_repo, run_repo, _ = repos
+    project = project_repo.create_project(str(uuid.uuid4()), "p", None, 0, 0)
+    run_id = create_run(run_repo, project.id)
+    result = media_service.remove_outputs_without_local_copy(run_id, [0])
+    assert result["ok"] is True
+    run = run_repo.get_run(run_id)
+    images = json.loads(run.images_json) if run.images_json else []
+    assert images == []
+
+
+def test_remove_outputs_rejects_when_local_exists(monkeypatch, service, repos):
+    media_service, _root = service
+    project_repo, run_repo, _ = repos
+    project = project_repo.create_project(str(uuid.uuid4()), "p", None, 0, 0)
+    run_id = create_run(run_repo, project.id)
+    monkeypatch.setattr(MediaStorageService, "_fetch_remote_image_bytes", lambda *_: b"data")
+    monkeypatch.setattr(MediaStorageService, "_delete_remote_images", lambda *_: (True, None))
+    assert media_service.save_run(run_id)["ok"] is True
+    result = media_service.remove_outputs_without_local_copy(run_id, [0])
+    assert result["ok"] is False
+    assert "local copy" in (result.get("error") or "").lower()

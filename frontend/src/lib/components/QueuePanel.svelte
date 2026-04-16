@@ -12,7 +12,8 @@
 		reorderRun,
 		moveRun,
 		type QueueResponse,
-		type QueueItem
+		type QueueItem,
+		type QueueDetailInput
 	} from '$lib/queueApi';
 
 	let queue = $state<QueueResponse | null>(null);
@@ -30,6 +31,10 @@
 
 	let resizing = $state(false);
 	let selectedRunId = $state<string | null>(null);
+	let expandedDetailsRunId = $state<string | null>(null);
+	let hoveredRunId = $state<string | null>(null);
+	let hoverPreviewVisibleForRunId = $state<string | null>(null);
+	let hoverTimer: ReturnType<typeof setTimeout> | null = null;
 	let draggedGroupKey = $state<string | null>(null);
 
 	function getQueuePanelMaxWidthPx(): number {
@@ -121,6 +126,7 @@
 		if (typeof window !== 'undefined') {
 			window.removeEventListener('resize', onWindowResize);
 		}
+		if (hoverTimer) clearTimeout(hoverTimer);
 		stopPolling();
 	});
 
@@ -129,7 +135,74 @@
 	}
 
 	function handleKeydown(e: KeyboardEvent) {
-		if (e.key === 'Escape') closePanel();
+		if (e.key === 'Escape') {
+			if (hoverPreviewVisibleForRunId) hoverPreviewVisibleForRunId = null;
+			else if (expandedDetailsRunId) expandedDetailsRunId = null;
+			else closePanel();
+		}
+	}
+
+	function displayValue(value: unknown): string {
+		if (value == null || value === '') return 'Not provided';
+		if (typeof value === 'boolean') return value ? 'Enabled' : 'Disabled';
+		if (typeof value === 'string') return value;
+		if (typeof value === 'number') return String(value);
+		if (Array.isArray(value)) return value.length ? value.map((v) => String(v)).join(', ') : '[]';
+		if (typeof value === 'object') {
+			try {
+				return JSON.stringify(value);
+			} catch {
+				return '[Object]';
+			}
+		}
+		return String(value);
+	}
+
+	function previewInputs(item: QueueItem): QueueDetailInput[] {
+		const groups = item.details?.groups;
+		if (!groups) return [];
+		const ordered = [...groups.core, ...groups.numeric, ...groups.text, ...groups.boolean, ...groups.media, ...groups.other];
+		return ordered.slice(0, 5);
+	}
+
+	function detailGroups(item: QueueItem): Array<{ title: string; key: keyof NonNullable<QueueItem['details']>['groups']; items: QueueDetailInput[] }> {
+		const groups = item.details?.groups;
+		if (!groups) return [];
+		return [
+			{ title: 'Core', key: 'core', items: groups.core },
+			{ title: 'Text', key: 'text', items: groups.text },
+			{ title: 'Numeric', key: 'numeric', items: groups.numeric },
+			{ title: 'Boolean', key: 'boolean', items: groups.boolean },
+			{ title: 'Media', key: 'media', items: groups.media },
+			{ title: 'Other', key: 'other', items: groups.other }
+		].filter((g) => g.items.length > 0);
+	}
+
+	function onItemHoverStart(runId: string) {
+		hoveredRunId = runId;
+		if (expandedDetailsRunId === runId) return;
+		if (hoverTimer) clearTimeout(hoverTimer);
+		hoverTimer = setTimeout(() => {
+			if (hoveredRunId === runId) hoverPreviewVisibleForRunId = runId;
+		}, 220);
+	}
+
+	function onItemHoverEnd(runId: string) {
+		if (hoveredRunId === runId) hoveredRunId = null;
+		if (hoverTimer) {
+			clearTimeout(hoverTimer);
+			hoverTimer = null;
+		}
+		if (hoverPreviewVisibleForRunId === runId && expandedDetailsRunId !== runId) hoverPreviewVisibleForRunId = null;
+	}
+
+	function toggleDetails(runId: string) {
+		if (expandedDetailsRunId === runId) {
+			expandedDetailsRunId = null;
+			return;
+		}
+		expandedDetailsRunId = runId;
+		hoverPreviewVisibleForRunId = null;
 	}
 
 	async function onPause() {
@@ -491,9 +564,12 @@
 						<h3 class="queue-section-title">Currently running</h3>
 						<div
 							class="queue-item queue-item-running"
+							class:details-expanded={expandedDetailsRunId === queue.running.run_id}
 							style={queue.running.app_header_color
 								? `--app-badge-color: ${queue.running.app_header_color}`
 								: ''}
+							onmouseenter={() => onItemHoverStart(queue.running!.run_id)}
+							onmouseleave={() => onItemHoverEnd(queue.running!.run_id)}
 						>
 							<span class="queue-item-pos">#1</span>
 							<span class="queue-item-app-badge">{queue.running.app_title ?? queue.running.app_slug ?? 'Run'}</span>
@@ -503,6 +579,15 @@
 							{/if}
 							<button
 								type="button"
+								class="queue-item-btn queue-item-btn-details"
+								onclick={() => toggleDetails(queue.running!.run_id)}
+								aria-expanded={expandedDetailsRunId === queue.running.run_id}
+								title="Toggle generation input details"
+							>
+								{expandedDetailsRunId === queue.running.run_id ? 'Hide details' : 'Details'}
+							</button>
+							<button
+								type="button"
 								class="queue-item-btn queue-item-btn-cancel"
 								onclick={() => onCancel(queue.running!.run_id)}
 								disabled={actionLoading.has(queue.running!.run_id)}
@@ -510,6 +595,67 @@
 							>
 								Cancel
 							</button>
+							{#if hoverPreviewVisibleForRunId === queue.running.run_id && expandedDetailsRunId !== queue.running.run_id}
+								<div class="queue-details-popover" role="note">
+									<div class="queue-details-popover-title">Quick inputs preview</div>
+									{#if previewInputs(queue.running).length > 0}
+										{#each previewInputs(queue.running) as input}
+											<div class="queue-details-row">
+												<span class="queue-details-key">{input.label}</span>
+												<div class="queue-details-value-wrap">
+													{#if input.media_type === 'image' && input.preview_url}
+														<a
+															href={input.preview_url}
+															target="_blank"
+															rel="noreferrer"
+															download
+															class="queue-details-media-link"
+															title="Click to download"
+														>
+															<img src={input.preview_url} alt={input.label} class="queue-details-thumb queue-details-thumb-preview" loading="lazy" />
+														</a>
+													{/if}
+													<span class="queue-details-value">{displayValue(input.display_value)}</span>
+												</div>
+											</div>
+										{/each}
+									{:else}
+										<div class="queue-details-empty">No captured inputs</div>
+									{/if}
+								</div>
+							{/if}
+							{#if expandedDetailsRunId === queue.running.run_id}
+								<div class="queue-details-panel">
+									<div class="queue-details-facts">
+										<span class="queue-details-fact">Inputs: {queue.running.details?.total_inputs ?? 0}</span>
+										<span class="queue-details-fact">Media: {queue.running.details?.media_count ?? 0}</span>
+										{#if queue.running.summary?.latent_resolution}
+											<span class="queue-details-fact">Resolution: {queue.running.summary.latent_resolution}</span>
+										{/if}
+										{#if queue.running.summary?.seed != null}
+											<span class="queue-details-fact">Seed: {queue.running.summary.seed}</span>
+										{/if}
+									</div>
+									{#each detailGroups(queue.running) as group}
+										<div class="queue-details-group">
+											<div class="queue-details-group-title">{group.title}</div>
+											{#each group.items as input (`${queue.running.run_id}-${input.key}`)}
+												<div class="queue-details-row">
+													<span class="queue-details-key">{input.label}</span>
+													<div class="queue-details-value-wrap">
+														{#if input.media_type === 'image' && input.preview_url}
+															<a href={input.preview_url} target="_blank" rel="noreferrer" download class="queue-details-media-link" title="Click to download">
+																<img src={input.preview_url} alt={input.label} class="queue-details-thumb" loading="lazy" />
+															</a>
+														{/if}
+														<span class="queue-details-value">{displayValue(input.display_value)}</span>
+													</div>
+												</div>
+											{/each}
+										</div>
+									{/each}
+								</div>
+							{/if}
 						</div>
 					</section>
 				{/if}
@@ -578,6 +724,7 @@
 												<li
 													class="queue-item queue-item-queued"
 													class:selected={selectedRunId === item.run_id}
+													class:details-expanded={expandedDetailsRunId === item.run_id}
 													class:dragging={draggedRunId === item.run_id}
 													class:drop-target={dropTargetRunId === item.run_id}
 													draggable="true"
@@ -588,6 +735,8 @@
 													ondragleave={handleDragLeave}
 													ondrop={(e) => handleDrop(e, item.run_id, false)}
 													onclick={() => selectedRunId = item.run_id}
+													onmouseenter={() => onItemHoverStart(item.run_id)}
+													onmouseleave={() => onItemHoverEnd(item.run_id)}
 												>
 													<span class="queue-item-drag-handle" title="Drag to reorder" aria-hidden="true">⋮⋮</span>
 													<span class="queue-item-pos">#{item.queue_position ?? i + 1}</span>
@@ -598,6 +747,15 @@
 														<span class="queue-badge queue-badge-warning">ComfyUI unreachable</span>
 													{/if}
 													<div class="queue-item-actions" onclick={(e) => e.stopPropagation()}>
+														<button
+															type="button"
+															class="queue-item-btn queue-item-btn-icon"
+															title="Show generation input details"
+															onclick={() => toggleDetails(item.run_id)}
+															aria-expanded={expandedDetailsRunId === item.run_id}
+														>
+															Details
+														</button>
 														{#if item.comfyui_unreachable_warning}
 															<button
 																type="button"
@@ -620,6 +778,67 @@
 															<svg class="queue-item-remove-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>
 														</button>
 													</div>
+													{#if hoverPreviewVisibleForRunId === item.run_id && expandedDetailsRunId !== item.run_id}
+														<div class="queue-details-popover" role="note">
+															<div class="queue-details-popover-title">Quick inputs preview</div>
+															{#if previewInputs(item).length > 0}
+																{#each previewInputs(item) as input}
+																	<div class="queue-details-row">
+																		<span class="queue-details-key">{input.label}</span>
+																		<div class="queue-details-value-wrap">
+																			{#if input.media_type === 'image' && input.preview_url}
+																				<a
+																					href={input.preview_url}
+																					target="_blank"
+																					rel="noreferrer"
+																					download
+																					class="queue-details-media-link"
+																					title="Click to download"
+																				>
+																					<img src={input.preview_url} alt={input.label} class="queue-details-thumb queue-details-thumb-preview" loading="lazy" />
+																				</a>
+																			{/if}
+																			<span class="queue-details-value">{displayValue(input.display_value)}</span>
+																		</div>
+																	</div>
+																{/each}
+															{:else}
+																<div class="queue-details-empty">No captured inputs</div>
+															{/if}
+														</div>
+													{/if}
+													{#if expandedDetailsRunId === item.run_id}
+														<div class="queue-details-panel">
+															<div class="queue-details-facts">
+																<span class="queue-details-fact">Inputs: {item.details?.total_inputs ?? 0}</span>
+																<span class="queue-details-fact">Media: {item.details?.media_count ?? 0}</span>
+																{#if item.summary?.latent_resolution}
+																	<span class="queue-details-fact">Resolution: {item.summary.latent_resolution}</span>
+																{/if}
+																{#if item.summary?.seed != null}
+																	<span class="queue-details-fact">Seed: {item.summary.seed}</span>
+																{/if}
+															</div>
+															{#each detailGroups(item) as group}
+																<div class="queue-details-group">
+																	<div class="queue-details-group-title">{group.title}</div>
+																	{#each group.items as input (`${item.run_id}-${input.key}`)}
+																		<div class="queue-details-row">
+																			<span class="queue-details-key">{input.label}</span>
+																			<div class="queue-details-value-wrap">
+																				{#if input.media_type === 'image' && input.preview_url}
+																					<a href={input.preview_url} target="_blank" rel="noreferrer" download class="queue-details-media-link" title="Click to download">
+																						<img src={input.preview_url} alt={input.label} class="queue-details-thumb" loading="lazy" />
+																					</a>
+																				{/if}
+																				<span class="queue-details-value">{displayValue(input.display_value)}</span>
+																			</div>
+																		</div>
+																	{/each}
+																</div>
+															{/each}
+														</div>
+													{/if}
 												</li>
 											{/each}
 										</ul>
@@ -983,6 +1202,7 @@
 		padding: 0;
 	}
 	.queue-item {
+		position: relative;
 		display: flex;
 		align-items: center;
 		flex-wrap: wrap;
@@ -996,6 +1216,10 @@
 	.queue-item.selected {
 		border-color: var(--accent);
 		box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 30%, transparent);
+	}
+	.queue-item.details-expanded {
+		border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+		background: color-mix(in srgb, var(--accent) 4%, var(--bg));
 	}
 	.queue-item.dragging {
 		opacity: 0.5;
@@ -1068,6 +1292,120 @@
 		min-height: 1.75rem;
 		padding: 0.2rem;
 	}
+	.queue-item-btn-details {
+		border-color: color-mix(in srgb, var(--accent) 35%, var(--border)) !important;
+	}
+	.queue-details-popover {
+		position: absolute;
+		top: calc(100% + 0.35rem);
+		left: 1.8rem;
+		width: min(27rem, calc(100% - 2rem));
+		z-index: 8;
+		padding: 0.5rem 0.6rem;
+		border-radius: 8px;
+		border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--border));
+		background: var(--card);
+		box-shadow: 0 8px 20px rgba(0, 0, 0, 0.18);
+	}
+	.queue-details-popover-title {
+		font-size: 0.72rem;
+		font-weight: 600;
+		text-transform: uppercase;
+		letter-spacing: 0.02em;
+		margin-bottom: 0.35rem;
+		color: color-mix(in srgb, var(--text) 58%, transparent);
+	}
+	.queue-details-panel {
+		width: 100%;
+		margin-top: 0.3rem;
+		padding: 0.5rem;
+		border-radius: 7px;
+		border: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
+		background: color-mix(in srgb, var(--card) 65%, var(--bg));
+	}
+	.queue-details-facts {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.35rem;
+		margin-bottom: 0.45rem;
+	}
+	.queue-details-fact {
+		font-size: 0.72rem;
+		padding: 0.15rem 0.4rem;
+		border-radius: 999px;
+		border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
+		background: color-mix(in srgb, var(--muted) 18%, transparent);
+	}
+	.queue-details-group {
+		margin-top: 0.35rem;
+		padding-top: 0.35rem;
+		border-top: 1px dashed color-mix(in srgb, var(--border) 88%, transparent);
+	}
+	.queue-details-group-title {
+		font-size: 0.73rem;
+		font-weight: 600;
+		text-transform: uppercase;
+		letter-spacing: 0.02em;
+		color: color-mix(in srgb, var(--text) 58%, transparent);
+		margin-bottom: 0.3rem;
+	}
+	.queue-details-row {
+		display: grid;
+		grid-template-columns: minmax(6rem, 8rem) 1fr;
+		gap: 0.45rem;
+		align-items: start;
+		margin-bottom: 0.25rem;
+	}
+	.queue-details-key {
+		font-size: 0.74rem;
+		color: color-mix(in srgb, var(--text) 60%, transparent);
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
+	}
+	.queue-details-value-wrap {
+		display: flex;
+		align-items: center;
+		gap: 0.35rem;
+		min-width: 0;
+	}
+	.queue-details-value {
+		font-size: 0.78rem;
+		line-height: 1.3;
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		min-width: 0;
+	}
+	.queue-details-thumb {
+		width: 40px;
+		height: 40px;
+		border-radius: 4px;
+		object-fit: cover;
+		border: 1px solid color-mix(in srgb, var(--border) 85%, transparent);
+		background: color-mix(in srgb, var(--muted) 20%, transparent);
+		transition: transform 0.15s ease, box-shadow 0.15s ease;
+		transform-origin: center center;
+	}
+	.queue-details-media-link {
+		display: inline-flex;
+		position: relative;
+		overflow: visible;
+	}
+	.queue-details-media-link:hover .queue-details-thumb,
+	.queue-details-media-link:focus-visible .queue-details-thumb {
+		transform: scale(2);
+		box-shadow: 0 8px 18px rgba(0, 0, 0, 0.28);
+		z-index: 12;
+	}
+	.queue-details-thumb-preview {
+		width: 28px;
+		height: 28px;
+	}
+	.queue-details-empty {
+		font-size: 0.75rem;
+		color: color-mix(in srgb, var(--text) 62%, transparent);
+	}
 	.queue-item-remove-icon {
 		width: 14px;
 		height: 14px;
@@ -1106,6 +1444,13 @@
 		.queue-panel-resize-handle,
 		.queue-panel-collapse-tab {
 			display: none;
+		}
+		.queue-details-popover {
+			display: none;
+		}
+		.queue-details-row {
+			grid-template-columns: 1fr;
+			gap: 0.15rem;
 		}
 	}
 </style>

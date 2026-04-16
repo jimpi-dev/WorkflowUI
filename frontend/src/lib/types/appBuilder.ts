@@ -73,7 +73,9 @@ export function draftFromExistingApp(
 	inputKeys: string[],
 	outputKeys: string[],
 	uiConfig: UIConfig | null,
-	defaultInputs: Record<string, unknown> | null
+	defaultInputs: Record<string, unknown> | null,
+	/** When set, workflow-analyzed defaults are merged for keys not already in defaultInputs (same as create-app). */
+	detectedInputsForDefaults?: { key?: string; default?: unknown; classType?: string }[]
 ): AppDraft {
 	const visibleInputs = new Set(uiConfig?.visibleInputs ?? inputKeys);
 	const visibleOutputs = new Set(uiConfig?.visibleOutputs ?? outputKeys);
@@ -82,6 +84,17 @@ export function draftFromExistingApp(
 	if (defaultInputs && typeof defaultInputs === 'object') {
 		for (const [k, v] of Object.entries(defaultInputs)) {
 			defaultOverrides.set(k, v);
+		}
+	}
+	if (detectedInputsForDefaults) {
+		for (const input of detectedInputsForDefaults) {
+			if (!input.key) continue;
+			if (input.classType === 'WorkflowUILink') continue;
+			if (defaultOverrides.has(input.key)) continue;
+			const d = input.default;
+			if (d !== undefined) {
+				defaultOverrides.set(input.key, d);
+			}
 		}
 	}
 	const inputOverrides = new Map<string, InputOverride>();

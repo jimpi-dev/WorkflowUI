@@ -3,8 +3,31 @@ import { api } from '$lib/api';
 export type QueueSummary = {
 	seed?: number;
 	latent_resolution?: string;
-	runs?: number;
 	key_inputs?: { label: string; value: unknown }[];
+};
+
+export type QueueDetailInput = {
+	key: string;
+	label: string;
+	value: unknown;
+	display_value: string;
+	value_kind: 'scalar' | 'list' | 'object' | 'empty';
+	group: 'core' | 'text' | 'numeric' | 'boolean' | 'media' | 'other';
+	media_type?: 'image' | 'video' | 'audio';
+	preview_url?: string;
+};
+
+export type QueueDetails = {
+	total_inputs: number;
+	media_count: number;
+	groups: {
+		core: QueueDetailInput[];
+		text: QueueDetailInput[];
+		numeric: QueueDetailInput[];
+		boolean: QueueDetailInput[];
+		media: QueueDetailInput[];
+		other: QueueDetailInput[];
+	};
 };
 
 export type QueueItem = {
@@ -20,6 +43,7 @@ export type QueueItem = {
 	created_at?: number | null;
 	comfyui_unreachable_warning?: string | null;
 	summary?: QueueSummary;
+	details?: QueueDetails;
 };
 
 export type QueueResponse = {
@@ -28,9 +52,64 @@ export type QueueResponse = {
 	processing_halted: boolean;
 };
 
+export type RecentRunItem = {
+	id: string;
+	run_group_id: string | null;
+	project_id: string;
+	project_title: string | null;
+	workflow_version_id: string;
+	app_id: string | null;
+	app_slug: string | null;
+	app_title: string | null;
+	app_header_color?: string | null;
+	status: string;
+	queue_position?: number | null;
+	created_at: number;
+	seed: number | null;
+	images: { filename: string; subfolder: string; type: string; remote_deleted?: boolean }[];
+	execution_time: number | null;
+	error: string | null;
+	local_storage_status?: string | null;
+	remote_status?: string | null;
+	local_path?: string | null;
+	local_storage_bytes?: number | null;
+	remote_storage_bytes?: number | null;
+	comfyui_unreachable_warning?: string | null;
+	parent_run_id?: string | null;
+	parent_media_id?: string | null;
+	root_run_id?: string | null;
+	summary?: QueueSummary;
+};
+
+export type RecentRunsResponse = {
+	runs: RecentRunItem[];
+	total: number;
+};
+
 export async function getQueue(): Promise<QueueResponse> {
 	const res = await api.get('queue');
 	if (!res.ok) throw new Error(res.statusText || 'Failed to fetch queue');
+	return res.json();
+}
+
+export async function getRecentRuns(params?: {
+	projectId?: string;
+	appId?: string;
+	status?: string[];
+	q?: string;
+	limit?: number;
+	offset?: number;
+}): Promise<RecentRunsResponse> {
+	const qs = new URLSearchParams();
+	if (params?.projectId) qs.set('project_id', params.projectId);
+	if (params?.appId) qs.set('app_id', params.appId);
+	if (params?.status?.length) qs.set('status', params.status.join(','));
+	if (params?.q?.trim()) qs.set('q', params.q.trim());
+	if (typeof params?.limit === 'number') qs.set('limit', String(params.limit));
+	if (typeof params?.offset === 'number') qs.set('offset', String(params.offset));
+	const path = qs.size ? `runs/recent?${qs.toString()}` : 'runs/recent';
+	const res = await api.get(path);
+	if (!res.ok) throw new Error(res.statusText || 'Failed to fetch recent runs');
 	return res.json();
 }
 

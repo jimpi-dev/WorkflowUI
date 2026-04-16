@@ -3,6 +3,8 @@
 	import { browser } from '$app/environment';
 	import FieldCard from '$lib/components/app-builder/FieldCard.svelte';
 	import OutputCard from '$lib/components/app-builder/OutputCard.svelte';
+	import type { WorkflowInput } from '$lib/workflow/types';
+	import { effectiveTextMultiline } from '$lib/workflow/inputMultiline';
 	import {
 		createEmptyDraft,
 		draftToUIConfig,
@@ -604,6 +606,7 @@
 											availableUpscaleModels={availableUpscaleModels}
 											availableUpscaleMethods={availableUpscaleMethods}
 											optionSource={input.optionSource ?? ''}
+											multiline={effectiveTextMultiline(input as WorkflowInput)}
 											onVisibleChange={(v) => setInputVisible(appDraft!, input.key, v)}
 											onDefaultOverrideChange={(v) => {
 												setDefaultOverride(appDraft!, input.key, v);

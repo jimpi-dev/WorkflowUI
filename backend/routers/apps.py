@@ -6,6 +6,7 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Depends, Response
 
+from authz import require_user, user_can_access_app
 from config import get_workflowui_embed_config
 from services.workflow_analyzer import analyze_workflow, apply_default_inputs_to_graph, extract_form_label_from_graph
 from services.workflow_analyzer import _normalize_to_api_format as normalize_workflow_to_api_format
@@ -17,7 +18,7 @@ from services.run_serialization import safe_json_loads
 MEDIA_INPUT_TYPES = frozenset({"image", "video", "audio"})
 logger = logging.getLogger(__name__)
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_user)])
 
 
 def _derived_supported_input_kinds(detected_inputs: list) -> list[str]:
@@ -63,9 +64,9 @@ def _resolved_embed_on_save(app) -> bool:
 
 
 @router.get("/apps")
-def list_apps(db=Depends(get_db)):
+def list_apps(db=Depends(get_db), ctx=Depends(require_user)):
     _, workflow_repo, app_repo, run_repo, _, _, _ = db
-    apps = app_repo.list_all_apps()
+    apps = [a for a in app_repo.list_all_apps() if user_can_access_app(a.id, ctx)]
     app_ids = [a.id for a in apps]
     last_used_map = run_repo.get_last_run_timestamps_for_app_ids(app_ids) if app_ids else {}
     return [
@@ -376,11 +377,13 @@ def copy_app(slug: str, body: dict | None = None, db=Depends(get_db)):
 
 
 @router.get("/app/{slug}")
-def get_app_by_slug(slug: str, db=Depends(get_db)):
+def get_app_by_slug(slug: str, db=Depends(get_db), ctx=Depends(require_user)):
     _, workflow_repo, app_repo, _, _, _, _ = db
     app = app_repo.get_app_by_slug(slug)
     if not app:
         logger.info("GET /app/%s: app not found in DB", slug)
+        raise HTTPException(status_code=404, detail="App not found")
+    if not user_can_access_app(app.id, ctx):
         raise HTTPException(status_code=404, detail="App not found")
     version = workflow_repo.get_workflow_version(app.workflow_version_id)
     if not version:

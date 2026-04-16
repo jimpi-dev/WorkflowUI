@@ -12,6 +12,7 @@
     import { projectRunsInvalidate } from '$lib/stores/projectRunsInvalidate';
     import { appBooting } from '$lib/stores/appBooting';
     import { presetHeaderStore, setPresetHeaderCreation, clearPresetListRequest } from '$lib/stores/presetHeader';
+    import { browser } from '$app/environment';
     import { page } from '$app/stores';
     import { goto } from '$app/navigation';
     import { appConfig, getApiBase } from '$lib/config';
@@ -45,7 +46,7 @@
     let randomizeSeedOnSubmit = $state(false);
     let extraLoraSlots = $state<Record<string, string[]>>({});
     let prefilledRunId = $state<string | null>(null);
-    let prefilledFromImport = $state(false);
+    let fileImportLockKeys = $state<Set<string> | null>(null);
     let sendFromContext = $state<{ runId: string; outputIndex: number; inputKey: string; filename: string; subfolder?: string; type?: string } | null>(null);
     let prevWorkflowId = $state<string | undefined>(undefined);
     let prefilledSendFromKey = $state<string | null>(null);
@@ -173,6 +174,7 @@
         const appParam = $page.params.id;
         if (appParam === prevWorkflowId) return;
         prevWorkflowId = appParam;
+        fileImportLockKeys = null;
         formValues = { runs: 1 };
         extraLoraSlots = {};
         prefilledRunId = null;
@@ -194,6 +196,40 @@
         }
     });
 
+    /** Client-only: apply file-drop import prefill (survives SSR/hydration when slug effect early-returns). */
+    $effect(() => {
+        if (!browser) return;
+        const appParam = $page.params.id;
+        if (!appParam) return;
+        try {
+            const raw = sessionStorage.getItem('workflowui_import_prefill');
+            if (!raw) return;
+            const parsed = JSON.parse(raw) as {
+                slug?: string;
+                input_snapshot?: { values?: Record<string, unknown> };
+            };
+            if (
+                parsed.slug !== appParam ||
+                !parsed.input_snapshot?.values ||
+                typeof parsed.input_snapshot.values !== 'object'
+            ) {
+                return;
+            }
+            const v = parsed.input_snapshot.values as Record<string, unknown>;
+            const runs =
+                typeof v.runs === 'number' && Number.isFinite(v.runs) && v.runs >= 1
+                    ? Math.floor(Number(v.runs))
+                    : 1;
+            formValues = { ...v, runs } as Record<string, any>;
+            fileImportLockKeys = new Set(Object.keys(v));
+            sessionStorage.removeItem('workflowui_import_prefill');
+            sendFromContext = null;
+            prefilledSendFromKey = null;
+        } catch {
+            sessionStorage.removeItem('workflowui_import_prefill');
+        }
+    });
+
     $effect(() => {
         const runId = $page.url.searchParams.get('run_id');
         const workflowId = data.workflowId;
@@ -211,26 +247,6 @@
                 prefilledRunId = runId;
             })
             .catch(() => {});
-    });
-
-    $effect(() => {
-        if (prefilledFromImport || typeof document === 'undefined') return;
-        const workflowId = data.workflowId;
-        if (!workflowId) return;
-        try {
-            const raw = sessionStorage.getItem('workflowui_import_prefill');
-            if (!raw) return;
-            const parsed = JSON.parse(raw) as { slug?: string; input_snapshot?: { values?: Record<string, unknown> } };
-            if (parsed.slug !== workflowId || !parsed.input_snapshot?.values || typeof parsed.input_snapshot.values !== 'object') return;
-            const runValues = parsed.input_snapshot.values as Record<string, unknown>;
-            for (const [k, v] of Object.entries(runValues)) {
-                formValues[k] = v;
-            }
-            sessionStorage.removeItem('workflowui_import_prefill');
-            prefilledFromImport = true;
-        } catch {
-            sessionStorage.removeItem('workflowui_import_prefill');
-        }
     });
 
     function filenameFromRunOutput(ent: unknown): string | undefined {
@@ -324,6 +340,8 @@
 
     type LayoutMode = 'split' | 'left-full' | 'right-full';
     let layoutMode = $state<LayoutMode>('split');
+    let runFocusActive = $state(false);
+    let layoutBeforeRunFocus = $state<LayoutMode | null>(null);
     let splitPosition = $state(0.45);
     let isDraggingDivider = $state(false);
     let layoutContainerEl = $state<HTMLDivElement | null>(null);
@@ -372,6 +390,18 @@
 
     function restoreSplit() {
         layoutMode = 'split';
+    }
+
+    function handleRunFocusChange(focused: boolean) {
+        if (focused) {
+            if (!runFocusActive) layoutBeforeRunFocus = layoutMode;
+            runFocusActive = true;
+            layoutMode = 'right-full';
+            return;
+        }
+        runFocusActive = false;
+        if (layoutBeforeRunFocus) layoutMode = layoutBeforeRunFocus;
+        layoutBeforeRunFocus = null;
     }
 
     function submitRunForm() {
@@ -462,6 +492,10 @@
     }
 
     let runs = $state<RunGroup[]>([]);
+    const hasActiveGeneratingRuns = $derived(
+        runs.some((run) => run.status === 'queued' || run.status === 'running')
+    );
+    const hideRunParamGroup = $derived(hasActiveGeneratingRuns && runFocusActive);
     let runningPromptsCompleted = $state<Record<string, number>>({});
     let savingRunIds = $state<Set<string>>(new Set());
     let deletingRunIds = $state<Set<string>>(new Set());
@@ -1186,6 +1220,7 @@
                         onRunDone={markRunDone}
                         onRunError={onRunError}
                         embedWorkflowuiMetadataOnDownload={data.embedWorkflowuiMetadataOnDownload ?? false}
+                        fileImportLockKeys={fileImportLockKeys}
                         presetCreationOn={appConfig.presetsEnabled ? presetCreationOn : false}
                         presetKeysToSave={appConfig.presetsEnabled ? presetKeysToSaveList : []}
                         onPresetKeyToggle={appConfig.presetsEnabled ? handlePresetKeyToggle : undefined}
@@ -1268,16 +1303,18 @@
             onscroll={onResultsCardScroll}
         >
             {#key data.workflowId}
-                <RunParamGroup
-                        bind:values={formValues}
-                        formId="workflow-run-form"
-                        onSubmit={submitRunForm}
-                        onQueueClick={() => (randomizeSeedOnSubmit = false)}
-                        onRandomClick={() => (randomizeSeedOnSubmit = true)}
-                        masterSeedHint={hasSeedInputs ? masterSeedHint : null}
-                        hasSeedInputs={hasSeedInputs}
-                        showActions={!isMobile}
-                />
+                {#if !hideRunParamGroup}
+                    <RunParamGroup
+                            bind:values={formValues}
+                            formId="workflow-run-form"
+                            onSubmit={submitRunForm}
+                            onQueueClick={() => (randomizeSeedOnSubmit = false)}
+                            onRandomClick={() => (randomizeSeedOnSubmit = true)}
+                            masterSeedHint={hasSeedInputs ? masterSeedHint : null}
+                            hasSeedInputs={hasSeedInputs}
+                            showActions={!isMobile}
+                    />
+                {/if}
             {/key}
             <div
                 class="gallery-wrapper"
@@ -1345,6 +1382,7 @@
                     }}
                     onShowRunMetadata={(backendRunId) => { metadataPanelRunId = backendRunId; }}
                     onLightboxOpenChange={(open) => { lightboxOpen = open; }}
+                    onRunFocusChange={handleRunFocusChange}
                 />
             </div>
         </div>
@@ -1435,6 +1473,7 @@
         <RunMetadataPanel
             runId={metadataPanelRunId}
             projectId={currentProject?.id ?? null}
+            embedWorkflowuiMetadataOnDownload={data.embedWorkflowuiMetadataOnDownload ?? false}
             onClose={() => { metadataPanelRunId = null; }}
         />
     {/if}
@@ -1732,6 +1771,11 @@
         visibility: hidden;
         pointer-events: none;
     }
+    .lightbox-open .app-mobile-run-bar {
+        visibility: hidden;
+        pointer-events: none;
+        z-index: -1;
+    }
 
     .edge-toggle {
         position: relative;
@@ -1807,8 +1851,8 @@
             background: var(--surface);
             border-bottom: 1px solid var(--border);
             position: sticky;
-            /* AppHeader is sticky at the top on mobile; offset tabs below it. */
-            top: 5.8rem;
+            /* Header is outside this scroll container, so keep tabs flush here. */
+            top: 0;
             z-index: 30;
         }
         .app-mobile-tab {
