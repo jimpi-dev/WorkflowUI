@@ -19,6 +19,7 @@ export type LightboxItem = {
 	};
 
 	type VideoFitMode = 'fit' | 'actual';
+	type ImageFitMode = VideoFitMode;
 	type VideoLoopMode = 'single' | 'playlist';
 	type SlideshowSpeed = 'slow' | 'medium' | 'fast';
 
@@ -75,6 +76,8 @@ let {
 	let zoomMode = $state(false);
 	let isPanning = $state(false);
 	let baseWidth = $state(0);
+	let lightboxRootEl = $state<HTMLDivElement | null>(null);
+	let fullscreenActive = $state(false);
 	let scrollEl = $state<HTMLDivElement | null>(null);
 	let imgEl = $state<HTMLImageElement | null>(null);
 	let videoEl = $state<HTMLVideoElement | null>(null);
@@ -108,6 +111,10 @@ let {
 		if (!browser) return 'fit';
 		return (sessionStorage.getItem('workflowui_lightbox_video_fit') as VideoFitMode) || 'fit';
 	}
+	function getStoredImageFit(): ImageFitMode {
+		if (!browser) return 'fit';
+		return (sessionStorage.getItem('workflowui_lightbox_image_fit') as ImageFitMode) || 'fit';
+	}
 	function getStoredVideoLoop(): VideoLoopMode {
 		if (!browser) return 'single';
 		return (sessionStorage.getItem('workflowui_lightbox_video_loop') as VideoLoopMode) || 'single';
@@ -122,6 +129,7 @@ let {
 	}
 
 	let videoFitMode = $state<VideoFitMode>(getStoredVideoFit());
+	let imageFitMode = $state<ImageFitMode>(getStoredImageFit());
 	let videoLoopMode = $state<VideoLoopMode>(getStoredVideoLoop());
 	let audioPlaylistMode = $state(getStoredAudioPlaylist());
 	let slideshowActive = $state(false);
@@ -131,6 +139,18 @@ let {
 	function persistVideoFit(v: VideoFitMode) {
 		videoFitMode = v;
 		if (browser) sessionStorage.setItem('workflowui_lightbox_video_fit', v);
+	}
+	function persistImageFit(v: ImageFitMode) {
+		dismissZoomHint();
+		if (zoomMode) {
+			zoomMode = false;
+			zoom = 1;
+			isPanning = false;
+			fitToScreen = true;
+		}
+		imageFitMode = v;
+		if (browser) sessionStorage.setItem('workflowui_lightbox_image_fit', v);
+		resetScroll();
 	}
 	function persistVideoLoop(v: VideoLoopMode) {
 		videoLoopMode = v;
@@ -195,10 +215,50 @@ let {
 		stopSlideshowTimer();
 	}
 
-	function handleClose() {
+	async function exitFullscreenIfNeeded() {
+		if (!browser) return;
+		const doc = document as Document & { webkitFullscreenElement?: Element | null };
+		const fsEl = document.fullscreenElement ?? doc.webkitFullscreenElement;
+		if (!fsEl) return;
+		try {
+			if (document.exitFullscreen) await document.exitFullscreen();
+			else if ((document as Document & { webkitExitFullscreen?: () => Promise<void> }).webkitExitFullscreen) {
+				await (document as Document & { webkitExitFullscreen: () => Promise<void> }).webkitExitFullscreen();
+			}
+		} catch {
+			/* ignore */
+		}
+	}
+
+	async function handleClose() {
 		stopSlideshowTimer();
 		slideshowActive = false;
+		await exitFullscreenIfNeeded();
 		onClose();
+	}
+
+	async function toggleLightboxFullscreen() {
+		if (!browser || !lightboxRootEl) return;
+		const el = lightboxRootEl as HTMLDivElement & {
+			webkitRequestFullscreen?: () => Promise<void>;
+		};
+		try {
+			if (document.fullscreenElement ?? (document as Document & { webkitFullscreenElement?: Element }).webkitFullscreenElement) {
+				await exitFullscreenIfNeeded();
+			} else if (el.requestFullscreen) {
+				await el.requestFullscreen();
+			} else if (el.webkitRequestFullscreen) {
+				await el.webkitRequestFullscreen();
+			}
+		} catch {
+			/* unsupported or blocked */
+		}
+	}
+
+	function syncFullscreenState() {
+		if (!browser) return;
+		const doc = document as Document & { webkitFullscreenElement?: Element | null };
+		fullscreenActive = !!(document.fullscreenElement ?? doc.webkitFullscreenElement);
 	}
 
 	function toggleZoomMode() {
@@ -289,10 +349,32 @@ let {
 		}, 300);
 	}
 
+	function fullscreenHotkeyTargetOk(target: EventTarget | null) {
+		const t = target as HTMLElement | null;
+		if (!t || !t.closest) return true;
+		return !t.closest(
+			'button, a, input, textarea, select, audio, video, [contenteditable="true"], [role="textbox"]'
+		);
+	}
+
 	function handleKey(e: KeyboardEvent) {
 		if (!open || !items.length) return;
 		dismissZoomHint();
-		if (e.key === 'Escape') handleClose();
+		if (e.key === 'Escape') {
+			const doc = document as Document & { webkitFullscreenElement?: Element | null };
+			if (document.fullscreenElement ?? doc.webkitFullscreenElement) {
+				e.preventDefault();
+				void exitFullscreenIfNeeded();
+				return;
+			}
+			void handleClose();
+		}
+		if (e.key === 'Enter' && !e.repeat && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
+			if (!fullscreenHotkeyTargetOk(e.target)) return;
+			e.preventDefault();
+			void toggleLightboxFullscreen();
+			return;
+		}
 		if (e.key === 'ArrowRight') goNext();
 		if (e.key === 'ArrowLeft') goPrev();
 		if ((e.key === 'f' || e.key === 'F') && onToggleFavorite && currentItem) {
@@ -402,12 +484,18 @@ let {
 	onMount(() => {
 		if (!browser) return;
 		window.addEventListener('keydown', handleKey);
+		document.addEventListener('fullscreenchange', syncFullscreenState);
+		document.addEventListener('webkitfullscreenchange', syncFullscreenState as EventListener);
+		syncFullscreenState();
 	});
 
 	onDestroy(() => {
 		if (!browser) return;
 		window.removeEventListener('keydown', handleKey);
+		document.removeEventListener('fullscreenchange', syncFullscreenState);
+		document.removeEventListener('webkitfullscreenchange', syncFullscreenState as EventListener);
 		stopSlideshowTimer();
+		void exitFullscreenIfNeeded();
 	});
 
 	$effect(() => {
@@ -441,17 +529,25 @@ let {
 			: `width: ${baseWidth * zoom}px; height: auto;`;
 	});
 
-	const mediaStyle = $derived(
-		fitToScreen
-			? 'max-width: 100%; max-height: 100%; width: auto; height: auto;'
-			: `width: ${baseWidth * zoom}px;`
-	);
+	const mediaStyle = $derived.by(() => {
+		if (zoomMode) {
+			return `width: ${baseWidth * zoom}px; height: auto;`;
+		}
+		if (imageFitMode === 'fit') {
+			// Match video “fit” path so the image scales to the scroll viewport (flex min-size is fixed in lightbox.css).
+			return 'width: 100%; max-width: 100%; height: auto; max-height: 100%; object-fit: contain;';
+		}
+		if (baseWidth > 0) {
+			return `width: ${baseWidth}px; height: auto;`;
+		}
+		return 'max-width: 100%; max-height: 100%; width: auto; height: auto;';
+	});
 
 	const showDeleted = $derived(currentItem?.remote_deleted && loadFailed);
 </script>
 
 {#if open}
-	<div class="lightbox" role="dialog" aria-modal="true" aria-label={ariaTitle}>
+	<div class="lightbox" bind:this={lightboxRootEl} role="dialog" aria-modal="true" aria-label={ariaTitle}>
 		<div
 			class="lightbox-backdrop"
 			role="button"
@@ -528,7 +624,14 @@ let {
 				if (t.tagName !== 'IMG' && t.tagName !== 'VIDEO' && t.tagName !== 'AUDIO' && !t.closest('button') && !t.closest('audio')) handleClose();
 			}}
 			onkeydown={(e) => {
-				if (e.key === 'Escape') handleClose();
+				if (e.key !== 'Escape') return;
+				const doc = document as Document & { webkitFullscreenElement?: Element | null };
+				if (document.fullscreenElement ?? doc.webkitFullscreenElement) {
+					e.preventDefault();
+					void exitFullscreenIfNeeded();
+					return;
+				}
+				void handleClose();
 			}}
 		>
 			{#if open && zoomHintVisible && !isVideo && !isAudio}
@@ -889,6 +992,48 @@ let {
 					aria-pressed={audioPlaylistMode}
 				>Playlist</button>
 			{:else if isImage}
+				<span class="lightbox-controls-label">Size:</span>
+				<button
+					type="button"
+					class="lightbox-controls-segmented"
+					class:active={imageFitMode === 'fit'}
+					onclick={() => persistImageFit('fit')}
+					title="Fit image within the viewer (use available space)"
+					aria-label="Fit: scale to fit within viewer"
+					aria-pressed={imageFitMode === 'fit'}
+				>Fit</button>
+				<button
+					type="button"
+					class="lightbox-controls-segmented"
+					class:active={imageFitMode === 'actual'}
+					onclick={() => persistImageFit('actual')}
+					title="Original pixel size (may be larger than the window; scroll to see all)"
+					aria-label="Actual: original size"
+					aria-pressed={imageFitMode === 'actual'}
+				>Actual</button>
+				<button
+					type="button"
+					class="lightbox-controls-segmented lightbox-fullscreen-btn"
+					class:active={fullscreenActive}
+					onclick={(ev) => {
+						ev.stopPropagation();
+						void toggleLightboxFullscreen();
+					}}
+					title={fullscreenActive ? 'Exit full screen (Enter)' : 'Full screen viewer (Enter)'}
+					aria-label={fullscreenActive ? 'Exit full screen, shortcut Enter' : 'Enter full screen, shortcut Enter'}
+					aria-pressed={fullscreenActive}
+				>
+					{#if fullscreenActive}
+						<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+							<path d="M8 3v3a2 2 0 0 1-2 2H3m18 0h-3a2 2 0 0 1-2-2V3m0 18v-3a2 2 0 0 1 2-2h3M3 16h3a2 2 0 0 1 2 2v3" />
+						</svg>
+					{:else}
+						<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+							<path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3" />
+						</svg>
+					{/if}
+				</button>
+				<span class="lightbox-controls-sep" aria-hidden="true">|</span>
 				<span class="lightbox-controls-label">Slideshow:</span>
 				<button
 					type="button"

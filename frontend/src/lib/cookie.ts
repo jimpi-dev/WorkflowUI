@@ -57,6 +57,17 @@ export function setThumbFitModeCookie(mode: ThumbFitMode): void {
     setCookie(THUMB_FIT_MODE_COOKIE, mode);
 }
 
+export const THUMB_SHOW_FILENAME_COOKIE = 'workflowui_thumb_show_filename';
+
+export function getThumbShowFilenameCookie(): boolean {
+    const raw = getCookie(THUMB_SHOW_FILENAME_COOKIE);
+    return raw === '1' || raw === 'true';
+}
+
+export function setThumbShowFilenameCookie(show: boolean): void {
+    setCookie(THUMB_SHOW_FILENAME_COOKIE, show ? '1' : '0');
+}
+
 export const NOTES_COLLAPSED_COOKIE = 'workflowui_notes_collapsed';
 
 export function getNotesCollapsedCookie(): boolean {

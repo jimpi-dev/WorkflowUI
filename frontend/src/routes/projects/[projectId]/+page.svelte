@@ -5,7 +5,7 @@ import { page } from '$app/stores';
 import { get } from 'svelte/store';
 	import { browser } from '$app/environment';
 	import { onMount, onDestroy, tick, untrack } from 'svelte';
-	import { THUMB_SCALE_MAX, THUMB_SCALE_MIN, getThumbFitModeCookie, getThumbSizeCookie, setThumbFitModeCookie, setThumbSizeCookie, getNotesCollapsedCookie, setNotesCollapsedCookie, getLeftPanelCollapsedCookie, setLeftPanelCollapsedCookie, getSkipDeleteConfirmCookie, setSkipDeleteConfirmCookie, type ThumbFitMode, type DeleteConfirmKey } from '$lib/cookie';
+	import { THUMB_SCALE_MAX, THUMB_SCALE_MIN, getThumbFitModeCookie, getThumbSizeCookie, setThumbFitModeCookie, setThumbSizeCookie, getThumbShowFilenameCookie, setThumbShowFilenameCookie, getNotesCollapsedCookie, setNotesCollapsedCookie, getLeftPanelCollapsedCookie, setLeftPanelCollapsedCookie, getSkipDeleteConfirmCookie, setSkipDeleteConfirmCookie, type ThumbFitMode, type DeleteConfirmKey } from '$lib/cookie';
 	import SendToAppDialog from '$lib/components/SendToAppDialog.svelte';
 	import MoveRunsDialog from '$lib/components/MoveRunsDialog.svelte';
 	import ThumbnailOverlay from '$lib/components/ThumbnailOverlay.svelte';
@@ -211,7 +211,7 @@ let runsScrollTopBeforeFocus = $state<number | null>(null);
 	const runGroups = $derived.by(() => {
 		let list = runs;
 		if (filterFavoritesOnly && favorites.size > 0) {
-			list = list.filter((r) => favorites.has(r.id));
+			list = list.filter((r) => runHasFavoritedOutput(r));
 		} else if (filterFavoritesOnly) {
 			list = [];
 		}
@@ -384,14 +384,107 @@ let runsScrollTopBeforeFocus = $state<number | null>(null);
 		});
 	}
 
-	function pruneStaleRunFavorites(runsToCheck: ApiRun[]) {
-		const toRemove: string[] = [];
-		for (const r of runsToCheck) {
-			if (favorites.has(r.id) && !runHasDisplayableOutputs(r)) toRemove.push(r.id);
+	function outputIndexIsDisplayable(run: ApiRun, index: number): boolean {
+		const item = run.images?.[index];
+		if (!item) return false;
+		const rd = !!(item as { remote_deleted?: boolean }).remote_deleted;
+		if (!rd) return true;
+		return run.local_storage_status === 'saved' || run.local_storage_status === 'partial';
+	}
+
+	function outputFavoriteKey(runId: string, outputIndex: number): string {
+		return `${runId}:${outputIndex}`;
+	}
+
+	function parseFavoriteEntry(entry: string): { runId: string; outputIndex: number | null } {
+		const lastColon = entry.lastIndexOf(':');
+		if (lastColon === -1) return { runId: entry, outputIndex: null };
+		const suffix = entry.slice(lastColon + 1);
+		if (!/^\d+$/.test(suffix)) return { runId: entry, outputIndex: null };
+		return { runId: entry.slice(0, lastColon), outputIndex: parseInt(suffix, 10) };
+	}
+
+	function displayableOutputIndices(run: ApiRun): number[] {
+		const imgs = run.images ?? [];
+		const out: number[] = [];
+		for (let i = 0; i < imgs.length; i++) {
+			if (outputIndexIsDisplayable(run, i)) out.push(i);
 		}
-		if (!toRemove.length) return;
+		return out;
+	}
+
+	/** Per-output favorite, or legacy whole-run entry (bare run id). */
+	function isOutputFavorite(runId: string, outputIndex: number): boolean {
+		if (favorites.has(outputFavoriteKey(runId, outputIndex))) return true;
+		if (favorites.has(runId)) return true;
+		return false;
+	}
+
+	function runHasFavoritedOutput(run: ApiRun): boolean {
+		if (!runHasDisplayableOutputs(run)) return false;
+		if (favorites.has(run.id)) return true;
+		const n = run.images?.length ?? 0;
+		for (let i = 0; i < n; i++) {
+			if (!outputIndexIsDisplayable(run, i)) continue;
+			if (favorites.has(outputFavoriteKey(run.id, i))) return true;
+		}
+		return false;
+	}
+
+	function runForFavorite(runId: string): ApiRun | undefined {
+		return runs.find((r) => r.id === runId);
+	}
+
+	function selectionIncludesFavorite(runId: string, indices: number[]): boolean {
+		return indices.some((i) => isOutputFavorite(runId, i));
+	}
+
+	function toggleOutputFavorite(runId: string, outputIndex: number, run?: ApiRun) {
+		const key = outputFavoriteKey(runId, outputIndex);
 		const next = new Set(favorites);
-		for (const id of toRemove) next.delete(id);
+		if (isOutputFavorite(runId, outputIndex)) {
+			if (next.has(key)) {
+				next.delete(key);
+			} else if (next.has(runId)) {
+				next.delete(runId);
+				const r = run ?? runForFavorite(runId);
+				if (r) {
+					for (const i of displayableOutputIndices(r)) {
+						if (i !== outputIndex) next.add(outputFavoriteKey(runId, i));
+					}
+				}
+			}
+		} else {
+			next.add(key);
+		}
+		favorites = next;
+		saveFavoritesMetadata([...next]);
+	}
+
+	function pruneStaleRunFavorites(runsToCheck: ApiRun[]) {
+		const toRemove = new Set<string>();
+		const idSet = new Set(runsToCheck.map((r) => r.id));
+		for (const r of runsToCheck) {
+			if (favorites.has(r.id) && !runHasDisplayableOutputs(r)) toRemove.add(r.id);
+			const n = r.images?.length ?? 0;
+			for (let i = 0; i < n; i++) {
+				const k = outputFavoriteKey(r.id, i);
+				if (favorites.has(k) && !outputIndexIsDisplayable(r, i)) toRemove.add(k);
+			}
+		}
+		for (const ent of favorites) {
+			const p = parseFavoriteEntry(ent);
+			if (p.outputIndex == null) continue;
+			if (!idSet.has(p.runId)) continue;
+			const r = runsToCheck.find((x) => x.id === p.runId);
+			if (!r) continue;
+			const n = r.images?.length ?? 0;
+			if (p.outputIndex < 0 || p.outputIndex >= n || !outputIndexIsDisplayable(r, p.outputIndex)) {
+				toRemove.add(ent);
+			}
+		}
+		if (!toRemove.size) return;
+		const next = new Set([...favorites].filter((e) => !toRemove.has(e)));
 		favorites = next;
 		saveFavoritesMetadata([...next]).catch(() => {});
 	}
@@ -722,7 +815,7 @@ let runsScrollTopBeforeFocus = $state<number | null>(null);
 			}
 			if (anyDeleted) totalGroups = Math.max(0, totalGroups - 1);
 			if (deletedIds.size > 0) {
-				const nextFav = [...favorites].filter((id) => !deletedIds.has(id));
+				const nextFav = [...favorites].filter((ent) => !deletedIds.has(parseFavoriteEntry(ent).runId));
 				if (nextFav.length !== favorites.size) await saveFavoritesMetadata(nextFav);
 			}
 			await loadStats();
@@ -733,7 +826,7 @@ let runsScrollTopBeforeFocus = $state<number | null>(null);
 
 	function requestDeleteRunGroup(group: (typeof runGroups)[0]) {
 		pruneStaleRunFavorites(group.runs);
-		const hasFav = group.runs.some((r) => favorites.has(r.id) && runHasDisplayableOutputs(r));
+		const hasFav = group.runs.some((r) => runHasFavoritedOutput(r));
 		if (!hasFav && getSkipDeleteConfirmCookie('delete_run')) {
 			deleteRunGroup(group).catch(() => {});
 			return;
@@ -746,7 +839,7 @@ let runsScrollTopBeforeFocus = $state<number | null>(null);
 		if (!group) return;
 		deleteRunGroupPending = null;
 		if (mode === 'non_favorites') {
-			const runIdsToDelete = group.runs.filter((r) => !favorites.has(r.id)).map((r) => r.id);
+			const runIdsToDelete = group.runs.filter((r) => !runHasFavoritedOutput(r)).map((r) => r.id);
 			if (runIdsToDelete.length === 0) return;
 			await deleteRunGroup(group, runIdsToDelete);
 		} else {
@@ -760,7 +853,7 @@ let runsScrollTopBeforeFocus = $state<number | null>(null);
 		deleteStorageRunGroupPending = null;
 		const { group, action } = pending;
 		if (mode === 'non_favorites') {
-			const runIdsToDelete = group.runs.filter((r) => !favorites.has(r.id)).map((r) => r.id);
+			const runIdsToDelete = group.runs.filter((r) => !runHasFavoritedOutput(r)).map((r) => r.id);
 			if (runIdsToDelete.length === 0) {
 				deleteError = 'No non-favorited runs in this group to delete.';
 				return;
@@ -1039,14 +1132,6 @@ let runsScrollTopBeforeFocus = $state<number | null>(null);
 			favoritesSaving = false;
 		}
 	}
-	function toggleFavorite(runId: string) {
-		const next = new Set(favorites);
-		if (next.has(runId)) next.delete(runId);
-		else next.add(runId);
-		favorites = next;
-		saveFavoritesMetadata([...next]);
-	}
-
 	let notesInitialized = false;
 	let isMobile = $state(browser && typeof window !== 'undefined' ? window.matchMedia('(max-width: 639px)').matches : false);
 	let notesUserOpened = $state(false);
@@ -1533,6 +1618,11 @@ let runsScrollTopBeforeFocus = $state<number | null>(null);
 		thumbnailFitMode = mode;
 		if (browser) setThumbFitModeCookie(mode);
 	}
+	let showThumbFilename = $state<boolean>(browser ? getThumbShowFilenameCookie() : false);
+	function setShowThumbFilename(value: boolean) {
+		showThumbFilename = value;
+		if (browser) setThumbShowFilenameCookie(value);
+	}
 
 	let loadedThumbIds = $state<Record<string, boolean>>({});
 	let _pendingLoadedKeys = new Set<string>();
@@ -1914,7 +2004,7 @@ let runsScrollTopBeforeFocus = $state<number | null>(null);
 		if (byRun.size > 0) {
 			const total = [...byRun.values()].reduce((s, arr) => s + arr.length, 0);
 			if (total > 0) {
-				const hasFav = [...byRun.keys()].some((runId) => favorites.has(runId));
+				const hasFav = [...byRun.entries()].some(([runId, indices]) => selectionIncludesFavorite(runId, indices));
 				const message = hasFav
 					? `Selection includes favorited run(s). They will be removed from favorites.\n\nDelete remote for ${total} selected image(s)? Files will be removed from ComfyUI server.`
 					: `Delete remote for ${total} selected image(s)? Files will be removed from ComfyUI server.`;
@@ -1965,7 +2055,7 @@ let runsScrollTopBeforeFocus = $state<number | null>(null);
 		if (byRun.size > 0) {
 		} else {
 			pruneStaleRunFavorites(group.runs);
-			const hasFav = group.runs.some((r) => favorites.has(r.id) && runHasDisplayableOutputs(r));
+			const hasFav = group.runs.some((r) => runHasFavoritedOutput(r));
 			if (hasFav) {
 				deleteStorageRunGroupPending = { group, action: 'delete_remote' };
 				return;
@@ -1979,7 +2069,7 @@ let runsScrollTopBeforeFocus = $state<number | null>(null);
 		if (byRun.size > 0) {
 			const total = [...byRun.values()].reduce((s, arr) => s + arr.length, 0);
 			if (total > 0) {
-				const hasFav = [...byRun.keys()].some((runId) => favorites.has(runId));
+				const hasFav = [...byRun.entries()].some(([runId, indices]) => selectionIncludesFavorite(runId, indices));
 				const message = hasFav
 					? `Selection includes favorited run(s). They will be removed from favorites.\n\nDelete local copy for ${total} selected image(s)? Files will be removed from local storage.`
 					: `Delete local copy for ${total} selected image(s)? Files will be removed from local storage.`;
@@ -2029,7 +2119,7 @@ let runsScrollTopBeforeFocus = $state<number | null>(null);
 		if (byRun.size > 0) {
 		} else {
 			pruneStaleRunFavorites(group.runs);
-			const hasFav = group.runs.some((r) => favorites.has(r.id) && runHasDisplayableOutputs(r));
+			const hasFav = group.runs.some((r) => runHasFavoritedOutput(r));
 			if (hasFav) {
 				deleteStorageRunGroupPending = { group, action: 'delete_local' };
 				return;
@@ -2043,7 +2133,7 @@ let runsScrollTopBeforeFocus = $state<number | null>(null);
 		if (byRun.size > 0) {
 			const total = [...byRun.values()].reduce((s, arr) => s + arr.length, 0);
 			if (total > 0) {
-				const hasFav = [...byRun.keys()].some((runId) => favorites.has(runId));
+				const hasFav = [...byRun.entries()].some(([runId, indices]) => selectionIncludesFavorite(runId, indices));
 				const message = hasFav
 					? `Selection includes favorited run(s). They will be removed from favorites.\n\nDelete local and remote for ${total} selected image(s)? This cannot be undone.`
 					: `Delete local and remote for ${total} selected image(s)? This cannot be undone.`;
@@ -2090,7 +2180,7 @@ let runsScrollTopBeforeFocus = $state<number | null>(null);
 		if (byRun.size > 0) {
 		} else {
 			pruneStaleRunFavorites(group.runs);
-			const hasFav = group.runs.some((r) => favorites.has(r.id) && runHasDisplayableOutputs(r));
+			const hasFav = group.runs.some((r) => runHasFavoritedOutput(r));
 			if (hasFav) {
 				deleteStorageRunGroupPending = { group, action: 'delete_all' };
 				return;
@@ -2342,7 +2432,7 @@ let lightboxDeletePending = $state<
 	}
 
 	function requestDeleteLightboxLocal(item: LightboxItem) {
-		if (item.runId && favorites.has(item.runId)) {
+		if (item.runId != null && item.outputIndex != null && isOutputFavorite(item.runId, item.outputIndex)) {
 			lightboxFavoriteDeletePending = { item, kind: 'local' };
 			return;
 		}
@@ -2350,7 +2440,7 @@ let lightboxDeletePending = $state<
 	}
 
 	function requestDeleteLightboxRemote(item: LightboxItem) {
-		if (item.runId && favorites.has(item.runId)) {
+		if (item.runId != null && item.outputIndex != null && isOutputFavorite(item.runId, item.outputIndex)) {
 			lightboxFavoriteDeletePending = { item, kind: 'remote' };
 			return;
 		}
@@ -2358,7 +2448,7 @@ let lightboxDeletePending = $state<
 	}
 
 	function requestDeleteLightboxBoth(item: LightboxItem) {
-		if (item.runId && favorites.has(item.runId)) {
+		if (item.runId != null && item.outputIndex != null && isOutputFavorite(item.runId, item.outputIndex)) {
 			lightboxFavoriteDeletePending = { item, kind: 'both' };
 			return;
 		}
@@ -2899,6 +2989,23 @@ let lightboxDeletePending = $state<
 											Fit into thumbnail
 										</button>
 									</div>
+									<span class="gallery-size-divider" aria-hidden="true"></span>
+									<label class="favorites-filter-option" title="Show output filenames on thumbnails">
+										<span class="favorites-filter-label">Filenames</span>
+										<button
+											type="button"
+											role="switch"
+											aria-checked={showThumbFilename}
+											class="favorites-filter-toggle"
+											class:on={showThumbFilename}
+											aria-label="Show filenames on thumbnails"
+											onclick={() => setShowThumbFilename(!showThumbFilename)}
+										>
+											<span class="favorites-filter-toggle-track">
+												<span class="favorites-filter-toggle-thumb"></span>
+											</span>
+										</button>
+									</label>
 								</div>
 							{/if}
 						</div>
@@ -2987,6 +3094,23 @@ let lightboxDeletePending = $state<
 												Fit into thumbnail
 											</button>
 										</div>
+
+										<label class="favorites-filter-option" title="Show output filenames on thumbnails">
+											<span class="favorites-filter-label">Filenames</span>
+											<button
+												type="button"
+												role="switch"
+												aria-checked={showThumbFilename}
+												class="favorites-filter-toggle"
+												class:on={showThumbFilename}
+												aria-label="Show filenames on thumbnails"
+												onclick={() => setShowThumbFilename(!showThumbFilename)}
+											>
+												<span class="favorites-filter-toggle-track">
+													<span class="favorites-filter-toggle-thumb"></span>
+												</span>
+											</button>
+										</label>
 									</div>
 								</details>
 							{/if}
@@ -3342,7 +3466,9 @@ let lightboxDeletePending = $state<
 															resolution={isAudio ? undefined : mediaResolutionLabel(key)}
 															seed={run.seed ?? undefined}
 															executionTimeSec={run.execution_time ?? undefined}
-															isFavorite={favorites.has(run.id)}
+															fileName={(item as { filename?: string }).filename}
+															showFilenameAlways={showThumbFilename}
+															isFavorite={isOutputFavorite(run.id, origI)}
 															isSelected={isImageSelected(group.groupId, key)}
 															showMetadata={true}
 															showFavorite={true}
@@ -3351,7 +3477,7 @@ let lightboxDeletePending = $state<
 															showDownload={!showAnyMediaPlaceholder}
 															showSendToApp={!showAnyMediaPlaceholder}
 															onMetadataClick={() => { metadataPanelRunId = run.id; metadataPanelMode = 'output'; }}
-															onToggleFavorite={() => toggleFavorite(run.id)}
+															onToggleFavorite={() => toggleOutputFavorite(run.id, origI, run)}
 															onToggleSelection={() => toggleImageSelection(group.groupId, key)}
 															onDownload={() => thumbDownloadImage(item as { filename: string; subfolder?: string; type?: string }, run.id)}
 															onSendToApp={() => { if (run?.id != null) { sendToAppRunId = run.id; sendToAppOutputIndex = origI; } }}
@@ -3546,7 +3672,7 @@ let lightboxDeletePending = $state<
 		{@const group = deleteRunGroupPending}
 		{@const runIds = group.runs.map((r) => r.id)}
 		{@const n = runIds.length}
-		{@const hasFav = group.runs.some((r) => favorites.has(r.id) && runHasDisplayableOutputs(r))}
+		{@const hasFav = group.runs.some((r) => runHasFavoritedOutput(r))}
 		{@const mainMsg = n > 1
 			? `Delete ${n} generations permanently? This cannot be undone.`
 			: 'Delete this prompt (and all its files) permanently? This cannot be undone.'}
@@ -3602,7 +3728,7 @@ let lightboxDeletePending = $state<
 		{@const pending = deleteStorageRunGroupPending}
 		{@const group = pending.group}
 		{@const action = pending.action}
-		{@const nonFavIds = group.runs.filter((r) => !favorites.has(r.id)).map((r) => r.id)}
+		{@const nonFavIds = group.runs.filter((r) => !runHasFavoritedOutput(r)).map((r) => r.id)}
 		{@const hasNonFav = nonFavIds.length > 0}
 		{@const title = action === 'delete_remote' ? 'Delete remote' : action === 'delete_local' ? 'Delete local' : 'Delete all'}
 		{@const scopeLine = action === 'delete_remote'
@@ -3676,8 +3802,8 @@ let lightboxDeletePending = $state<
 		onClose={closeLightbox}
 		onDownload={downloadLightboxItem}
 		onMetadata={(item) => { closeLightbox(); metadataPanelRunId = item.runId!; metadataPanelMode = 'output'; }}
-		onToggleFavorite={(item) => toggleFavorite(item.runId!)}
-		isFavorite={(item) => favorites.has(item.runId!)}
+		onToggleFavorite={(item) => toggleOutputFavorite(item.runId!, item.outputIndex ?? 0, runForFavorite(item.runId!))}
+		isFavorite={(item) => isOutputFavorite(item.runId!, item.outputIndex ?? 0)}
 		onToggleSelection={lightboxGroupId ? (item) => toggleImageSelection(lightboxGroupId!, item.id) : undefined}
 		isSelected={lightboxGroupId ? (item) => isImageSelected(lightboxGroupId!, item.id) : undefined}
 		onSendToApp={(item) => { closeLightbox(); sendToAppRunId = item.runId!; sendToAppOutputIndex = item.outputIndex ?? 0; }}
