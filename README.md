@@ -26,7 +26,6 @@ Hint: To toggle the theme, you have click on a certain part of the apps logo
 - Create and use App Presets! Save your favorite values into fully customizable App presets
 - App repository - share workflows/apps with others
 - When importing a workflow, check for used models (checkpoints, clip, vae) and highlight models not found for better user experience
-- Multi tenancy
 - Better UI on mobile devices (its not great right now, but it does work 🫡)
 - Improve media viewer, maybe even integrate custom media gallery
 - Notify about new version available
@@ -34,9 +33,7 @@ Hint: To toggle the theme, you have click on a certain part of the apps logo
 - More sophisticated queueing system (store queue to db, multi user queuing for single and multi comfy instances)
 
 ## Known Issues
-- Media does sometimes not show up in the gallery, only page reload fixes it, will be fixed in next release
 - Only one Seed value (Master Seed) can be generated and passed to ComfyUI, will be made more configurable
-- Edge cases on media deletion on local storage 
 
 ## Sneak peek - App and Features
 
