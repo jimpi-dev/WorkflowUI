@@ -25,6 +25,8 @@ export type WorkflowInput = {
     max?: number;
     options?: string[];
     optionSource?: string;
+    /** When false, run form uses a single-line field; when true or omitted, long text uses a textarea. */
+    multiline?: boolean;
     layoutRow?: number;
     layoutCol?: number;
     classType: string;
@@ -67,6 +69,8 @@ export type NodeInputSpec = {
     options?: string[];
     optionSource?: string;
     slider?: boolean;
+    /** false = single-line in the run form; true = textarea (prompt-style). */
+    multiline?: boolean;
 };
 
 export type NodeLayoutRow = string[];

@@ -5,7 +5,7 @@ import { page } from '$app/stores';
 import { get } from 'svelte/store';
 	import { browser } from '$app/environment';
 	import { onMount, onDestroy, tick, untrack } from 'svelte';
-	import { getThumbSizeCookie, setThumbSizeCookie, getNotesCollapsedCookie, setNotesCollapsedCookie, getLeftPanelCollapsedCookie, setLeftPanelCollapsedCookie, getSkipDeleteConfirmCookie, setSkipDeleteConfirmCookie, type ThumbSize, type DeleteConfirmKey } from '$lib/cookie';
+	import { THUMB_SCALE_MAX, THUMB_SCALE_MIN, getThumbFitModeCookie, getThumbSizeCookie, setThumbFitModeCookie, setThumbSizeCookie, getNotesCollapsedCookie, setNotesCollapsedCookie, getLeftPanelCollapsedCookie, setLeftPanelCollapsedCookie, getSkipDeleteConfirmCookie, setSkipDeleteConfirmCookie, type ThumbFitMode, type DeleteConfirmKey } from '$lib/cookie';
 	import SendToAppDialog from '$lib/components/SendToAppDialog.svelte';
 	import MoveRunsDialog from '$lib/components/MoveRunsDialog.svelte';
 	import ThumbnailOverlay from '$lib/components/ThumbnailOverlay.svelte';
@@ -17,7 +17,7 @@ import { get } from 'svelte/store';
 	import ConfirmDeleteDialog from '$lib/components/ConfirmDeleteDialog.svelte';
 	import LightboxViewer, { type LightboxItem } from '$lib/components/LightboxViewer.svelte';
 	import { appBooting } from '$lib/stores/appBooting';
-	import { QUICK_RUNS_PROJECT_ID } from '$lib/constants';
+	import { quickRunsProject } from '$lib/stores/quickRunsProject';
 
 	let { data }: {
 		data: {
@@ -101,9 +101,69 @@ import { get } from 'svelte/store';
 	function markThumbLoadFailed(thumbKey: string) {
 		thumbLoadFailed = new Set([...thumbLoadFailed, thumbKey]);
 	}
+	let mediaResolutionByImageKey = $state<Record<string, { width: number; height: number }>>({});
+	const videoResolutionFetchInFlight = new Set<string>();
+	function setMediaResolution(key: string, width: number, height: number) {
+		if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) return;
+		const w = Math.round(width);
+		const h = Math.round(height);
+		const prev = mediaResolutionByImageKey[key];
+		if (prev && prev.width === w && prev.height === h) return;
+		mediaResolutionByImageKey = { ...mediaResolutionByImageKey, [key]: { width: w, height: h } };
+	}
+	function mediaResolutionLabel(key: string): string | undefined {
+		const dim = mediaResolutionByImageKey[key];
+		return dim ? `${dim.width}×${dim.height}` : undefined;
+	}
+	function onImageThumbLoad(groupId: string, runId: string, index: number, event: Event) {
+		markThumbLoaded(groupId, runId, index);
+		const img = event.currentTarget as HTMLImageElement | null;
+		if (!img) return;
+		setMediaResolution(imageKey(runId, index), img.naturalWidth, img.naturalHeight);
+	}
+	function onVideoThumbMetadataLoad(
+		groupId: string,
+		runId: string,
+		index: number,
+		thumbKey: string,
+		event: Event,
+	) {
+		// Only begin playback if the same thumb is still hovered.
+		if (playingVideoThumbKey !== thumbKey) return;
+		const v = event.currentTarget as HTMLVideoElement | null;
+		if (v) {
+			v.currentTime = 0;
+			setMediaResolution(imageKey(runId, index), v.videoWidth, v.videoHeight);
+		}
+		playingVideoThumbReady = true;
+		markThumbLoaded(groupId, runId, index);
+	}
+	function preloadVideoResolutionOnce(runId: string, index: number, url: string) {
+		if (!browser) return;
+		const key = imageKey(runId, index);
+		if (mediaResolutionByImageKey[key] || videoResolutionFetchInFlight.has(key)) return;
+		videoResolutionFetchInFlight.add(key);
+		const el = document.createElement('video');
+		el.preload = 'metadata';
+		el.muted = true;
+		el.playsInline = true;
+		const cleanup = () => {
+			el.removeAttribute('src');
+			el.load();
+			videoResolutionFetchInFlight.delete(key);
+		};
+		el.onloadedmetadata = () => {
+			setMediaResolution(key, el.videoWidth, el.videoHeight);
+			cleanup();
+		};
+		el.onerror = cleanup;
+		el.src = url;
+	}
 
 
 	let playingAudioThumbKey = $state<string | null>(null);
+	let playingVideoThumbKey = $state<string | null>(null);
+	let playingVideoThumbReady = $state(false);
 
 	let sendToAppRunId = $state<string | null>(null);
 	let sendToAppOutputIndex = $state<number | null>(null);
@@ -117,6 +177,13 @@ import { get } from 'svelte/store';
 	let metadataPanelMode = $state<'output' | 'run'>('output');
 
 	let deleteRunGroupPending = $state<{ groupId: string; runs: ApiRun[] } | null>(null);
+	let deleteStorageRunGroupPending = $state<
+		| null
+		| {
+			group: (typeof runGroups)[0];
+			action: 'delete_remote' | 'delete_local' | 'delete_all';
+		  }
+	>(null);
 
 	type DeleteConfirmPending = {
 		action: DeleteConfirmKey;
@@ -128,6 +195,9 @@ import { get } from 'svelte/store';
 	let deleteConfirmPending = $state<DeleteConfirmPending | null>(null);
 
 	let favorites = $state<Set<string>>(new Set());
+let focusedGroupId = $state<string | null>(null);
+let leftPanelCollapsedBeforeFocus = $state<boolean | null>(null);
+let runsScrollTopBeforeFocus = $state<number | null>(null);
 	$effect(() => {
 		const raw = data.project?.metadata?.favorites;
 		favorites = Array.isArray(raw) ? new Set(raw) : new Set();
@@ -209,6 +279,14 @@ import { get } from 'svelte/store';
 	});
 
 	const visibleRunGroups = $derived.by(() => runGroups);
+	const displayRunGroups = $derived.by(() =>
+		focusedGroupId ? visibleRunGroups.filter((g) => g.groupId === focusedGroupId) : visibleRunGroups
+	);
+
+	$effect(() => {
+		if (!focusedGroupId) return;
+		if (!visibleRunGroups.some((g) => g.groupId === focusedGroupId)) focusedGroupId = null;
+	});
 
 	const displayRunsCount = $derived(
 		filterFavoritesOnly ? visibleRunGroups.length : (statsTotalGenerations ?? totalGroups)
@@ -223,6 +301,10 @@ import { get } from 'svelte/store';
 		for (const r of runs) seen.add(r.run_group_id ?? r.id);
 		return seen.size;
 	});
+
+	const hasInFlightRuns = $derived.by(() =>
+		runGroups.some((g) => g.status === 'queued' || g.status === 'running')
+	);
 
 	const appsUsedSortedByRuns = $derived.by(() => {
 		const apps = data.project?.apps_used ?? [];
@@ -275,9 +357,19 @@ import { get } from 'svelte/store';
 			// Use updated run but keep images from response (so remote_deleted/removed items are reflected)
 			const merged = { ...r, ...u, run_group_id: u.run_group_id ?? r.run_group_id };
 			if (Array.isArray(u.images)) merged.images = u.images;
-			// Preserve sizes when list response doesn't include them
-			if (u.local_storage_bytes === undefined) merged.local_storage_bytes = r.local_storage_bytes;
-			if (u.remote_storage_bytes === undefined) merged.remote_storage_bytes = r.remote_storage_bytes;
+			// Preserve already-known sizes when list response omits size info (null/undefined).
+			if (
+				(u.local_storage_bytes === undefined || u.local_storage_bytes === null) &&
+				typeof r.local_storage_bytes === 'number'
+			) {
+				merged.local_storage_bytes = r.local_storage_bytes;
+			}
+			if (
+				(u.remote_storage_bytes === undefined || u.remote_storage_bytes === null) &&
+				typeof r.remote_storage_bytes === 'number'
+			) {
+				merged.remote_storage_bytes = r.remote_storage_bytes;
+			}
 			return merged;
 		});
 	}
@@ -345,6 +437,22 @@ import { get } from 'svelte/store';
 		return { label: 'Remote Only', tone: 'remote' };
 	}
 
+	function sumKnownStorageBytes(
+		group: (typeof runGroups)[0],
+		key: 'local_storage_bytes' | 'remote_storage_bytes'
+	): number | null {
+		let total = 0;
+		let hasKnown = false;
+		for (const run of group.runs) {
+			const value = run[key];
+			if (typeof value === 'number' && Number.isFinite(value) && value >= 0) {
+				total += value;
+				hasKnown = true;
+			}
+		}
+		return hasKnown ? total : null;
+	}
+
 	async function saveRunGroup(group: (typeof runGroups)[0]) {
 		savingGroupIds = new Set([...savingGroupIds, group.groupId]);
 		try {
@@ -406,25 +514,36 @@ import { get } from 'svelte/store';
 		}
 	}
 
-	async function deleteRemoteRunGroup(group: (typeof runGroups)[0]) {
+	async function deleteRemoteRunGroup(
+		group: (typeof runGroups)[0],
+		runIdsToDelete?: string[],
+		skipConfirm = false
+	) {
+		const runIds = runIdsToDelete ?? group.runs.map((r) => r.id);
+		if (runIds.length === 0) return;
 		const doDelete = async () => {
 			deletingGroupIds = new Set([...deletingGroupIds, group.groupId]);
 			try {
-				for (const run of group.runs) {
-					const res = await fetch(`${apiBase}/runs/${run.id}/delete-remote`, { method: 'POST' });
+				for (const runId of runIds) {
+					const res = await fetch(`${apiBase}/runs/${runId}/delete-remote`, { method: 'POST' });
 					const data = await res.json().catch(() => ({}));
 					if (res.ok) {
 						mergeUpdatedRuns(data.updated_runs);
 					} else {
-						updateRunStorage(run.id, { remote_status: 'exists' });
+						updateRunStorage(runId, { remote_status: 'exists' });
 					}
 				}
+				refetchStorageSizesForRunIds(runIds);
 			} finally {
 				const next = new Set(deletingGroupIds);
 				next.delete(group.groupId);
 				deletingGroupIds = next;
 			}
 		};
+		if (skipConfirm) {
+			await doDelete();
+			return;
+		}
 		if (getSkipDeleteConfirmCookie('delete_remote')) {
 			await doDelete();
 			return;
@@ -438,15 +557,21 @@ import { get } from 'svelte/store';
 		};
 	}
 
-	async function deleteLocalRunGroup(group: (typeof runGroups)[0]) {
+	async function deleteLocalRunGroup(
+		group: (typeof runGroups)[0],
+		runIdsToDelete?: string[],
+		skipConfirm = false
+	) {
+		const runIds = runIdsToDelete ?? group.runs.map((r) => r.id);
+		if (runIds.length === 0) return;
 		const doDelete = async () => {
 			deletingLocalGroupIds = new Set([...deletingLocalGroupIds, group.groupId]);
 			try {
-				for (const run of group.runs) {
-					const res = await fetch(`${apiBase}/runs/${run.id}/delete-local`, { method: 'POST' });
+				for (const runId of runIds) {
+					const res = await fetch(`${apiBase}/runs/${runId}/delete-local`, { method: 'POST' });
 					const data = await res.json().catch(() => ({}));
 					if (res.ok) {
-						updateRunStorage(run.id, {
+						updateRunStorage(runId, {
 							local_storage_status: data.local_storage_status,
 							local_path: data.local_path
 						});
@@ -454,15 +579,20 @@ import { get } from 'svelte/store';
 							window.dispatchEvent(new CustomEvent('workflowui-refresh-storage'));
 						}
 					} else {
-						updateRunStorage(run.id, { local_storage_status: 'failed' });
+						updateRunStorage(runId, { local_storage_status: 'failed' });
 					}
 				}
+				refetchStorageSizesForRunIds(runIds);
 			} finally {
 				const next = new Set(deletingLocalGroupIds);
 				next.delete(group.groupId);
 				deletingLocalGroupIds = next;
 			}
 		};
+		if (skipConfirm) {
+			await doDelete();
+			return;
+		}
 		if (getSkipDeleteConfirmCookie('delete_local')) {
 			await doDelete();
 			return;
@@ -476,25 +606,36 @@ import { get } from 'svelte/store';
 		};
 	}
 
-	async function deleteBothRunGroup(group: (typeof runGroups)[0]) {
+	async function deleteBothRunGroup(
+		group: (typeof runGroups)[0],
+		runIdsToDelete?: string[],
+		skipConfirm = false
+	) {
+		const runIds = runIdsToDelete ?? group.runs.map((r) => r.id);
+		if (runIds.length === 0) return;
 		const doDelete = async () => {
 			deletingBothGroupIds = new Set([...deletingBothGroupIds, group.groupId]);
 			try {
-				for (const run of group.runs) {
-					const res = await fetch(`${apiBase}/runs/${run.id}/delete-both`, { method: 'POST' });
+				for (const runId of runIds) {
+					const res = await fetch(`${apiBase}/runs/${runId}/delete-both`, { method: 'POST' });
 					const data = await res.json().catch(() => ({}));
 					if (res.ok) {
 						mergeUpdatedRuns(data.updated_runs);
 					} else {
-						updateRunStorage(run.id, { remote_status: 'exists' });
+						updateRunStorage(runId, { remote_status: 'exists' });
 					}
 				}
+				refetchStorageSizesForRunIds(runIds);
 			} finally {
 				const next = new Set(deletingBothGroupIds);
 				next.delete(group.groupId);
 				deletingBothGroupIds = next;
 			}
 		};
+		if (skipConfirm) {
+			await doDelete();
+			return;
+		}
 		if (getSkipDeleteConfirmCookie('delete_all')) {
 			await doDelete();
 			return;
@@ -613,12 +754,45 @@ import { get } from 'svelte/store';
 		}
 	}
 
+	async function confirmDeleteStorageRunGroup(mode: 'all' | 'non_favorites') {
+		const pending = deleteStorageRunGroupPending;
+		if (!pending) return;
+		deleteStorageRunGroupPending = null;
+		const { group, action } = pending;
+		if (mode === 'non_favorites') {
+			const runIdsToDelete = group.runs.filter((r) => !favorites.has(r.id)).map((r) => r.id);
+			if (runIdsToDelete.length === 0) {
+				deleteError = 'No non-favorited runs in this group to delete.';
+				return;
+			}
+			if (action === 'delete_remote') await deleteRemoteRunGroup(group, runIdsToDelete, true);
+			else if (action === 'delete_local') await deleteLocalRunGroup(group, runIdsToDelete, true);
+			else await deleteBothRunGroup(group, runIdsToDelete, true);
+		} else {
+			if (action === 'delete_remote') await deleteRemoteRunGroup(group, undefined, true);
+			else if (action === 'delete_local') await deleteLocalRunGroup(group, undefined, true);
+			else await deleteBothRunGroup(group, undefined, true);
+		}
+	}
+
 	$effect(() => {
 		if (!deleteRunGroupPending || !browser) return;
 		const onKey = (e: KeyboardEvent) => {
 			if (e.key === 'Escape') {
 				e.preventDefault();
 				deleteRunGroupPending = null;
+			}
+		};
+		window.addEventListener('keydown', onKey);
+		return () => window.removeEventListener('keydown', onKey);
+	});
+
+	$effect(() => {
+		if (!deleteStorageRunGroupPending || !browser) return;
+		const onKey = (e: KeyboardEvent) => {
+			if (e.key === 'Escape') {
+				e.preventDefault();
+				deleteStorageRunGroupPending = null;
 			}
 		};
 		window.addEventListener('keydown', onKey);
@@ -1032,6 +1206,127 @@ import { get } from 'svelte/store';
 		loadRuns(loadedGroupCount);
 	}
 
+	let _inFlightRefreshController: AbortController | null = null;
+	let _inFlightRefreshBusy = false;
+	function revealThumbKeysForRuns(updatedRuns: ApiRun[]) {
+		if (filterActive) return;
+		if (!updatedRuns?.length) return;
+		const next = { ...visibleThumbKeys };
+		for (const r of updatedRuns) {
+			const groupId = r.run_group_id ?? r.id;
+			const imgs = r.images ?? [];
+			for (let i = 0; i < imgs.length; i++) {
+				next[`${groupId}-${r.id}-${i}`] = true;
+			}
+		}
+		visibleThumbKeys = next;
+	}
+	async function refreshLatestRunsPage(): Promise<void> {
+		if (!browser) return;
+		if (!data.projectId) return;
+		if (_inFlightRefreshBusy) return;
+		// Avoid racing the main list loader (which can abort/replace state).
+		if (loading || loadingMore) return;
+
+		_inFlightRefreshBusy = true;
+		if (_inFlightRefreshController) _inFlightRefreshController.abort();
+		const controller = new AbortController();
+		_inFlightRefreshController = controller;
+
+		const projectIdWeFetch = data.projectId;
+		const keyAtStart = activeRunsQueryKey;
+		try {
+			const q = new URLSearchParams();
+			q.set('limit', String(RUNS_PAGE_SIZE));
+			q.set('offset', '0');
+			if (filterAppId === DELETED_APP_FILTER_ID) {
+				q.set('deleted_app', '1');
+			} else if (filterAppId.trim()) {
+				q.set('app_id', filterAppId.trim());
+			}
+			if (filterFromDate.trim()) {
+				const fromMs = new Date(filterFromDate.trim()).setHours(0, 0, 0, 0);
+				q.set('since', String(fromMs));
+			}
+			if (filterToDate.trim()) {
+				const toMs = new Date(filterToDate.trim()).setHours(23, 59, 59, 999);
+				q.set('until', String(toMs));
+			}
+			if (filterMetaQ.trim()) q.set('meta_q', filterMetaQ.trim());
+			const url = `${apiBase}/projects/${projectIdWeFetch}/runs?${q.toString()}`;
+			const res = await fetch(url, { signal: controller.signal });
+			if (!res.ok) return;
+			// If navigation/filters changed mid-flight, do nothing.
+			if (data.projectId !== projectIdWeFetch) return;
+			if (activeRunsQueryKey !== keyAtStart) return;
+
+			const raw = await res.json().catch(() => null);
+			const mapRun = (r: ApiRun) => ({ ...r, run_group_id: r.run_group_id ?? null });
+			const newRuns: ApiRun[] =
+				raw && typeof raw === 'object' && Array.isArray((raw as any).runs)
+					? (raw as any).runs.map(mapRun)
+					: Array.isArray(raw)
+						? raw.map(mapRun)
+						: [];
+
+			if (raw && typeof raw === 'object' && typeof (raw as any).total === 'number') {
+				totalGroups = (raw as any).total;
+			}
+
+			if (newRuns.length) {
+				// Prepend any brand-new runs so they become visible without a manual refresh.
+				const existingIds = new Set(runs.map((r) => r.id));
+				const missing = newRuns.filter((r) => !existingIds.has(r.id));
+				if (missing.length) runs = [...missing, ...runs];
+				mergeUpdatedRuns(newRuns);
+				const idsToFetch = missing.map((r) => r.id);
+				if (idsToFetch.length) refetchStorageSizesForRunIds(idsToFetch, projectIdWeFetch);
+				// Ensure newly-arrived outputs actually get a `src` assigned (thumbSrc gating).
+				revealThumbKeysForRuns(newRuns);
+			}
+		} catch (e) {
+			if (e instanceof DOMException && e.name === 'AbortError') return;
+		} finally {
+			if (_inFlightRefreshController === controller) _inFlightRefreshController = null;
+			_inFlightRefreshBusy = false;
+		}
+	}
+
+	let _queuedRefreshTimer: number | null = null;
+	function stopQueuedRefresh() {
+		if (_queuedRefreshTimer != null) {
+			clearInterval(_queuedRefreshTimer);
+			_queuedRefreshTimer = null;
+		}
+		if (_inFlightRefreshController) {
+			_inFlightRefreshController.abort();
+			_inFlightRefreshController = null;
+		}
+		_inFlightRefreshBusy = false;
+	}
+	$effect(() => {
+		if (!browser) return;
+		const projectId = data.projectId;
+		const shouldRun = !!projectId && hasInFlightRuns;
+		if (!shouldRun) {
+			stopQueuedRefresh();
+			return;
+		}
+		if (_queuedRefreshTimer != null) return;
+
+		// Kick once immediately, then poll lightly while work is in-flight.
+		untrack(() => {
+			refreshLatestRunsPage();
+		});
+		_queuedRefreshTimer = window.setInterval(() => {
+			untrack(() => {
+				refreshLatestRunsPage();
+			});
+		}, 2500);
+
+		return () => stopQueuedRefresh();
+	});
+
 	async function loadStats() {
 		const projectIdWeFetch = data.projectId;
 		const requestId = ++statsRequestSeq;
@@ -1098,6 +1393,16 @@ import { get } from 'svelte/store';
 	}
 	function previewImageUrl(img: { filename: string; subfolder?: string; type?: string }, runId?: string) {
 		return imageUrl(img, runId) + '&preview=webp';
+	}
+	// Preview thumbnails for video must not request `embed_workflowui_metadata=1`, because
+	// thumbnails are not meant to carry WorkflowUI metadata chunks.
+	function videoThumbnailPreviewUrl(img: { filename: string; subfolder?: string; type?: string }, runId?: string) {
+		const subfolder = img.subfolder ?? '';
+		const type = img.type ?? 'output';
+		let url = `${apiBase}/image?filename=${encodeURIComponent(img.filename)}&subfolder=${encodeURIComponent(subfolder)}&type=${encodeURIComponent(type)}`;
+		if (runId) url += `&run_id=${encodeURIComponent(runId)}`;
+		url += '&preview=webp';
+		return url;
 	}
 
 	function openAppInProject(appSlug: string) {
@@ -1179,11 +1484,54 @@ import { get } from 'svelte/store';
 		defaultNewGroupsCollapsed = true;
 		collapsedGroups = new Set(runGroups.map((g) => g.groupId));
 	}
+	function toggleGroupFocus(groupId: string) {
+		if (focusedGroupId === groupId) {
+			focusedGroupId = null;
+			const scrollTopToRestore = runsScrollTopBeforeFocus;
+			runsScrollTopBeforeFocus = null;
+			if (leftPanelCollapsedBeforeFocus != null) {
+				leftPanelCollapsed = leftPanelCollapsedBeforeFocus;
+				leftPanelCollapsedBeforeFocus = null;
+			}
+			// Focusing hides the left panel content; preserve the inner runs list scroll.
+			if (browser && scrollTopToRestore != null) {
+				tick().then(() => {
+					requestAnimationFrame(() => {
+						if (!runsScrollEl) return;
+						runsScrollEl.scrollTop = scrollTopToRestore;
+					});
+				});
+			}
+			return;
+		}
+		// Only capture scroll position on unfocused -> focused transition.
+		if (browser && focusedGroupId == null && runsScrollEl) {
+			runsScrollTopBeforeFocus = runsScrollEl.scrollTop;
+		}
+		leftPanelCollapsedBeforeFocus = leftPanelCollapsed;
+		leftPanelCollapsed = true;
+		focusedGroupId = groupId;
+	}
 
-	let thumbnailSize = $state<ThumbSize>(browser ? getThumbSizeCookie() : 'medium');
-	function setThumbnailSize(size: ThumbSize) {
-		thumbnailSize = size;
-		if (browser) setThumbSizeCookie(size);
+	$effect(() => {
+		if (!browser || !focusedGroupId) return;
+		const onKeyDown = (event: KeyboardEvent) => {
+			if (event.key === 'Escape') toggleGroupFocus(focusedGroupId);
+		};
+		window.addEventListener('keydown', onKeyDown);
+		return () => window.removeEventListener('keydown', onKeyDown);
+	});
+
+	let thumbnailScale = $state<number>(browser ? getThumbSizeCookie() : 100);
+	function setThumbnailScale(value: number) {
+		const next = Math.min(THUMB_SCALE_MAX, Math.max(THUMB_SCALE_MIN, Math.round(value)));
+		thumbnailScale = next;
+		if (browser) setThumbSizeCookie(next);
+	}
+	let thumbnailFitMode = $state<ThumbFitMode>(browser ? getThumbFitModeCookie() : 'cover');
+	function setThumbnailFitMode(mode: ThumbFitMode) {
+		thumbnailFitMode = mode;
+		if (browser) setThumbFitModeCookie(mode);
 	}
 
 	let loadedThumbIds = $state<Record<string, boolean>>({});
@@ -1523,6 +1871,44 @@ import { get } from 'svelte/store';
 		}
 	}
 
+	function truncateOutputFilename(name: string, maxLen = 28): string {
+		const n = (name || '').trim();
+		if (n.length <= maxLen) return n;
+		const keep = maxLen - 1;
+		const a = Math.ceil(keep / 2);
+		const b = Math.floor(keep / 2);
+		return `${n.slice(0, a)}…${n.slice(-b)}`;
+	}
+
+	async function removeOutputsFromRun(groupId: string, runId: string, imageIndex: number) {
+		deleteError = null;
+		const key = `${runId}_${imageIndex}`;
+		deletingImageKeys = new Set([...deletingImageKeys, key]);
+		try {
+			const res = await fetch(`${apiBase}/runs/${runId}/remove-outputs`, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ indices: [imageIndex] }),
+			});
+			const payload = await res.json().catch(() => ({}));
+			if (res.ok) {
+				mergeUpdatedRuns(payload.updated_runs);
+				refetchStorageSizesForRunIds([runId]);
+				selectedInGroup = { ...selectedInGroup, [groupId]: new Set() };
+				thumbLoadFailed = new Set(
+					[...thumbLoadFailed].filter((k) => !k.startsWith(`${groupId}-${runId}-`)),
+				);
+			} else {
+				deleteError =
+					typeof payload?.detail === 'string' ? payload.detail : payload?.error ?? 'Remove failed';
+			}
+		} finally {
+			const next = new Set(deletingImageKeys);
+			next.delete(key);
+			deletingImageKeys = next;
+		}
+	}
+
 	async function deleteRemoteSelectedOrGroup(group: (typeof runGroups)[0]) {
 		const byRun = getSelectedByRun(group);
 		if (byRun.size > 0) {
@@ -1578,6 +1964,12 @@ import { get } from 'svelte/store';
 		deleteError = null;
 		if (byRun.size > 0) {
 		} else {
+			pruneStaleRunFavorites(group.runs);
+			const hasFav = group.runs.some((r) => favorites.has(r.id) && runHasDisplayableOutputs(r));
+			if (hasFav) {
+				deleteStorageRunGroupPending = { group, action: 'delete_remote' };
+				return;
+			}
 			await deleteRemoteRunGroup(group);
 		}
 	}
@@ -1636,6 +2028,12 @@ import { get } from 'svelte/store';
 		deleteError = null;
 		if (byRun.size > 0) {
 		} else {
+			pruneStaleRunFavorites(group.runs);
+			const hasFav = group.runs.some((r) => favorites.has(r.id) && runHasDisplayableOutputs(r));
+			if (hasFav) {
+				deleteStorageRunGroupPending = { group, action: 'delete_local' };
+				return;
+			}
 			await deleteLocalRunGroup(group);
 		}
 	}
@@ -1691,6 +2089,12 @@ import { get } from 'svelte/store';
 		deleteError = null;
 		if (byRun.size > 0) {
 		} else {
+			pruneStaleRunFavorites(group.runs);
+			const hasFav = group.runs.some((r) => favorites.has(r.id) && runHasDisplayableOutputs(r));
+			if (hasFav) {
+				deleteStorageRunGroupPending = { group, action: 'delete_all' };
+				return;
+			}
 			await deleteBothRunGroup(group);
 		}
 	}
@@ -1729,9 +2133,12 @@ let lightboxDeletePending = $state<
 				const remote_deleted = !!(img as { remote_deleted?: boolean }).remote_deleted;
 				const hasLocal = run.local_storage_status === 'saved' || run.local_storage_status === 'partial';
 				const hasRemote = !remote_deleted;
+				const fullUrl = imageUrl(img, run.id);
+				const thumbUrl = mt === 'video' ? videoThumbnailPreviewUrl(img, run.id) : undefined;
 				list.push({
 					id: imageKey(run.id, i),
-					url: imageUrl(img, run.id),
+					url: fullUrl,
+					thumbnailUrl: thumbUrl,
 					runId: run.id,
 					filename: img.filename,
 					mediaType: mt,
@@ -1763,6 +2170,8 @@ let lightboxDeletePending = $state<
 		document.querySelectorAll('audio').forEach((a) => a.pause());
 		document.querySelectorAll('video').forEach((v) => v.pause());
 		playingAudioThumbKey = null;
+		playingVideoThumbKey = null;
+		playingVideoThumbReady = false;
 
 		if (group?.groupId) setThumbKeysVisibleForGroup(group.groupId);
 		markThumbLoaded(group.groupId, run.id, imgIndex);
@@ -2052,6 +2461,19 @@ let lightboxDeletePending = $state<
 					</button>
 				{/if}
 				<p class="meta">Created {new Date(data.project.created_at).toLocaleDateString()} · {data.project.run_count} runs</p>
+				<p class="meta">
+					<button
+						type="button"
+						class="activity-link"
+						onclick={() => {
+							if (typeof window !== 'undefined') {
+								window.location.href = `/activity?project=${encodeURIComponent(data.project.id)}`;
+							}
+						}}
+					>
+						View project activity in global queue/recent feed
+					</button>
+				</p>
 				<label class="description-label">
 					<span class="filter-label">Description</span>
 					<textarea
@@ -2125,7 +2547,7 @@ let lightboxDeletePending = $state<
 						<span class="save-hint">Saving…</span>
 					{/if}
 				</div>
-				{#if data.project.id !== QUICK_RUNS_PROJECT_ID}
+				{#if data.project.id !== $quickRunsProject.id}
 					<div class="delete-archive-section">
 						<button
 							type="button"
@@ -2400,91 +2822,175 @@ let lightboxDeletePending = $state<
 				</div>
 				{#if !loading}
 					<div class="runs-list-head-actions">
-						{#if visibleRunGroups.length > 0}
-						<div class="move-runs-actions">
-							<button
-								type="button"
-								class="move-to-project-btn"
-								disabled={selectedRunIds.size === 0}
-								title={selectedRunIds.size === 0 ? 'Select at least one run using the checkbox on each group, then click here to move runs to another project' : `Move ${selectedRunIds.size} run(s) to another project`}
-								aria-label={selectedRunIds.size === 0 ? 'Select at least one run using the checkbox on each group to enable move' : 'Move selected runs to another project'}
-								onclick={() => (moveDialogOpen = true)}
-							>
-								Move to project
-							</button>
-							<span class="gallery-size-divider" aria-hidden="true"></span>
+						<!-- Desktop: keep the existing inline controls -->
+						<div class="runs-list-head-actions-desktop">
+							{#if visibleRunGroups.length > 0}
+								<div class="move-runs-actions">
+									<button
+										type="button"
+										class="move-to-project-btn"
+										disabled={selectedRunIds.size === 0}
+										title={selectedRunIds.size === 0 ? 'Select at least one run using the checkbox on each group, then click here to move runs to another project' : `Move ${selectedRunIds.size} run(s) to another project`}
+										aria-label={selectedRunIds.size === 0 ? 'Select at least one run using the checkbox on each group to enable move' : 'Move selected runs to another project'}
+										onclick={() => (moveDialogOpen = true)}
+									>
+										Move to project
+									</button>
+									<span class="gallery-size-divider" aria-hidden="true"></span>
+								</div>
+							{/if}
+							<label class="favorites-filter-option" title="Show only favorited runs">
+								<span class="favorites-filter-label">Favorites only</span>
+								<button
+									type="button"
+									role="switch"
+									aria-checked={filterFavoritesOnly}
+									class="favorites-filter-toggle"
+									class:on={filterFavoritesOnly}
+									aria-label="Show only favorited runs"
+									onclick={() => (filterFavoritesOnly = !filterFavoritesOnly)}
+								>
+									<span class="favorites-filter-toggle-track">
+										<span class="favorites-filter-toggle-thumb"></span>
+									</span>
+								</button>
+							</label>
+							{#if runGroups.length > 0}
+								<div class="collapse-all-actions">
+									<button type="button" class="collapse-all-btn" onclick={expandAll}>Expand all</button>
+									<button type="button" class="collapse-all-btn" onclick={collapseAll}>Collapse all</button>
+									<span class="gallery-size-divider" aria-hidden="true"></span>
+									<div class="gallery-thumb-size">
+										<label for="project-thumb-size">Thumbnail size</label>
+										<input
+											id="project-thumb-size"
+											type="range"
+											min={THUMB_SCALE_MIN}
+											max={THUMB_SCALE_MAX}
+											step="1"
+											value={thumbnailScale}
+											oninput={(e) => setThumbnailScale((e.currentTarget as HTMLInputElement).valueAsNumber)}
+											aria-label="Thumbnail size percentage"
+										/>
+										<span class="thumb-size-value">{thumbnailScale}%</span>
+									</div>
+									<span class="gallery-size-divider" aria-hidden="true"></span>
+									<div class="gallery-thumb-fit" role="group" aria-label="Thumbnail render mode">
+										<button
+											type="button"
+											class="collapse-all-btn thumb-fit-btn"
+											class:active={thumbnailFitMode === 'cover'}
+											onclick={() => setThumbnailFitMode('cover')}
+											title="Default thumbnail"
+											aria-label="Default thumbnail"
+											aria-pressed={thumbnailFitMode === 'cover'}
+										>
+											Default thumbnail
+										</button>
+										<button
+											type="button"
+											class="collapse-all-btn thumb-fit-btn"
+											class:active={thumbnailFitMode === 'contain'}
+											onclick={() => setThumbnailFitMode('contain')}
+											title="Fit into thumbnail"
+											aria-label="Fit into thumbnail"
+											aria-pressed={thumbnailFitMode === 'contain'}
+										>
+											Fit into thumbnail
+										</button>
+									</div>
+								</div>
+							{/if}
 						</div>
-						{/if}
-						<label class="favorites-filter-option" title="Show only favorited runs">
-							<span class="favorites-filter-label">Favorites only</span>
-							<button
-								type="button"
-								role="switch"
-								aria-checked={filterFavoritesOnly}
-								class="favorites-filter-toggle"
-								class:on={filterFavoritesOnly}
-								aria-label="Show only favorited runs"
-								onclick={() => (filterFavoritesOnly = !filterFavoritesOnly)}
-							>
-								<span class="favorites-filter-toggle-track">
-									<span class="favorites-filter-toggle-thumb"></span>
-								</span>
-							</button>
-						</label>
-						{#if runGroups.length > 0}
-						<div class="collapse-all-actions">
-							<button type="button" class="collapse-all-btn" onclick={expandAll}>Expand all</button>
-						<button type="button" class="collapse-all-btn" onclick={collapseAll}>Collapse all</button>
-						<span class="gallery-size-divider" aria-hidden="true"></span>
-						<div class="gallery-thumb-size" role="group" aria-label="Thumbnail size">
-							<button
-								type="button"
-								class="collapse-all-btn thumb-size-btn"
-								class:active={thumbnailSize === 'small'}
-								onclick={() => setThumbnailSize('small')}
-								title="Small thumbnails"
-								aria-label="Small thumbnails"
-								aria-pressed={thumbnailSize === 'small'}
-							>
-								<svg class="thumb-size-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-									<rect x="2" y="2" width="8" height="8" rx="1"/>
-									<rect x="14" y="2" width="8" height="8" rx="1"/>
-									<rect x="2" y="14" width="8" height="8" rx="1"/>
-									<rect x="14" y="14" width="8" height="8" rx="1"/>
-								</svg>
-							</button>
-							<button
-								type="button"
-								class="collapse-all-btn thumb-size-btn"
-								class:active={thumbnailSize === 'medium'}
-								onclick={() => setThumbnailSize('medium')}
-								title="Medium thumbnails"
-								aria-label="Medium thumbnails"
-								aria-pressed={thumbnailSize === 'medium'}
-							>
-								<svg class="thumb-size-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-									<rect x="2" y="4" width="9" height="9" rx="1"/>
-									<rect x="13" y="4" width="9" height="9" rx="1"/>
-									<rect x="2" y="15" width="9" height="7" rx="1"/>
-									<rect x="13" y="15" width="9" height="7" rx="1"/>
-								</svg>
-							</button>
-							<button
-								type="button"
-								class="collapse-all-btn thumb-size-btn"
-								class:active={thumbnailSize === 'large'}
-								onclick={() => setThumbnailSize('large')}
-								title="Large thumbnails"
-								aria-label="Large thumbnails"
-								aria-pressed={thumbnailSize === 'large'}
-							>
-								<svg class="thumb-size-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-									<rect x="3" y="3" width="18" height="18" rx="2"/>
-								</svg>
-							</button>
+
+						<!-- Mobile: collapse the "gallery controls" into a drawer -->
+						<div class="runs-list-head-actions-mobile">
+							<label class="favorites-filter-option" title="Show only favorited runs">
+								<span class="favorites-filter-label">Favorites only</span>
+								<button
+									type="button"
+									role="switch"
+									aria-checked={filterFavoritesOnly}
+									class="favorites-filter-toggle"
+									class:on={filterFavoritesOnly}
+									aria-label="Show only favorited runs"
+									onclick={() => (filterFavoritesOnly = !filterFavoritesOnly)}
+								>
+									<span class="favorites-filter-toggle-track">
+										<span class="favorites-filter-toggle-thumb"></span>
+									</span>
+								</button>
+							</label>
+
+							{#if runGroups.length > 0}
+								<details class="thumbnails-controls-drawer" aria-label="Thumbnail controls">
+									<summary aria-label="Open thumbnail controls">
+										<span>Thumbnails</span>
+										<span class="thumb-drawer-summary-value">{thumbnailScale}%</span>
+									</summary>
+
+									<div class="thumbnails-controls-inner">
+										{#if visibleRunGroups.length > 0}
+											<button
+												type="button"
+												class="move-to-project-btn"
+												disabled={selectedRunIds.size === 0}
+												title={selectedRunIds.size === 0 ? 'Select at least one run using the checkbox on each group, then click here to move runs to another project' : `Move ${selectedRunIds.size} run(s) to another project`}
+												aria-label={selectedRunIds.size === 0 ? 'Select at least one run using the checkbox on each group to enable move' : 'Move selected runs to another project'}
+												onclick={() => (moveDialogOpen = true)}
+											>
+												Move to project
+											</button>
+										{/if}
+
+										<div class="collapse-all-actions">
+											<button type="button" class="collapse-all-btn" onclick={expandAll}>Expand all</button>
+											<button type="button" class="collapse-all-btn" onclick={collapseAll}>Collapse all</button>
+										</div>
+
+										<div class="gallery-thumb-size">
+											<label for="project-thumb-size-mobile">Thumbnail size</label>
+											<input
+												id="project-thumb-size-mobile"
+												type="range"
+												min={THUMB_SCALE_MIN}
+												max={THUMB_SCALE_MAX}
+												step="1"
+												value={thumbnailScale}
+												oninput={(e) => setThumbnailScale((e.currentTarget as HTMLInputElement).valueAsNumber)}
+												aria-label="Thumbnail size percentage"
+											/>
+											<span class="thumb-size-value">{thumbnailScale}%</span>
+										</div>
+
+										<div class="gallery-thumb-fit" role="group" aria-label="Thumbnail render mode">
+											<button
+												type="button"
+												class="collapse-all-btn thumb-fit-btn"
+												class:active={thumbnailFitMode === 'cover'}
+												onclick={() => setThumbnailFitMode('cover')}
+												title="Default thumbnail"
+												aria-label="Default thumbnail"
+												aria-pressed={thumbnailFitMode === 'cover'}
+											>
+												Default thumbnail
+											</button>
+											<button
+												type="button"
+												class="collapse-all-btn thumb-fit-btn"
+												class:active={thumbnailFitMode === 'contain'}
+												onclick={() => setThumbnailFitMode('contain')}
+												title="Fit into thumbnail"
+												aria-label="Fit into thumbnail"
+												aria-pressed={thumbnailFitMode === 'contain'}
+											>
+												Fit into thumbnail
+											</button>
+										</div>
+									</div>
+								</details>
+							{/if}
 						</div>
-						</div>
-						{/if}
 					</div>
 				{/if}
 			</div>
@@ -2499,7 +3005,7 @@ let lightboxDeletePending = $state<
 				<div class="runs-loading-wrap">
 					<PageLoadingIndicator />
 				</div>
-			{:else if !visibleRunGroups.length}
+			{:else if !displayRunGroups.length}
 				{#if data.project.run_count === 0 && (data.appsForNew?.length ?? 0) > 0}
 					<div class="empty-project-state">
 						<div class="empty-project-icon" aria-hidden="true">
@@ -2533,7 +3039,7 @@ let lightboxDeletePending = $state<
 			{:else}
 				<div class="runs-scroll" bind:this={runsScrollEl}>
 					{#key runsRenderKey}
-					{#each visibleRunGroups as group (group.groupId)}
+					{#each displayRunGroups as group (group.groupId)}
 						{@const storageSummary = getGroupStorageSummary(group)}
 						{@const savingGroup = savingGroupIds.has(group.groupId)}
 						{@const deletingGroup = deletingGroupIds.has(group.groupId)}
@@ -2651,8 +3157,8 @@ let lightboxDeletePending = $state<
 								</div>
 								<RunHeaderActions
 									storageSummary={storageSummary}
-									localStorageBytes={storageSummary != null ? group.runs.reduce((s, r) => s + (r.local_storage_bytes ?? 0), 0) : undefined}
-									remoteStorageBytes={storageSummary != null ? group.runs.reduce((s, r) => s + (r.remote_storage_bytes ?? 0), 0) : undefined}
+									localStorageBytes={storageSummary != null ? sumKnownStorageBytes(group, 'local_storage_bytes') : undefined}
+									remoteStorageBytes={storageSummary != null ? sumKnownStorageBytes(group, 'remote_storage_bytes') : undefined}
 									status={group.status}
 									createdAt={group.createdAt}
 									timeExtra=""
@@ -2681,6 +3187,10 @@ let lightboxDeletePending = $state<
 									replicateTitle={group.app_removed ? 'App was deleted; cannot replicate this run. No generated data was removed.' : 'Open this app with the same parameters to replicate the run'}
 									showShowMetadata={true}
 									onShowMetadata={() => { metadataPanelRunId = group.firstRunId; metadataPanelMode = 'run'; }}
+									showFullscreenToggle={true}
+									fullscreenActive={focusedGroupId === group.groupId}
+									onToggleFullscreen={() => toggleGroupFocus(group.groupId)}
+									fullscreenTitle="Focus this run in fullscreen (Esc to exit)"
 									collapseIcon={collapsedGroups.has(group.groupId) ? '▸' : '▾'}
 									hasSelection={hasGroupSelection}
 								/>
@@ -2758,9 +3268,8 @@ let lightboxDeletePending = $state<
 										{/if}
 										<div
 											class="output-section-body"
-											class:thumb-size-small={thumbnailSize === 'small'}
-											class:thumb-size-medium={thumbnailSize === 'medium'}
-											class:thumb-size-large={thumbnailSize === 'large'}
+											style={`--thumb-size-scale:${thumbnailScale / 100};`}
+											class:thumb-fit-contain={thumbnailFitMode === 'contain'}
 										>
 											{#each group.runs as run (run.id)}
 												{@const visibleImages = (run.images ?? []).map((item, origI) => ({ item, origI })).filter(({ item }) => { const rd = !!(item as { remote_deleted?: boolean }).remote_deleted; if (!rd) return true; if (run.local_storage_status === 'saved' || run.local_storage_status === 'partial') return true; return false; })}
@@ -2771,8 +3280,11 @@ let lightboxDeletePending = $state<
 													{@const isVideo = itemType === 'video'}
 													{@const isAudio = itemType === 'audio'}
 													{@const thumbKey = `${group.groupId}-${run.id}-${origI}`}
-													{@const showDeletedPlaceholder = isRemoteDeleted && thumbLoadFailed.has(thumbKey)}
-													{@const isLoaded = !!loadedThumbIds[thumbKey] || showDeletedPlaceholder}
+													{@const thumbFailed = thumbLoadFailed.has(thumbKey)}
+													{@const showDeletedPlaceholder = isRemoteDeleted && thumbFailed}
+													{@const showNotFoundPlaceholder = !isRemoteDeleted && thumbFailed}
+													{@const showAnyMediaPlaceholder = showDeletedPlaceholder || showNotFoundPlaceholder}
+													{@const isLoaded = !!loadedThumbIds[thumbKey] || showAnyMediaPlaceholder}
 													{@const isDeleting = deletingImageKeys.has(key) || deletingLocalImageKeys.has(key) || deletingBothImageKeys.has(key)}
 													{@const hasLocalStorage = run.local_storage_status === 'saved' || run.local_storage_status === 'partial'}
 													<div
@@ -2781,6 +3293,7 @@ let lightboxDeletePending = $state<
 														class:output-thumb-video={isVideo}
 														class:output-thumb-audio={isAudio}
 														class:output-thumb-deleted={showDeletedPlaceholder}
+														class:output-thumb-not-found={showNotFoundPlaceholder}
 														class:output-thumb-deleting={isDeleting}
 														class:audio-playing={isAudio && playingAudioThumbKey === thumbKey}
 														class:thumb-selected={isImageSelected(group.groupId, key)}
@@ -2789,7 +3302,7 @@ let lightboxDeletePending = $state<
 														tabindex="0"
 														use:thumbLoadFallback={{ groupId: group.groupId, runId: run.id, index: origI, thumbKey }}
 														onclick={(e) => {
-														if (showDeletedPlaceholder || isDeleting) return;
+														if (showAnyMediaPlaceholder || isDeleting) return;
 														const target = e.target as HTMLElement;
 														const thumb = target.closest('.output-thumb');
 														const audio = thumb?.querySelector<HTMLAudioElement>('audio');
@@ -2808,14 +3321,14 @@ let lightboxDeletePending = $state<
 													}}
 													onkeydown={(e) => {
 														if (e.key !== 'Enter') return;
-														if (showDeletedPlaceholder || isDeleting) return;
+														if (showAnyMediaPlaceholder || isDeleting) return;
 														if ((e.target as HTMLElement).closest('.output-thumb-audio-play-btn, .output-thumb-audio-controls-wrap')) return;
 														openLightboxFromImage(group, run, origI);
 													}}
-														onmouseenter={(e) => { if (isVideo) (e.currentTarget as HTMLElement).querySelector<HTMLVideoElement>('video')?.play().catch(() => {}); }}
-														onmouseleave={(e) => { if (isVideo) (e.currentTarget as HTMLElement).querySelector<HTMLVideoElement>('video')?.pause(); }}
+														onmouseenter={() => { if (isVideo) { playingVideoThumbReady = false; playingVideoThumbKey = thumbKey; } }}
+														onmouseleave={() => { if (isVideo && playingVideoThumbKey === thumbKey) playingVideoThumbKey = null; }}
 													>
-														<span class="thumb-loading" class:hide={isLoaded} aria-hidden="true">
+														<span class="thumb-loading" class:hide={isVideo && playingVideoThumbKey === thumbKey ? playingVideoThumbReady : isLoaded} aria-hidden="true">
 															<span class="thumb-loading-spinner" aria-hidden="true"></span>
 														</span>
 														{#if isDeleting}
@@ -2826,6 +3339,7 @@ let lightboxDeletePending = $state<
 														{/if}
 														<ThumbnailOverlay
 															mediaType={isVideo ? 'video' : isAudio ? 'audio' : 'image'}
+															resolution={isAudio ? undefined : mediaResolutionLabel(key)}
 															seed={run.seed ?? undefined}
 															executionTimeSec={run.execution_time ?? undefined}
 															isFavorite={favorites.has(run.id)}
@@ -2834,8 +3348,8 @@ let lightboxDeletePending = $state<
 															showFavorite={true}
 															showSelection={true}
 															showSeed={true}
-															showDownload={!showDeletedPlaceholder}
-															showSendToApp={!showDeletedPlaceholder}
+															showDownload={!showAnyMediaPlaceholder}
+															showSendToApp={!showAnyMediaPlaceholder}
 															onMetadataClick={() => { metadataPanelRunId = run.id; metadataPanelMode = 'output'; }}
 															onToggleFavorite={() => toggleFavorite(run.id)}
 															onToggleSelection={() => toggleImageSelection(group.groupId, key)}
@@ -2851,26 +3365,57 @@ let lightboxDeletePending = $state<
 																	</svg>
 																	<span>Deleted</span>
 																</div>
+															{:else if showNotFoundPlaceholder}
+																<div class="output-thumb-not-found-placeholder">
+																	<span class="output-thumb-not-found-label" aria-hidden="true">Not found</span>
+																	<span class="output-thumb-not-found-filename" title={(item as { filename?: string }).filename ?? ''}>{truncateOutputFilename((item as { filename?: string }).filename ?? '')}</span>
+																	<button
+																		type="button"
+																		class="output-thumb-remove-from-run-btn"
+																		disabled={isDeleting}
+																		title="Remove this missing file from the run record"
+																		aria-label="Remove missing output from run"
+																		onkeydown={(e) => e.stopPropagation()}
+																		onpointerdown={(e) => e.stopPropagation()}
+																		onmousedown={(e) => e.stopPropagation()}
+																		onclick={(e) => {
+																			e.stopPropagation();
+																			removeOutputsFromRun(group.groupId, run.id, origI);
+																		}}
+																	>
+																		Remove from run
+																	</button>
+																</div>
 															{:else if isVideo}
-																<video
-																	src={thumbSrc(thumbKey, imageUrl(item, run.id))}
-																	preload="metadata"
-																	muted
-																	playsinline
-																	loop
-																	aria-hidden="true"
-																	onloadeddata={(e) => {
-																		const v = e.currentTarget;
-																		if (v) { v.currentTime = 0; v.pause(); }
-																		markThumbLoaded(group.groupId, run.id, origI);
-																	}}
-																	onloadedmetadata={(e) => {
-																		const v = e.currentTarget;
-																		if (v) { v.currentTime = 0; v.pause(); }
-																		markThumbLoaded(group.groupId, run.id, origI);
-																	}}
-																	onerror={() => { markThumbLoaded(group.groupId, run.id, origI); if (isRemoteDeleted) markThumbLoadFailed(thumbKey); }}
-																></video>
+																{#if playingVideoThumbKey === thumbKey}
+																	<video
+																		src={imageUrl(item, run.id)}
+																		preload="metadata"
+																		autoplay
+																		muted
+																		playsinline
+																		loop
+																		aria-hidden="true"
+																		onloadedmetadata={(e) => onVideoThumbMetadataLoad(group.groupId, run.id, origI, thumbKey, e)}
+																		onerror={() => {
+																			if (playingVideoThumbKey !== thumbKey) return;
+																			playingVideoThumbReady = true;
+																			markThumbLoaded(group.groupId, run.id, origI);
+																			markThumbLoadFailed(thumbKey);
+																		}}
+																	></video>
+																{:else}
+																	<img
+																		src={thumbSrc(thumbKey, videoThumbnailPreviewUrl(item, run.id))}
+																		alt=""
+																		loading="lazy"
+																		onload={() => {
+																			markThumbLoaded(group.groupId, run.id, origI);
+																			preloadVideoResolutionOnce(run.id, origI, imageUrl(item, run.id));
+																		}}
+																		onerror={() => { markThumbLoaded(group.groupId, run.id, origI); markThumbLoadFailed(thumbKey); }}
+																	/>
+																{/if}
 																<span class="output-thumb-play" aria-hidden="true" title="Play video">
 																	<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>
 																</span>
@@ -2900,7 +3445,7 @@ let lightboxDeletePending = $state<
 																			playsinline
 																			onloadeddata={() => markThumbLoaded(group.groupId, run.id, origI)}
 																			onloadedmetadata={() => markThumbLoaded(group.groupId, run.id, origI)}
-																			onerror={() => { markThumbLoaded(group.groupId, run.id, origI); if (isRemoteDeleted) markThumbLoadFailed(thumbKey); }}
+																			onerror={() => { markThumbLoaded(group.groupId, run.id, origI); markThumbLoadFailed(thumbKey); }}
 																			onplay={(e) => {
 																				const el = e.currentTarget as HTMLAudioElement;
 																				document.querySelectorAll('audio').forEach((a) => { if (a !== el) a.pause(); });
@@ -2917,8 +3462,8 @@ let lightboxDeletePending = $state<
 																	src={thumbSrc(thumbKey, imageUrl(item, run.id))}
 																	alt=""
 																	loading="lazy"
-																	onload={() => markThumbLoaded(group.groupId, run.id, origI)}
-																	onerror={() => { markThumbLoaded(group.groupId, run.id, origI); if (isRemoteDeleted) markThumbLoadFailed(thumbKey); }}
+																	onload={(e) => onImageThumbLoad(group.groupId, run.id, origI, e)}
+																	onerror={() => { markThumbLoaded(group.groupId, run.id, origI); markThumbLoadFailed(thumbKey); }}
 																/>
 															{/if}
 														</ThumbnailOverlay>
@@ -2992,6 +3537,7 @@ let lightboxDeletePending = $state<
 			runId={metadataPanelRunId}
 			projectId={data.projectId}
 			mode={metadataPanelMode}
+			embedWorkflowuiMetadataOnDownload={data.embedWorkflowuiMetadataOnDownload ?? false}
 			onClose={() => { metadataPanelRunId = null; }}
 		/>
 	{/if}
@@ -3050,6 +3596,59 @@ let lightboxDeletePending = $state<
 				onCancel={() => { deleteRunGroupPending = null; }}
 			/>
 		{/if}
+	{/if}
+
+	{#if deleteStorageRunGroupPending}
+		{@const pending = deleteStorageRunGroupPending}
+		{@const group = pending.group}
+		{@const action = pending.action}
+		{@const nonFavIds = group.runs.filter((r) => !favorites.has(r.id)).map((r) => r.id)}
+		{@const hasNonFav = nonFavIds.length > 0}
+		{@const title = action === 'delete_remote' ? 'Delete remote' : action === 'delete_local' ? 'Delete local' : 'Delete all'}
+		{@const scopeLine = action === 'delete_remote'
+			? 'Deletes files on the ComfyUI server where present.'
+			: action === 'delete_local'
+				? 'Deletes local files where present.'
+				: 'Deletes files on both local storage and the ComfyUI server where present.'}
+		{@const allLabel = action === 'delete_remote'
+			? 'Delete remote (including favorites)'
+			: action === 'delete_local'
+				? 'Delete local (including favorites)'
+				: 'Delete all (including favorites)'}
+		<div
+			class="confirm-delete-overlay"
+			role="dialog"
+			aria-modal="true"
+			aria-labelledby="delete-storage-nonfav-dialog-title"
+			tabindex="-1"
+			onclick={() => { deleteStorageRunGroupPending = null; }}
+			onkeydown={(e) => { if (e.key === 'Escape') deleteStorageRunGroupPending = null; }}
+		>
+			<div class="confirm-delete-card delete-run-fav-card" role="presentation" tabindex="-1" onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.stopPropagation()}>
+				<p id="delete-storage-nonfav-dialog-title" class="confirm-delete-title">{title}</p>
+				<p class="confirm-delete-msg">This run group includes favorited runs. What do you want to do?</p>
+				<p class="confirm-delete-msg">{scopeLine}</p>
+				<div class="delete-run-fav-actions">
+					<button
+						type="button"
+						class="confirm-delete-btn danger"
+						disabled={!hasNonFav}
+						title={!hasNonFav ? 'All runs in this group are favorited.' : undefined}
+						onclick={async () => { await confirmDeleteStorageRunGroup('non_favorites'); }}
+					>Delete non-favorites only</button>
+					<button
+						type="button"
+						class="confirm-delete-btn danger"
+						onclick={async () => { await confirmDeleteStorageRunGroup('all'); }}
+					>{allLabel}</button>
+					<button
+						type="button"
+						class="confirm-delete-btn secondary"
+						onclick={() => { deleteStorageRunGroupPending = null; }}
+					>Cancel</button>
+				</div>
+			</div>
+		</div>
 	{/if}
 
 	{#if deleteConfirmPending}
@@ -3491,6 +4090,18 @@ let lightboxDeletePending = $state<
 		margin: 0 0 0.75rem 0;
 		font-size: 0.85rem;
 		color: var(--text-muted);
+	}
+	.activity-link {
+		background: none;
+		border: none;
+		padding: 0;
+		color: var(--accent);
+		text-decoration: none;
+		cursor: pointer;
+		font: inherit;
+	}
+	.activity-link:hover {
+		text-decoration: underline;
 	}
 	.tags {
 		display: flex;
@@ -4076,6 +4687,18 @@ let lightboxDeletePending = $state<
 		gap: 0.5rem;
 		flex-wrap: wrap;
 	}
+	.runs-list-head-actions-desktop {
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+		flex-wrap: wrap;
+	}
+	.runs-list-head-actions-mobile {
+		display: none;
+		align-items: center;
+		gap: 0.5rem;
+		flex-wrap: wrap;
+	}
 	.move-runs-actions {
 		display: flex;
 		align-items: center;
@@ -4248,20 +4871,80 @@ let lightboxDeletePending = $state<
 		background: var(--border);
 		margin: 0 0.15rem;
 	}
+
+	/* Mobile: collapse gallery controls (thumb size/fit, expand/collapse all) */
+	@media (max-width: 639px) {
+		.runs-list-head-actions-desktop {
+			display: none;
+		}
+		.runs-list-head-actions-mobile {
+			display: flex;
+		}
+
+		.thumbnails-controls-drawer {
+			position: relative;
+			z-index: 25;
+		}
+		.thumbnails-controls-drawer > summary {
+			list-style: none;
+			cursor: pointer;
+			display: inline-flex;
+			align-items: center;
+			gap: 0.5rem;
+			padding: 0.4rem 0.6rem;
+			background: var(--surface);
+			border: 1px solid var(--border);
+			border-radius: 8px;
+			color: var(--text);
+			font-size: 0.85rem;
+			font-weight: 600;
+			user-select: none;
+		}
+		.thumbnails-controls-drawer > summary::-webkit-details-marker {
+			display: none;
+		}
+		.thumb-drawer-summary-value {
+			color: var(--muted);
+			font-weight: 600;
+			font-variant-numeric: tabular-nums;
+		}
+		.thumbnails-controls-inner {
+			margin-top: 0.5rem;
+			display: flex;
+			flex-direction: column;
+			gap: 0.75rem;
+			background: var(--card);
+			border: 1px solid var(--border);
+			border-radius: 10px;
+			padding: 0.75rem;
+			box-shadow: 0 10px 26px rgba(0, 0, 0, 0.25);
+			min-width: min(360px, 92vw);
+		}
+	}
 	.gallery-thumb-size {
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+	}
+	.gallery-thumb-fit {
 		display: flex;
 		align-items: center;
 		gap: 0.2rem;
 	}
-	.thumb-size-btn {
-		padding: 0.35rem 0.45rem;
+	.gallery-thumb-size label {
+		font-size: 0.8rem;
+		color: var(--muted);
 	}
-	.thumb-size-btn .thumb-size-icon {
-		width: 18px;
-		height: 18px;
-		display: block;
+	.gallery-thumb-size input[type='range'] {
+		width: min(280px, 48vw);
 	}
-	.thumb-size-btn.active {
+	.thumb-size-value {
+		min-width: 3.5rem;
+		font-size: 0.8rem;
+		color: var(--muted);
+		text-align: right;
+	}
+	.thumb-fit-btn.active {
 		background: color-mix(in srgb, var(--accent) 22%, var(--surface));
 		border-color: var(--accent);
 		color: var(--accent);
@@ -4585,28 +5268,16 @@ let lightboxDeletePending = $state<
 		padding: 0.75rem;
 		border-top: 1px solid var(--border);
 	}
-	.output-section-body.thumb-size-small {
-		grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-	}
-	.output-section-body.thumb-size-medium {
-		grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
-	}
-	.output-section-body.thumb-size-large {
-		grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+	.output-section-body {
+		grid-template-columns: repeat(auto-fill, minmax(calc(260px * var(--thumb-size-scale, 1)), 1fr));
 	}
 	@media (max-width: 639px) {
 		.output-section-body {
 			gap: 0.5rem;
 			padding: 0.5rem;
 		}
-		.output-section-body.thumb-size-small {
-			grid-template-columns: repeat(auto-fill, minmax(92px, 1fr));
-		}
-		.output-section-body.thumb-size-medium {
-			grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
-		}
-		.output-section-body.thumb-size-large {
-			grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+		.output-section-body {
+			grid-template-columns: repeat(auto-fill, minmax(calc(120px * var(--thumb-size-scale, 1)), 1fr));
 		}
 		.run-section {
 			min-width: 0;
@@ -4646,6 +5317,11 @@ let lightboxDeletePending = $state<
 		object-fit: cover;
 		display: block;
 	}
+	.output-section-body.thumb-fit-contain .output-thumb img,
+	.output-section-body.thumb-fit-contain .output-thumb video {
+		object-fit: contain;
+		background: #0b0b0b;
+	}
 	.thumb-loading {
 		position: absolute;
 		inset: 0;
@@ -4674,8 +5350,53 @@ let lightboxDeletePending = $state<
 	@keyframes thumb-spin {
 		to { transform: rotate(360deg); }
 	}
-	.output-thumb-deleted .thumb-loading {
+	.output-thumb-deleted .thumb-loading,
+	.output-thumb-not-found .thumb-loading {
 		display: none;
+	}
+	.output-thumb-not-found-placeholder {
+		position: absolute;
+		inset: 0;
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		justify-content: center;
+		gap: 0.35rem;
+		padding: 0.5rem;
+		text-align: center;
+		background: var(--surface);
+		color: var(--muted);
+		font-size: 0.7rem;
+		z-index: 1;
+	}
+	.output-thumb-not-found-label {
+		font-weight: 600;
+		color: var(--text);
+		font-size: 0.72rem;
+	}
+	.output-thumb-not-found-filename {
+		word-break: break-all;
+		line-height: 1.2;
+		max-height: 3.6em;
+		overflow: hidden;
+	}
+	.output-thumb-remove-from-run-btn {
+		margin-top: 0.25rem;
+		padding: 0.25rem 0.5rem;
+		font-size: 0.68rem;
+		border-radius: 6px;
+		border: 1px solid var(--border);
+		background: var(--bg);
+		color: var(--text);
+		cursor: pointer;
+	}
+	.output-thumb-remove-from-run-btn:hover:not(:disabled) {
+		border-color: var(--accent);
+		color: var(--accent);
+	}
+	.output-thumb-remove-from-run-btn:disabled {
+		opacity: 0.6;
+		cursor: not-allowed;
 	}
 	.output-thumb-deleted-placeholder {
 		position: absolute;

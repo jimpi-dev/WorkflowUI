@@ -1,5 +1,20 @@
 import { getApiBase } from '$lib/config';
 
+function normalizeComfyuiWorkflows(list: unknown): { id: string; label: string }[] {
+	if (!Array.isArray(list)) return [];
+	return list.flatMap((item) => {
+		if (typeof item === 'string' && item.trim()) {
+			return [{ id: item, label: item }];
+		}
+		if (!item || typeof item !== 'object') return [];
+		const rec = item as Record<string, unknown>;
+		if (typeof rec.id !== 'string' || !rec.id.trim()) return [];
+		const id = rec.id;
+		const label = typeof rec.label === 'string' && rec.label.trim() ? rec.label : id;
+		return [{ id, label }];
+	});
+}
+
 export const load = async ({ fetch }) => {
 	const base = getApiBase() || '';
 	let embedOnDownload = false;
@@ -20,12 +35,7 @@ export const load = async ({ fetch }) => {
 		if (wfRes.ok) {
 			const data = await wfRes.json();
 			const list = Array.isArray(data) ? data : data?.workflows;
-			if (Array.isArray(list)) {
-				comfyuiWorkflows = list.map((w: { id?: string; label?: string }) => ({
-					id: typeof w.id === 'string' ? w.id : String(w.id ?? ''),
-					label: typeof w.label === 'string' ? w.label : (w.id != null ? String(w.id) : '')
-				})).filter((w: { id: string }) => w.id);
-			}
+			comfyuiWorkflows = normalizeComfyuiWorkflows(list);
 			if (comfyuiWorkflows.length === 0 && typeof data?.error === 'string' && data.error) {
 				comfyuiWorkflowsError = data.error;
 			}

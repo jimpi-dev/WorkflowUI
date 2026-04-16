@@ -3,11 +3,11 @@ import logging
 import time
 import uuid
 
-import requests
 from fastapi import APIRouter, HTTPException, Depends, UploadFile, File
 
 from services.workflow_import_service import IdempotentImport
 from services.workflow_convert import convert_workflow_via_comfy, is_api_format_prompt
+from services.comfyui_workflow_fetch import fetch_workflow_from_comfyui
 
 logger = logging.getLogger(__name__)
 from services.png_metadata import read_workflowui_chunk
@@ -41,6 +41,23 @@ def _find_available_slug(base_slug: str, app_repo) -> str:
     return f"{candidate}_{n}"
 
 
+def _embedded_display_names(payload: dict) -> tuple[str | None, str | None]:
+    """Titles from the embedded file snapshot (not DB). Used when opening an existing app."""
+    title = None
+    wf_name = None
+    app_snap = payload.get("app")
+    if isinstance(app_snap, dict):
+        t = app_snap.get("title")
+        if isinstance(t, str) and t.strip():
+            title = t.strip()
+    wf_snap = payload.get("workflow")
+    if isinstance(wf_snap, dict):
+        n = wf_snap.get("name")
+        if isinstance(n, str) and n.strip():
+            wf_name = n.strip()
+    return title, wf_name
+
+
 def _import_from_workflowui_payload(payload: dict, db):
     _, workflow_repo, app_repo, run_repo, project_repo, _, import_service = db
     wv_id = payload.get("workflow_version_id")
@@ -50,11 +67,12 @@ def _import_from_workflowui_payload(payload: dict, db):
         version = workflow_repo.get_workflow_version(wv_id)
         if app and version:
             definition = workflow_repo.get_workflow_definition(version.workflow_id) if version else None
+            emb_title, emb_wf = _embedded_display_names(payload)
             out = {
                 "action": "open",
                 "app_slug": app.slug,
-                "app_title": app.title if app else None,
-                "workflow_name": definition.name if definition else None,
+                "app_title": emb_title or (app.title if app else None),
+                "workflow_name": emb_wf or (definition.name if definition else None),
             }
             if payload.get("input_snapshot") is not None:
                 out["input_snapshot"] = payload["input_snapshot"]
@@ -86,11 +104,12 @@ def _import_from_workflowui_payload(payload: dict, db):
     if existing_app:
         version = workflow_repo.get_workflow_version(existing_app.workflow_version_id) if existing_app.workflow_version_id else None
         definition = workflow_repo.get_workflow_definition(version.workflow_id) if version else None
+        emb_title, emb_wf = _embedded_display_names(payload)
         out = {
             "action": "open",
             "app_slug": existing_app.slug,
-            "app_title": existing_app.title,
-            "workflow_name": definition.name if definition else None,
+            "app_title": emb_title or existing_app.title,
+            "workflow_name": emb_wf or (definition.name if definition else None),
         }
         if payload.get("input_snapshot") is not None:
             out["input_snapshot"] = payload["input_snapshot"]
@@ -311,26 +330,7 @@ def _minimal_app_payload(workflow_name: str, graph: dict, db) -> dict:
 
 def _fetch_workflow_from_comfyui_plugin(workflow_id: str):
     """Fetch workflow in API format from ComfyUI WorkflowUI plugin. Returns (name, graph) or raises HTTPException."""
-    base = (COMFY_URL or "").rstrip("/")
-    if not base:
-        raise HTTPException(status_code=503, detail="ComfyUI URL not configured")
-    url = f"{base}/workflowui/workflows/{requests.utils.quote(workflow_id, safe='')}"
-    try:
-        r = requests.get(url, timeout=15)
-        r.raise_for_status()
-        data = r.json()
-    except requests.RequestException as e:
-        raise HTTPException(
-            status_code=502,
-            detail=f"ComfyUI plugin unreachable: {e!s}",
-        ) from e
-    if not isinstance(data, dict):
-        raise HTTPException(status_code=502, detail="ComfyUI plugin returned invalid response")
-    graph = data.get("graph")
-    name = data.get("name") or workflow_id or "Imported from ComfyUI"
-    if not isinstance(graph, dict) or not graph:
-        raise HTTPException(status_code=502, detail="ComfyUI plugin did not return a valid workflow graph")
-    return name.strip() or "Imported from ComfyUI", graph
+    return fetch_workflow_from_comfyui(COMFY_URL, workflow_id)
 
 
 @router.post("/import/from-comfyui")

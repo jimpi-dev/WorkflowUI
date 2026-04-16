@@ -188,7 +188,7 @@ class MediaStorageService:
                     self._run_repo.update_run(
                         run_id,
                         images_json=json.dumps(new_images),
-                        media_json=json.dumps(new_media) if new_media else None,
+                        media_json=json.dumps(new_media),
                     )
                     updated_run_ids_list = [run_id]
                 else:
@@ -243,7 +243,48 @@ class MediaStorageService:
             run = self._run_repo.get_run(run_id)
             if not run:
                 return {"updated_run_ids": []}
-            images = json.loads(run.images_json) if run.images_json else []
+            images: list[dict[str, Any]] = []
+            used_media_as_source = False
+            if run.images_json:
+                try:
+                    raw = json.loads(run.images_json)
+                    if isinstance(raw, list) and raw:
+                        # Match frontend normalization: only dict entries are considered output slots.
+                        images = [e for e in raw if isinstance(e, dict)]
+                except Exception:
+                    images = []
+            if not images and run.media_json:
+                used_media_as_source = True
+                try:
+                    raw = json.loads(run.media_json)
+                    if isinstance(raw, list) and raw:
+                        images = [e for e in raw if isinstance(e, dict)]
+                except Exception:
+                    images = []
+
+            # Normalize into the shape expected by downstream codepaths.
+            for ent in images:
+                t = ent.get("type")
+                k = ent.get("kind")
+                if isinstance(t, str) and t.strip():
+                    ent["type"] = t.strip().lower()
+                elif isinstance(k, str) and k.strip():
+                    ent["type"] = k.strip().lower()
+                else:
+                    ent["type"] = (ent.get("type") or "output").strip().lower()
+
+                fn = ent.get("filename")
+                ent["filename"] = fn if isinstance(fn, str) else ""
+                sf = ent.get("subfolder")
+                ent["subfolder"] = sf if isinstance(sf, str) else ""
+
+            if used_media_as_source:
+                # Keep both JSON blobs aligned so indexing remains consistent.
+                payload = json.dumps(images)
+                self._run_repo.update_run(run_id, images_json=payload, media_json=payload)
+                run.images_json = payload
+                run.media_json = payload
+
             if not images or not attempted_indices:
                 return {"updated_run_ids": [run_id], "remote_delete_warning": remote_error}
             uniq = sorted({int(i) for i in attempted_indices if isinstance(i, int) and i >= 0})
@@ -296,7 +337,7 @@ class MediaStorageService:
             self._run_repo.update_run(
                 run_id,
                 images_json=json.dumps(new_images),
-                media_json=json.dumps(new_media) if new_media else None,
+                media_json=json.dumps(new_media),
                 deleted_outputs_json=json.dumps(deleted_outputs),
             )
             run3 = self._run_repo.get_run(run_id)
@@ -332,6 +373,80 @@ class MediaStorageService:
             return {"updated_run_ids": [run_id], "remote_delete_warning": remote_error}
         finally:
             lock.release()
+
+    def remove_outputs_without_local_copy(
+        self, run_id: str, image_indices: list[int]
+    ) -> dict[str, Any]:
+        """
+        Remove output slots from the run when there is no saved local copy.
+        Used when ComfyUI files were removed manually or /delete is unavailable (405).
+        """
+        run = self._run_repo.get_run(run_id)
+        if not run:
+            return {"ok": False, "error": "Run not found"}
+        uniq = sorted({int(i) for i in image_indices if isinstance(i, int) and i >= 0})
+        if not uniq:
+            return {"ok": False, "error": "No valid indices"}
+        images: list[dict[str, Any]] = []
+        used_media_as_source = False
+
+        if run.images_json:
+            try:
+                raw = json.loads(run.images_json)
+                if isinstance(raw, list) and raw:
+                    images = [e for e in raw if isinstance(e, dict)]
+            except Exception:
+                images = []
+        if not images and run.media_json:
+            used_media_as_source = True
+            try:
+                raw = json.loads(run.media_json)
+                if isinstance(raw, list) and raw:
+                    images = [e for e in raw if isinstance(e, dict)]
+            except Exception:
+                images = []
+
+        # Normalize into the shape expected by downstream codepaths.
+        for ent in images:
+            t = ent.get("type")
+            k = ent.get("kind")
+            if isinstance(t, str) and t.strip():
+                ent["type"] = t.strip().lower()
+            elif isinstance(k, str) and k.strip():
+                ent["type"] = k.strip().lower()
+            else:
+                ent["type"] = (ent.get("type") or "output").strip().lower()
+
+            fn = ent.get("filename")
+            ent["filename"] = fn if isinstance(fn, str) else ""
+            sf = ent.get("subfolder")
+            ent["subfolder"] = sf if isinstance(sf, str) else ""
+
+        if used_media_as_source:
+            # Persist synthesized images_json so prune (and other operations) use consistent indexing.
+            payload = json.dumps(images)
+            self._run_repo.update_run(run_id, images_json=payload, media_json=payload)
+            run.images_json = payload
+            run.media_json = payload
+
+        if not images:
+            return {"ok": False, "error": "No images on run"}
+        for i in uniq:
+            if i >= len(images):
+                return {"ok": False, "error": f"Invalid image index: {i}"}
+            if not isinstance(images[i], dict):
+                return {"ok": False, "error": f"Invalid image entry at index {i}"}
+            if self._has_local_copy(run, i):
+                return {
+                    "ok": False,
+                    "error": "Cannot remove an output that still has a local copy; delete the local copy first",
+                }
+        result = self._prune_outputs_after_remote_delete_unavailable(
+            run_id, uniq, remote_error=None
+        )
+        merged = dict(result)
+        merged["ok"] = True
+        return merged
 
     def delete_both(
         self,
@@ -840,7 +955,7 @@ class MediaStorageService:
         self._run_repo.update_run(
             run_id,
             images_json=json.dumps(updated),
-            media_json=json.dumps(new_media) if new_media else None,
+            media_json=json.dumps(new_media),
             remote_status="deleted",
             deleted_outputs_json=json.dumps(deleted_outputs),
         )
@@ -949,6 +1064,17 @@ class MediaStorageService:
                 )
                 res.raise_for_status()
             except requests.exceptions.HTTPError as e:
+                code = e.response.status_code if e.response is not None else None
+                # File already removed from Comfy output folder — treat as success so DB can be updated.
+                if code in (404, 410):
+                    logger.info(
+                        "ComfyUI delete returned %s (file already gone) run_id=%s index=%s filename=%s",
+                        code,
+                        run.id,
+                        idx,
+                        img.get("filename"),
+                    )
+                    continue
                 ok = False
                 if e.response is not None and e.response.status_code == 405:
                     error_405 = (

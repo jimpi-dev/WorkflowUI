@@ -2,10 +2,12 @@
 import { getApiBase, appConfig } from '$lib/config';
 import { onMount, onDestroy } from 'svelte';
 import { get } from 'svelte/store';
+import { page } from '$app/stores';
 	import DbSizeBar from '$lib/components/DbSizeBar.svelte';
 	import { consolePanelOpen } from '$lib/stores/consolePanelOpen';
 	import { queuePanelOpen } from '$lib/stores/queuePanelOpen';
 	import { getQueue } from '$lib/queueApi';
+	import { authState } from '$lib/stores/auth';
 
 	interface Status {
 		queue: { running: number; pending: number };
@@ -37,6 +39,16 @@ import { get } from 'svelte/store';
 	let intervalId: ReturnType<typeof setInterval> | null = null;
 	let configIntervalId: ReturnType<typeof setInterval> | null = null;
 
+	const isLoginRoute = $derived.by(() => {
+		const path = $page?.url?.pathname ?? '';
+		return path === '/login' || path.startsWith('/login/');
+	});
+	const canQueryRuntimeStatus = $derived.by(() => {
+		if (isLoginRoute) return false;
+		if (!$authState.enabled) return true;
+		return $authState.authenticated;
+	});
+
 	function formatLocalStorageLabel(bytes: number | null): string {
 		if (bytes == null) return '—';
 		const KB = 1024;
@@ -56,7 +68,31 @@ import { get } from 'svelte/store';
 		return `Size of local storage folder (${root}) used for saved outputs from ComfyUI.`;
 	});
 
+	const canAccessConsole = $derived.by(() => {
+		if (!$authState.enabled) return true;
+		return $authState.user?.role === 'admin';
+	});
+
+	const shouldFetchConfig = $derived.by(() => {
+		if (!canQueryRuntimeStatus) return false;
+		if (typeof window === 'undefined') return true;
+		if (!window.location.pathname.startsWith('/activity')) return true;
+		if (!$authState.enabled) return true;
+		return $authState.user?.role === 'admin';
+	});
+
 	async function fetchConfig() {
+		if (!shouldFetchConfig) {
+			workflowuiPluginAvailable = null;
+			workflowuiPluginIncompatible = false;
+			dbSizeBytes = null;
+			dbBreakdown = null;
+			localStorageSizeBytes = null;
+			localStorageRootPath = null;
+			workflowuiPluginMinVersion = null;
+			configVersion = null;
+			return;
+		}
 		const base = getApiBase() || '';
 		try {
 			const res = await fetch(`${base}/config`, { signal: AbortSignal.timeout(5000) });
@@ -93,6 +129,11 @@ import { get } from 'svelte/store';
 	}
 
 	async function fetchStatus() {
+		if (!canQueryRuntimeStatus) {
+			status = null;
+			error = null;
+			return;
+		}
 		const base = getApiBase() || '';
 		try {
 			const res = await fetch(`${base}/comfyui/status`, { signal: AbortSignal.timeout(8000) });
@@ -107,6 +148,10 @@ import { get } from 'svelte/store';
 	}
 
 	async function fetchQueueSummary() {
+		if (!canQueryRuntimeStatus) {
+			queueSummary = null;
+			return;
+		}
 		if (get(queuePanelOpen)) {
 			return;
 		}
@@ -121,6 +166,7 @@ import { get } from 'svelte/store';
 	}
 
 	function startPolling() {
+		if (intervalId || configIntervalId) return;
 		if (typeof document === 'undefined') return;
 		const isHidden = () => document.visibilityState === 'hidden';
 		const ms = () => (isHidden() ? POLL_INTERVAL_HIDDEN_MS : POLL_INTERVAL_MS);
@@ -134,6 +180,12 @@ import { get } from 'svelte/store';
 		configIntervalId = setInterval(fetchConfig, CONFIG_POLL_INTERVAL_MS);
 		document.addEventListener('visibilitychange', onVisibilityChange);
 	}
+
+	$effect(() => {
+		if (!canAccessConsole && $consolePanelOpen) {
+			consolePanelOpen.set(false);
+		}
+	});
 
 	function onVisibilityChange() {
 		if (typeof document === 'undefined' || !intervalId) return;
@@ -164,10 +216,29 @@ import { get } from 'svelte/store';
 	}
 
 	onMount(() => {
-		startPolling();
+		if (canQueryRuntimeStatus) startPolling();
 		if (typeof window !== 'undefined') {
 			window.addEventListener('workflowui-refresh-storage', fetchConfig);
 		}
+	});
+
+	$effect(() => {
+		if (canQueryRuntimeStatus) {
+			if (!intervalId && !configIntervalId) startPolling();
+			return;
+		}
+		stopPolling();
+		status = null;
+		queueSummary = null;
+		error = null;
+		workflowuiPluginAvailable = null;
+		workflowuiPluginIncompatible = false;
+		dbSizeBytes = null;
+		dbBreakdown = null;
+		workflowuiPluginMinVersion = null;
+		localStorageSizeBytes = null;
+		localStorageRootPath = null;
+		configVersion = null;
 	});
 
 	onDestroy(() => {
@@ -180,6 +251,7 @@ import { get } from 'svelte/store';
 
 <div class="status-bar" role="status" aria-label="ComfyUI queue and system status">
 	<span class="status-item app-info">{appConfig.appName} v{configVersion ?? appConfig.version}</span>
+	{#if canQueryRuntimeStatus}
 	{#if appConfig.githubRepoUrl}
 		<span class="status-sep" aria-hidden="true">|</span>
 		<a
@@ -269,22 +341,24 @@ import { get } from 'svelte/store';
 	{:else}
 		<span class="status-item status-loading">Queue: —</span>
 	{/if}
-	<span class="status-sep" aria-hidden="true">|</span>
-	<button
-		type="button"
-		class="status-item status-console-btn"
-		class:active={$consolePanelOpen}
-		onclick={() => consolePanelOpen.update((v) => !v)}
-		title={$consolePanelOpen ? 'Close ComfyUI console' : 'Open ComfyUI console'}
-		aria-label={$consolePanelOpen ? 'Close console' : 'Open console'}
-		aria-pressed={$consolePanelOpen}
-	>
-		<svg class="console-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-			<polyline points="4 17 10 11 4 5"></polyline>
-			<line x1="12" y1="19" x2="20" y2="19"></line>
-		</svg>
-		<span class="console-btn-text">Console</span>
-	</button>
+	{#if canAccessConsole}
+		<span class="status-sep" aria-hidden="true">|</span>
+		<button
+			type="button"
+			class="status-item status-console-btn"
+			class:active={$consolePanelOpen}
+			onclick={() => consolePanelOpen.update((v) => !v)}
+			title={$consolePanelOpen ? 'Close ComfyUI console' : 'Open ComfyUI console'}
+			aria-label={$consolePanelOpen ? 'Close console' : 'Open console'}
+			aria-pressed={$consolePanelOpen}
+		>
+			<svg class="console-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+				<polyline points="4 17 10 11 4 5"></polyline>
+				<line x1="12" y1="19" x2="20" y2="19"></line>
+			</svg>
+			<span class="console-btn-text">Console</span>
+		</button>
+	{/if}
 	<span class="status-sep" aria-hidden="true">|</span>
 	<span class="status-item storage-group" aria-label="Local storage and database usage">
 		<span class="storage-line storage-local" title={localStorageTooltip}>
@@ -302,6 +376,7 @@ import { get } from 'svelte/store';
 			/>
 		</span>
 	</span>
+	{/if}
 </div>
 
 <style>

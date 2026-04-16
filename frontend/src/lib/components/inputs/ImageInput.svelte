@@ -1,6 +1,8 @@
 <script lang="ts">
     import { onDestroy } from 'svelte';
     import { getApiBase } from '$lib/config';
+    import MediaBrowserDialog from '$lib/components/MediaBrowserDialog.svelte';
+    import type { MediaBrowserSelection } from '$lib/types/mediaBrowser';
 
     onDestroy(() => {
         if (previewUrl) URL.revokeObjectURL(previewUrl);
@@ -25,18 +27,22 @@
         input,
         value = $bindable(''),
         appId = null,
+        projectId = null,
         prefillRunId = null,
         prefillSubfolder = '',
         prefillType = 'image',
-        overrideDisplayValue = undefined
+        overrideDisplayValue = undefined,
+        onMediaSelection = undefined
     }: {
         input: unknown;
         value?: string;
         appId?: string | null;
+        projectId?: string | null;
         prefillRunId?: string | null;
         prefillSubfolder?: string;
         prefillType?: string;
         overrideDisplayValue?: string;
+        onMediaSelection?: ((selection: MediaBrowserSelection | null) => void) | undefined;
     } = $props();
 
     function imageValueToString(v: unknown): string {
@@ -54,16 +60,30 @@
     let error = $state<string | null>(null);
     let fileInput: HTMLInputElement;
     let previewUrl = $state('');
+    let browserOpen = $state(false);
+    let browserSelection = $state<MediaBrowserSelection | null>(null);
+    $effect(() => {
+        if (!browserSelection) return;
+        if (displayValue !== browserSelection.filename) {
+            browserSelection = null;
+        }
+    });
     const prefilledImageUrl = $derived.by(() => {
         const filename = displayValue;
         if (!filename || previewUrl) return '';
         const base = getApiBase() || '';
         const params = new URLSearchParams();
         params.set('filename', filename);
-        if (prefillRunId) {
-            params.set('subfolder', prefillSubfolder);
-            params.set('type', prefillType || 'image');
-            params.set('run_id', prefillRunId);
+        const fromBrowser = browserSelection;
+        const effectiveRunId = fromBrowser?.source === 'generation'
+            ? (fromBrowser.runId ?? null)
+            : prefillRunId;
+        const effectiveSubfolder = fromBrowser?.subfolder ?? prefillSubfolder;
+        const effectiveType = fromBrowser?.type ?? prefillType ?? 'image';
+        if (effectiveRunId) {
+            params.set('subfolder', effectiveSubfolder || '');
+            params.set('type', effectiveType || 'image');
+            params.set('run_id', effectiveRunId);
         } else {
             params.set('subfolder', '');
             params.set('type', 'input');
@@ -102,6 +122,8 @@
             }
             const data = await res.json();
             value = data.name ?? data.filename ?? file.name;
+            browserSelection = null;
+            onMediaSelection?.(null);
         } catch (err) {
             error = err instanceof Error ? err.message : 'Upload failed';
         } finally {
@@ -115,12 +137,27 @@
             previewUrl = '';
         }
         value = '';
+        browserSelection = null;
+        onMediaSelection?.(null);
         error = null;
         if (fileInput) fileInput.value = '';
     }
 
     function chooseFile() {
         if (fileInput && !uploading) fileInput.click();
+    }
+
+    function chooseFromBrowser(selection: MediaBrowserSelection) {
+        if (previewUrl) {
+            URL.revokeObjectURL(previewUrl);
+            previewUrl = '';
+        }
+        browserSelection = selection;
+        value = selection.filename;
+        error = null;
+        if (fileInput) fileInput.value = '';
+        onMediaSelection?.(selection);
+        browserOpen = false;
     }
 </script>
 
@@ -144,6 +181,13 @@
                 disabled={uploading}
                 aria-label="Choose image file"
             >Choose file</button>
+            <button
+                type="button"
+                class="choose-file-btn"
+                onclick={() => (browserOpen = true)}
+                disabled={uploading}
+                aria-label="Browse generated media"
+            >Browse media</button>
             {#if displayValue}
                 <span class="filename" title={displayValue}>{displayValue}</span>
                 <button type="button" class="clear-btn" onclick={clearImage} title="Clear image">×</button>
@@ -168,6 +212,14 @@
         <div class="error" role="alert">{error}</div>
     {/if}
 </label>
+
+<MediaBrowserDialog
+    open={browserOpen}
+    initialProjectId={projectId}
+    initialAppId={appId}
+    onClose={() => (browserOpen = false)}
+    onSelect={chooseFromBrowser}
+/>
 
 <style>
     .image-field {
@@ -271,5 +323,43 @@
     .error {
         font-size: 0.8rem;
         color: var(--error, #e57373);
+    }
+    @media (max-width: 639px) {
+        .image-row {
+            flex-direction: column;
+            align-items: stretch;
+            gap: 0.6rem;
+        }
+        .file-row {
+            flex-wrap: wrap;
+            align-items: stretch;
+            gap: 0.45rem;
+        }
+        .choose-file-btn,
+        .clear-btn {
+            min-height: 44px;
+        }
+        .choose-file-btn {
+            flex: 1 1 calc(50% - 0.25rem);
+            min-width: 130px;
+            font-size: 0.82rem;
+        }
+        .filename,
+        .no-file {
+            order: 3;
+            width: 100%;
+            white-space: nowrap;
+            font-size: 0.78rem;
+        }
+        .clear-btn {
+            order: 2;
+            min-width: 44px;
+        }
+        .preview-wrap {
+            width: 100%;
+            max-width: 220px;
+            height: auto;
+            aspect-ratio: 1 / 1;
+        }
     }
 </style>

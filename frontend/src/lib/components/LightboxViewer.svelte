@@ -5,6 +5,7 @@
 export type LightboxItem = {
 		id: string;
 		url: string;
+		thumbnailUrl?: string;
 		filename?: string;
 		mediaType?: 'image' | 'video' | 'audio';
 		remote_deleted?: boolean;
@@ -82,6 +83,7 @@ let {
 
 	let loadFailed = $state(false);
 	let loadFailedCarousel = $state<Set<string>>(new Set());
+	let loadedCarouselThumbs = $state<Set<string>>(new Set());
 
 	let zoomHintVisible = $state(false);
 	let zoomHintTimeoutId: ReturnType<typeof setTimeout> | undefined;
@@ -293,6 +295,14 @@ let {
 		if (e.key === 'Escape') handleClose();
 		if (e.key === 'ArrowRight') goNext();
 		if (e.key === 'ArrowLeft') goPrev();
+		if ((e.key === 'f' || e.key === 'F') && onToggleFavorite && currentItem) {
+			e.preventDefault();
+			onToggleFavorite(currentItem);
+		}
+		if ((e.key === 'd' || e.key === 'D') && onDownload && currentItem && !downloading) {
+			e.preventDefault();
+			handleDownload(currentItem);
+		}
 		if (e.key === ' ' && isImage && onToggleSelection && currentItem) {
 			e.preventDefault();
 			onToggleSelection(currentItem);
@@ -348,6 +358,11 @@ let {
 		loadFailedCarousel = new Set([...loadFailedCarousel, id]);
 	}
 
+	function markCarouselThumbLoaded(id: string) {
+		if (loadedCarouselThumbs.has(id)) return;
+		loadedCarouselThumbs = new Set([...loadedCarouselThumbs, id]);
+	}
+
 	$effect(() => {
 		if (!open || !items.length || !carouselTrackEl) return;
 		const idx = index;
@@ -399,6 +414,7 @@ let {
 		if (!open) {
 			loadFailed = false;
 			loadFailedCarousel = new Set();
+			loadedCarouselThumbs = new Set();
 		}
 	});
 
@@ -469,6 +485,19 @@ let {
 			<button type="button" class="close" onclick={handleClose} title="Close (Esc)" aria-label="Close viewer">
 				✕ {#if showCloseLabel}Close{/if}
 			</button>
+			{#if currentItem && ((isImage && onToggleSelection && isSelected) || (onToggleFavorite && isFavorite) || onDownload)}
+				<div class="lightbox-controls-shortcuts" role="note" aria-label="Keyboard shortcuts">
+					{#if isImage && onToggleSelection && isSelected}
+						<span class="lightbox-shortcut-pill"><kbd>Space</kbd> select</span>
+					{/if}
+					{#if onToggleFavorite && isFavorite}
+						<span class="lightbox-shortcut-pill"><kbd>F</kbd> favorite</span>
+					{/if}
+					{#if onDownload}
+						<span class="lightbox-shortcut-pill"><kbd>D</kbd> download</span>
+					{/if}
+				</div>
+			{/if}
 		</div>
 
 		<div
@@ -649,8 +678,8 @@ let {
 							type="button"
 							class="lightbox-media-btn lightbox-media-favorite"
 							class:is-favorite={isFavorite?.(img)}
-							title={isFavorite?.(img) ? 'Remove from favorites' : 'Add to favorites'}
-							aria-label={isFavorite?.(img) ? 'Remove from favorites' : 'Add to favorites'}
+							title={isFavorite?.(img) ? 'Remove from favorites (F)' : 'Add to favorites (F)'}
+							aria-label={isFavorite?.(img) ? 'Remove from favorites (F)' : 'Add to favorites (F)'}
 							onclick={(e) => {
 								e.stopPropagation();
 								onToggleFavorite?.(img);
@@ -762,8 +791,8 @@ let {
 							type="button"
 							class="lightbox-media-btn"
 							disabled={downloading}
-							title={downloading ? 'Downloading…' : 'Download file'}
-							aria-label={downloading ? 'Downloading…' : 'Download file'}
+							title={downloading ? 'Downloading…' : 'Download file (D)'}
+							aria-label={downloading ? 'Downloading…' : 'Download file (D)'}
 							onclick={(e) => {
 								e.stopPropagation();
 								handleDownload(img);
@@ -937,7 +966,21 @@ let {
 						{#if carouselShowDeleted}
 							<span class="lightbox-carousel-deleted" aria-hidden="true">Deleted</span>
 						{:else if item.mediaType === 'video'}
-							<video src={item.url} preload="metadata" muted playsinline aria-hidden="true" onerror={() => markCarouselLoadFailed(item.id)}></video>
+							<span class="lightbox-carousel-video-thumb" aria-hidden="true">
+								{#if !loadedCarouselThumbs.has(item.id)}
+									<span class="lightbox-carousel-thumb-loading" aria-hidden="true"></span>
+								{/if}
+								<img
+									src={item.thumbnailUrl ?? item.url}
+									alt=""
+									draggable="false"
+									onload={() => markCarouselThumbLoaded(item.id)}
+									onerror={() => {
+										markCarouselThumbLoaded(item.id);
+										markCarouselLoadFailed(item.id);
+									}}
+								/>
+							</span>
 							<span class="lightbox-carousel-play" aria-hidden="true"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg></span>
 						{:else if item.mediaType === 'audio'}
 							<span class="lightbox-carousel-audio" aria-hidden="true">
@@ -983,5 +1026,98 @@ let {
 		white-space: nowrap;
 		overflow: hidden;
 		text-overflow: ellipsis;
+	}
+	.lightbox-controls-shortcuts {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.35rem;
+		align-items: center;
+		margin-left: 0.35rem;
+	}
+	.lightbox-shortcut-pill {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.35rem;
+		font-size: 0.72rem;
+		color: var(--lightbox-muted, #9ca3af);
+		background: rgba(17, 24, 39, 0.55);
+		border: 1px solid rgba(255, 255, 255, 0.14);
+		border-radius: 999px;
+		padding: 0.12rem 0.5rem;
+	}
+	.lightbox-shortcut-pill kbd {
+		font: inherit;
+		font-weight: 600;
+		color: #f3f4f6;
+		background: rgba(255, 255, 255, 0.08);
+		border: 1px solid rgba(255, 255, 255, 0.2);
+		border-radius: 0.3rem;
+		padding: 0 0.3rem;
+		line-height: 1.35;
+	}
+
+	@media (max-width: 639px) {
+		/* Mobile layout is already dense; remove the keyboard shortcut "legend" to free space. */
+		.lightbox-controls-shortcuts {
+			display: none;
+		}
+
+		/* Make the close ("X") button larger so it stays tappable even with fewer controls. */
+		.lightbox-controls .close {
+			width: 34px;
+			height: 34px;
+			padding: 0;
+			margin-left: 8px;
+			border-radius: 8px;
+			border-left: none;
+			border: 1px solid rgba(255, 255, 255, 0.22);
+			background: rgba(0, 0, 0, 0.35);
+			display: inline-flex;
+			flex-shrink: 0;
+			align-items: center;
+			justify-content: center;
+			font-size: 1.1rem;
+			line-height: 1;
+		}
+
+		/* Keep the icon visually centered if the "Close" label is shown for some call sites. */
+		.lightbox-controls .close :global(svg),
+		.lightbox-controls .close {
+			white-space: nowrap;
+		}
+	}
+
+	.lightbox-carousel-video-thumb {
+		position: relative;
+		display: block;
+		width: 100%;
+		height: 100%;
+	}
+	.lightbox-carousel-video-thumb img {
+		width: 100%;
+		height: 100%;
+		object-fit: cover;
+		display: block;
+	}
+	.lightbox-carousel-thumb-loading {
+		position: absolute;
+		inset: 0;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+	}
+	.lightbox-carousel-thumb-loading::before {
+		content: '';
+		width: 18px;
+		height: 18px;
+		border-radius: 999px;
+		border: 2px solid rgba(255, 255, 255, 0.25);
+		border-top-color: rgba(255, 255, 255, 0.85);
+		animation: workflowui-lightbox-spin 0.8s linear infinite;
+	}
+	@keyframes workflowui-lightbox-spin {
+		to {
+			transform: rotate(360deg);
+		}
 	}
 </style>

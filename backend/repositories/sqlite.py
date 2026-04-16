@@ -12,6 +12,7 @@ from domain.app import WorkflowApp
 from domain.run import Run
 from domain.project import Project
 from domain.preset import AppPreset
+from domain.user import User
 
 _UNSET = object()
 
@@ -66,7 +67,7 @@ def _run_select_cols() -> str:
     return """g.id, r.project_id, r.workflow_version_id, r.app_id, g.status, g.created_at, g.prompt_id, g.seed,
         g.images_json, g.media_json, g.execution_time, g.error, g.queue_position, COALESCE(g.input_snapshot_json, r.input_snapshot_json), r.metadata_snapshot_json, r.run_group_id, r.comfyui_url, r.comfyui_version_id,
         g.local_storage_status, g.remote_status, g.local_path, g.deleted_outputs_json,
-        g.parent_run_id, g.parent_media_id, g.root_run_id, g.deleted_at"""
+        g.parent_run_id, g.parent_media_id, g.root_run_id, g.deleted_at, r.owner_user_id"""
 
 
 def _row_to_run(row: tuple) -> Run:
@@ -98,6 +99,7 @@ def _row_to_run(row: tuple) -> Run:
         parent_media_id=row[23] if n > 23 else None,
         root_run_id=row[24] if n > 24 else None,
         deleted_at=row[25] if n > 25 else None,
+        owner_user_id=row[26] if n > 26 else None,
     )
 
 
@@ -125,6 +127,20 @@ def _row_to_project(row: tuple) -> Project:
         storage_mode=row[7] if len(row) > 7 else None,
         header_color=row[8] if len(row) > 8 else None,
         archived_at=row[9] if len(row) > 9 else None,
+        owner_user_id=row[10] if len(row) > 10 else None,
+    )
+
+
+def _row_to_user(row: tuple) -> User:
+    return User(
+        id=row[0],
+        username=row[1],
+        password_hash=row[2],
+        role=row[3],
+        allow_all_apps=bool(row[4]),
+        created_at=row[5],
+        disabled_at=row[6] if len(row) > 6 else None,
+        quick_runs_project_id=row[7] if len(row) > 7 else None,
     )
 
 
@@ -363,13 +379,14 @@ class SqliteProjectRepository:
         tags_json: str | None = None,
         storage_mode: str | None = "inherit",
         header_color: str | None = None,
+        owner_user_id: str | None = None,
     ) -> Project:
         conn = self._conn()
         try:
             conn.execute(
-                """INSERT INTO project (id, name, description, created_at, updated_at, metadata_json, tags_json, storage_mode, header_color)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (id, name, description, created_at, updated_at, metadata_json, tags_json, storage_mode, header_color),
+                """INSERT INTO project (id, name, description, created_at, updated_at, metadata_json, tags_json, storage_mode, header_color, owner_user_id)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (id, name, description, created_at, updated_at, metadata_json, tags_json, storage_mode, header_color, owner_user_id),
             )
             conn.commit()
             return Project(
@@ -382,6 +399,7 @@ class SqliteProjectRepository:
                 tags_json=tags_json,
                 storage_mode=storage_mode,
                 header_color=header_color,
+                owner_user_id=owner_user_id,
             )
         finally:
             conn.close()
@@ -390,7 +408,7 @@ class SqliteProjectRepository:
         conn = self._conn()
         try:
             row = conn.execute(
-                "SELECT id, name, description, created_at, updated_at, metadata_json, tags_json, storage_mode, header_color, archived_at FROM project WHERE id = ?",
+                "SELECT id, name, description, created_at, updated_at, metadata_json, tags_json, storage_mode, header_color, archived_at, owner_user_id FROM project WHERE id = ?",
                 (project_id,),
             ).fetchone()
             return _row_to_project(row) if row else None
@@ -405,7 +423,7 @@ class SqliteProjectRepository:
     ) -> list[Project]:
         conn = self._conn()
         try:
-            base_cols = "id, name, description, created_at, updated_at, metadata_json, tags_json, storage_mode, header_color, archived_at"
+            base_cols = "id, name, description, created_at, updated_at, metadata_json, tags_json, storage_mode, header_color, archived_at, owner_user_id"
             if archived is False:
                 where = "WHERE archived_at IS NULL"
             elif archived is True:
@@ -439,6 +457,7 @@ class SqliteProjectRepository:
         storage_mode: str | None = None,
         header_color: str | None = _UNSET,
         archived_at: int | None = _UNSET,
+        owner_user_id: str | None = _UNSET,
     ) -> Project | None:
         conn = self._conn()
         try:
@@ -471,6 +490,9 @@ class SqliteProjectRepository:
             if archived_at is not _UNSET:
                 updates.append("archived_at = ?")
                 params.append(archived_at)
+            if owner_user_id is not _UNSET:
+                updates.append("owner_user_id = ?")
+                params.append(owner_user_id)
             if not updates:
                 return proj
             params.append(project_id)
@@ -751,6 +773,138 @@ class SqliteWorkflowAppRepository:
             conn.close()
 
 
+class SqliteUserRepository:
+    def __init__(self, db_path: str | Path):
+        self._db_path = str(Path(db_path).resolve())
+
+    def _conn(self) -> sqlite3.Connection:
+        return sqlite3.connect(self._db_path)
+
+    def create_user(
+        self,
+        user_id: str,
+        username: str,
+        password_hash: str,
+        role: str,
+        allow_all_apps: bool,
+        created_at: int,
+        quick_runs_project_id: str | None = None,
+    ) -> User:
+        conn = self._conn()
+        try:
+            conn.execute(
+                """INSERT INTO user_account
+                   (id, username, password_hash, role, allow_all_apps, created_at, disabled_at, quick_runs_project_id)
+                   VALUES (?, ?, ?, ?, ?, ?, NULL, ?)""",
+                (user_id, username, password_hash, role, 1 if allow_all_apps else 0, created_at, quick_runs_project_id),
+            )
+            conn.commit()
+            row = conn.execute(
+                "SELECT id, username, password_hash, role, allow_all_apps, created_at, disabled_at, quick_runs_project_id FROM user_account WHERE id = ?",
+                (user_id,),
+            ).fetchone()
+            assert row is not None
+            return _row_to_user(row)
+        finally:
+            conn.close()
+
+    def get_user_by_username(self, username: str) -> User | None:
+        conn = self._conn()
+        try:
+            row = conn.execute(
+                "SELECT id, username, password_hash, role, allow_all_apps, created_at, disabled_at, quick_runs_project_id FROM user_account WHERE username = ?",
+                (username,),
+            ).fetchone()
+            return _row_to_user(row) if row else None
+        finally:
+            conn.close()
+
+    def get_user_by_id(self, user_id: str) -> User | None:
+        conn = self._conn()
+        try:
+            row = conn.execute(
+                "SELECT id, username, password_hash, role, allow_all_apps, created_at, disabled_at, quick_runs_project_id FROM user_account WHERE id = ?",
+                (user_id,),
+            ).fetchone()
+            return _row_to_user(row) if row else None
+        finally:
+            conn.close()
+
+    def list_users(self) -> list[User]:
+        conn = self._conn()
+        try:
+            rows = conn.execute(
+                "SELECT id, username, password_hash, role, allow_all_apps, created_at, disabled_at, quick_runs_project_id FROM user_account ORDER BY created_at ASC"
+            ).fetchall()
+            return [_row_to_user(r) for r in rows]
+        finally:
+            conn.close()
+
+    def update_user(
+        self,
+        user_id: str,
+        *,
+        password_hash: str | None = None,
+        role: str | None = None,
+        allow_all_apps: bool | None = None,
+        disabled_at: int | None = None,
+        set_disabled_at: bool = False,
+        quick_runs_project_id: str | None = None,
+        set_quick_runs_project_id: bool = False,
+    ) -> User | None:
+        updates: list[str] = []
+        params: list[Any] = []
+        if password_hash is not None:
+            updates.append("password_hash = ?")
+            params.append(password_hash)
+        if role is not None:
+            updates.append("role = ?")
+            params.append(role)
+        if allow_all_apps is not None:
+            updates.append("allow_all_apps = ?")
+            params.append(1 if allow_all_apps else 0)
+        if set_disabled_at:
+            updates.append("disabled_at = ?")
+            params.append(disabled_at)
+        if set_quick_runs_project_id:
+            updates.append("quick_runs_project_id = ?")
+            params.append(quick_runs_project_id)
+        if not updates:
+            return self.get_user_by_id(user_id)
+        conn = self._conn()
+        try:
+            params.append(user_id)
+            conn.execute(f"UPDATE user_account SET {', '.join(updates)} WHERE id = ?", params)
+            conn.commit()
+            return self.get_user_by_id(user_id)
+        finally:
+            conn.close()
+
+    def set_user_app_access(self, user_id: str, app_ids: list[str]) -> None:
+        conn = self._conn()
+        try:
+            conn.execute("DELETE FROM user_app_access WHERE user_id = ?", (user_id,))
+            if app_ids:
+                conn.executemany(
+                    "INSERT INTO user_app_access (user_id, app_id) VALUES (?, ?)",
+                    [(user_id, app_id) for app_id in app_ids],
+                )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def list_user_app_ids(self, user_id: str) -> list[str]:
+        conn = self._conn()
+        try:
+            rows = conn.execute(
+                "SELECT app_id FROM user_app_access WHERE user_id = ? ORDER BY app_id ASC",
+                (user_id,),
+            ).fetchall()
+            return [r[0] for r in rows]
+        finally:
+            conn.close()
+
+
 class SqliteRunRepository:
     def __init__(self, db_path: str | Path):
         self._db_path = str(Path(db_path).resolve())
@@ -838,19 +992,21 @@ class SqliteRunRepository:
         parent_run_id: str | None = None,
         parent_media_id: str | None = None,
         root_run_id: str | None = None,
+        owner_user_id: str | None = None,
     ) -> Run:
         conn = self._conn()
         try:
             group_id = run_group_id or id
             conn.execute(
                 """INSERT INTO run
-                   (id, project_id, workflow_version_id, app_id, created_at,
+                   (id, project_id, workflow_version_id, app_id, owner_user_id, created_at,
                     input_snapshot_json, metadata_snapshot_json, run_group_id, comfyui_url, comfyui_version_id)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                    ON CONFLICT(id) DO UPDATE SET
                        project_id = excluded.project_id,
                        workflow_version_id = excluded.workflow_version_id,
                        app_id = excluded.app_id,
+                       owner_user_id = COALESCE(run.owner_user_id, excluded.owner_user_id),
                        input_snapshot_json = COALESCE(run.input_snapshot_json, excluded.input_snapshot_json),
                        metadata_snapshot_json = COALESCE(run.metadata_snapshot_json, excluded.metadata_snapshot_json),
                        run_group_id = COALESCE(run.run_group_id, excluded.run_group_id),
@@ -862,6 +1018,7 @@ class SqliteRunRepository:
                     project_id,
                     workflow_version_id,
                     app_id,
+                    owner_user_id,
                     created_at,
                     input_snapshot_json,
                     metadata_snapshot_json,
@@ -906,6 +1063,7 @@ class SqliteRunRepository:
                 project_id=project_id,
                 workflow_version_id=workflow_version_id,
                 app_id=app_id,
+                owner_user_id=owner_user_id,
                 status=status,
                 created_at=created_at,
                 run_group_id=run_group_id,
@@ -1114,6 +1272,474 @@ class SqliteRunRepository:
     def _escape_like(s: str) -> str:
         return s.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
+    def list_media_browser_images(
+        self,
+        *,
+        owner_user_id: str | None,
+        auth_enabled: bool,
+        project_id: str | None = None,
+        source: str = "all",
+        app_id: str | None = None,
+        since_ts: int | None = None,
+        until_ts: int | None = None,
+        q: str | None = None,
+        favorites_only: bool = False,
+        limit: int = 60,
+        offset: int = 0,
+    ) -> tuple[list[dict[str, Any]], int]:
+        conn = self._conn()
+        try:
+            where_parts: list[str] = []
+            params: list[Any] = []
+
+            # Enforce ownership scoping in auth mode and preserve existing
+            # non-auth visibility semantics (owner_user_id IS NULL).
+            if auth_enabled:
+                if owner_user_id:
+                    where_parts.append("r.owner_user_id = ?")
+                    params.append(owner_user_id)
+                else:
+                    where_parts.append("1 = 0")
+            else:
+                where_parts.append("r.owner_user_id IS NULL")
+
+            if project_id:
+                where_parts.append("r.project_id = ?")
+                params.append(project_id)
+            if app_id:
+                where_parts.append("r.app_id = ?")
+                params.append(app_id)
+            if since_ts is not None:
+                where_parts.append("g.created_at >= ?")
+                params.append(since_ts)
+            if until_ts is not None:
+                where_parts.append("g.created_at <= ?")
+                params.append(until_ts)
+
+            base_where = " AND ".join(where_parts)
+            if base_where:
+                base_where = " AND " + base_where
+
+            cte_sql = f"""
+                WITH media_entries AS (
+                    SELECT
+                        g.id AS run_id,
+                        r.run_group_id AS run_group_id,
+                        r.project_id AS project_id,
+                        p.name AS project_name,
+                        r.app_id AS app_id,
+                        wa.title AS app_title,
+                        g.created_at AS created_at,
+                        g.status AS run_status,
+                        g.local_storage_status AS local_storage_status,
+                        CAST(j.key AS INTEGER) AS output_index,
+                        json_extract(j.value, '$.filename') AS filename,
+                        COALESCE(json_extract(j.value, '$.subfolder'), '') AS subfolder,
+                        LOWER(COALESCE(json_extract(j.value, '$.type'), json_extract(j.value, '$.kind'), 'image')) AS media_type,
+                        COALESCE(CAST(json_extract(j.value, '$.remote_deleted') AS INTEGER), 0) AS remote_deleted,
+                        COALESCE(r.metadata_snapshot_json, '') AS metadata_snapshot_json,
+                        COALESCE(g.input_snapshot_json, r.input_snapshot_json, '') AS input_snapshot_json,
+                        CASE WHEN EXISTS (
+                            SELECT 1
+                            FROM json_each(
+                                CASE
+                                    WHEN json_valid(COALESCE(p.metadata_json, '')) THEN COALESCE(json_extract(COALESCE(p.metadata_json, ''), '$.favorites'), '[]')
+                                    ELSE '[]'
+                                END
+                            ) fav
+                            WHERE CAST(fav.value AS TEXT) = g.id
+                        ) THEN 1 ELSE 0 END AS is_favorite
+                    FROM generation g
+                    JOIN run r ON r.id = g.run_id
+                    JOIN project p ON p.id = r.project_id
+                    LEFT JOIN workflow_app wa ON wa.id = r.app_id
+                    JOIN json_each(
+                        CASE
+                            WHEN json_valid(g.media_json) AND json_type(g.media_json) = 'array' AND json_array_length(g.media_json) > 0 THEN g.media_json
+                            WHEN json_valid(g.images_json) AND json_type(g.images_json) = 'array' THEN g.images_json
+                            ELSE '[]'
+                        END
+                    ) AS j
+                    WHERE g.deleted_at IS NULL
+                    {base_where}
+                ),
+                input_entries_raw AS (
+                    SELECT
+                        g.id AS run_id,
+                        r.run_group_id AS run_group_id,
+                        r.project_id AS project_id,
+                        p.name AS project_name,
+                        r.app_id AS app_id,
+                        wa.title AS app_title,
+                        g.created_at AS created_at,
+                        g.status AS run_status,
+                        g.local_storage_status AS local_storage_status,
+                        -1 AS output_index,
+                        CAST(v.value AS TEXT) AS filename,
+                        '' AS subfolder,
+                        'input' AS media_type,
+                        0 AS remote_deleted,
+                        COALESCE(r.metadata_snapshot_json, '') AS metadata_snapshot_json,
+                        COALESCE(g.input_snapshot_json, r.input_snapshot_json, '') AS input_snapshot_json,
+                        CASE WHEN EXISTS (
+                            SELECT 1
+                            FROM json_each(
+                                CASE
+                                    WHEN json_valid(COALESCE(p.metadata_json, '')) THEN COALESCE(json_extract(COALESCE(p.metadata_json, ''), '$.favorites'), '[]')
+                                    ELSE '[]'
+                                END
+                            ) fav
+                            WHERE CAST(fav.value AS TEXT) = g.id
+                        ) THEN 1 ELSE 0 END AS is_favorite
+                    FROM generation g
+                    JOIN run r ON r.id = g.run_id
+                    JOIN project p ON p.id = r.project_id
+                    LEFT JOIN workflow_app wa ON wa.id = r.app_id
+                    JOIN json_each(
+                        CASE
+                            WHEN json_valid(COALESCE(g.input_snapshot_json, r.input_snapshot_json, '')) THEN COALESCE(json_extract(COALESCE(g.input_snapshot_json, r.input_snapshot_json, ''), '$.values'), '{{}}')
+                            ELSE '{{}}'
+                        END
+                    ) AS v
+                    WHERE g.deleted_at IS NULL
+                      AND v.type = 'text'
+                      AND TRIM(CAST(v.value AS TEXT)) != ''
+                      AND (
+                        LOWER(TRIM(CAST(v.value AS TEXT))) LIKE '%.png'
+                        OR LOWER(TRIM(CAST(v.value AS TEXT))) LIKE '%.jpg'
+                        OR LOWER(TRIM(CAST(v.value AS TEXT))) LIKE '%.jpeg'
+                        OR LOWER(TRIM(CAST(v.value AS TEXT))) LIKE '%.webp'
+                        OR LOWER(TRIM(CAST(v.value AS TEXT))) LIKE '%.gif'
+                        OR LOWER(TRIM(CAST(v.value AS TEXT))) LIKE '%.mp4'
+                        OR LOWER(TRIM(CAST(v.value AS TEXT))) LIKE '%.webm'
+                        OR LOWER(TRIM(CAST(v.value AS TEXT))) LIKE '%.mkv'
+                        OR LOWER(TRIM(CAST(v.value AS TEXT))) LIKE '%.mov'
+                        OR LOWER(TRIM(CAST(v.value AS TEXT))) LIKE '%.mp3'
+                        OR LOWER(TRIM(CAST(v.value AS TEXT))) LIKE '%.wav'
+                        OR LOWER(TRIM(CAST(v.value AS TEXT))) LIKE '%.ogg'
+                        OR LOWER(TRIM(CAST(v.value AS TEXT))) LIKE '%.flac'
+                        OR LOWER(TRIM(CAST(v.value AS TEXT))) LIKE '%.m4a'
+                      )
+                    {base_where}
+                ),
+                input_entries AS (
+                    SELECT
+                        run_id,
+                        run_group_id,
+                        project_id,
+                        project_name,
+                        app_id,
+                        app_title,
+                        created_at,
+                        run_status,
+                        local_storage_status,
+                        output_index,
+                        filename,
+                        subfolder,
+                        media_type,
+                        remote_deleted,
+                        metadata_snapshot_json,
+                        input_snapshot_json,
+                        is_favorite
+                    FROM (
+                        SELECT
+                            input_entries_raw.*,
+                            ROW_NUMBER() OVER (
+                                PARTITION BY filename
+                                ORDER BY created_at DESC, run_id DESC
+                            ) AS _rn
+                        FROM input_entries_raw
+                    ) ranked_inputs
+                    WHERE _rn = 1
+                ),
+                all_entries AS (
+                    SELECT * FROM media_entries
+                    UNION ALL
+                    SELECT * FROM input_entries
+                ),
+                filtered AS (
+                    SELECT *
+                    FROM all_entries
+                    WHERE filename IS NOT NULL
+                      AND TRIM(filename) != ''
+                      AND run_status = 'done'
+                      AND (media_type IS NULL OR media_type = '' OR media_type IN ('image', 'output', 'input', 'video', 'audio'))
+                      AND (remote_deleted = 0 OR local_storage_status IN ('saved', 'partial'))
+                )
+            """
+
+            filter_parts: list[str] = []
+            filter_params: list[Any] = []
+            source_norm = (source or "all").strip().lower()
+            if source_norm == "generation":
+                filter_parts.append("media_type != 'input'")
+            elif source_norm == "input":
+                filter_parts.append("media_type = 'input'")
+            if favorites_only:
+                filter_parts.append("media_type != 'input' AND is_favorite = 1")
+            if q and q.strip():
+                pattern = f"%{self._escape_like(q.strip())}%"
+                filter_parts.append(
+                    "("
+                    "filename LIKE ? ESCAPE '\\' "
+                    "OR project_name LIKE ? ESCAPE '\\' "
+                    "OR COALESCE(app_title, '') LIKE ? ESCAPE '\\' "
+                    "OR metadata_snapshot_json LIKE ? ESCAPE '\\' "
+                    "OR input_snapshot_json LIKE ? ESCAPE '\\'"
+                    ")"
+                )
+                filter_params.extend([pattern, pattern, pattern, pattern, pattern])
+            extra_filter = ""
+            if filter_parts:
+                extra_filter = " AND " + " AND ".join(filter_parts)
+            repeated_params = params + params
+
+            query_params = repeated_params + filter_params
+            count_sql = cte_sql + f" SELECT COUNT(*) FROM filtered WHERE 1 = 1{extra_filter}"
+            total_row = conn.execute(count_sql, query_params).fetchone()
+            total = int(total_row[0]) if total_row and total_row[0] is not None else 0
+            list_sql = cte_sql + f"""
+                SELECT
+                    run_id,
+                    run_group_id,
+                    project_id,
+                    project_name,
+                    app_id,
+                    app_title,
+                    created_at,
+                    output_index,
+                    filename,
+                    subfolder,
+                    media_type,
+                    is_favorite
+                FROM filtered
+                WHERE 1 = 1
+                {extra_filter}
+                ORDER BY created_at DESC, run_id DESC, output_index ASC
+                LIMIT ? OFFSET ?
+            """
+            rows = conn.execute(list_sql, query_params + [limit, offset]).fetchall()
+            items = [
+                {
+                    "run_id": r[0],
+                    "run_group_id": r[1],
+                    "project_id": r[2],
+                    "project_name": r[3],
+                    "app_id": r[4],
+                    "app_title": r[5],
+                    "created_at": r[6],
+                    "output_index": r[7],
+                    "filename": r[8],
+                    "subfolder": r[9] or "",
+                    "type": r[10] or "image",
+                    "source": "input" if (r[10] or "").lower() == "input" else "generation",
+                    "is_favorite": bool(r[11]),
+                }
+                for r in rows
+            ]
+            return items, total
+        finally:
+            conn.close()
+
+    def list_media_browser_projects(
+        self,
+        *,
+        owner_user_id: str | None,
+        auth_enabled: bool,
+        source: str = "all",
+        app_id: str | None = None,
+        since_ts: int | None = None,
+        until_ts: int | None = None,
+        q: str | None = None,
+        favorites_only: bool = False,
+    ) -> list[dict[str, Any]]:
+        conn = self._conn()
+        try:
+            where_parts: list[str] = []
+            params: list[Any] = []
+            if auth_enabled:
+                if owner_user_id:
+                    where_parts.append("r.owner_user_id = ?")
+                    params.append(owner_user_id)
+                else:
+                    where_parts.append("1 = 0")
+            else:
+                where_parts.append("r.owner_user_id IS NULL")
+            if app_id:
+                where_parts.append("r.app_id = ?")
+                params.append(app_id)
+            if since_ts is not None:
+                where_parts.append("g.created_at >= ?")
+                params.append(since_ts)
+            if until_ts is not None:
+                where_parts.append("g.created_at <= ?")
+                params.append(until_ts)
+            base_where = " AND ".join(where_parts)
+            if base_where:
+                base_where = " AND " + base_where
+
+            cte_sql = f"""
+                WITH media_entries AS (
+                    SELECT
+                        r.project_id AS project_id,
+                        p.name AS project_name,
+                        p.header_color AS project_header_color,
+                        g.created_at AS created_at,
+                        g.status AS run_status,
+                        json_extract(j.value, '$.filename') AS filename,
+                        LOWER(COALESCE(json_extract(j.value, '$.type'), json_extract(j.value, '$.kind'), 'image')) AS media_type,
+                        COALESCE(CAST(json_extract(j.value, '$.remote_deleted') AS INTEGER), 0) AS remote_deleted,
+                        g.local_storage_status AS local_storage_status,
+                        COALESCE(r.metadata_snapshot_json, '') AS metadata_snapshot_json,
+                        COALESCE(g.input_snapshot_json, r.input_snapshot_json, '') AS input_snapshot_json,
+                        COALESCE(wa.title, '') AS app_title,
+                        CASE WHEN EXISTS (
+                            SELECT 1
+                            FROM json_each(
+                                CASE
+                                    WHEN json_valid(COALESCE(p.metadata_json, '')) THEN COALESCE(json_extract(COALESCE(p.metadata_json, ''), '$.favorites'), '[]')
+                                    ELSE '[]'
+                                END
+                            ) fav
+                            WHERE CAST(fav.value AS TEXT) = g.id
+                        ) THEN 1 ELSE 0 END AS is_favorite
+                    FROM generation g
+                    JOIN run r ON r.id = g.run_id
+                    JOIN project p ON p.id = r.project_id
+                    LEFT JOIN workflow_app wa ON wa.id = r.app_id
+                    JOIN json_each(
+                        CASE
+                            WHEN json_valid(g.media_json) AND json_type(g.media_json) = 'array' AND json_array_length(g.media_json) > 0 THEN g.media_json
+                            WHEN json_valid(g.images_json) AND json_type(g.images_json) = 'array' THEN g.images_json
+                            ELSE '[]'
+                        END
+                    ) AS j
+                    WHERE g.deleted_at IS NULL
+                    {base_where}
+                ),
+                input_entries AS (
+                    SELECT
+                        r.project_id AS project_id,
+                        p.name AS project_name,
+                        p.header_color AS project_header_color,
+                        g.created_at AS created_at,
+                        g.status AS run_status,
+                        CAST(v.value AS TEXT) AS filename,
+                        'input' AS media_type,
+                        0 AS remote_deleted,
+                        g.local_storage_status AS local_storage_status,
+                        COALESCE(r.metadata_snapshot_json, '') AS metadata_snapshot_json,
+                        COALESCE(g.input_snapshot_json, r.input_snapshot_json, '') AS input_snapshot_json,
+                        COALESCE(wa.title, '') AS app_title,
+                        CASE WHEN EXISTS (
+                            SELECT 1
+                            FROM json_each(
+                                CASE
+                                    WHEN json_valid(COALESCE(p.metadata_json, '')) THEN COALESCE(json_extract(COALESCE(p.metadata_json, ''), '$.favorites'), '[]')
+                                    ELSE '[]'
+                                END
+                            ) fav
+                            WHERE CAST(fav.value AS TEXT) = g.id
+                        ) THEN 1 ELSE 0 END AS is_favorite
+                    FROM generation g
+                    JOIN run r ON r.id = g.run_id
+                    JOIN project p ON p.id = r.project_id
+                    LEFT JOIN workflow_app wa ON wa.id = r.app_id
+                    JOIN json_each(
+                        CASE
+                            WHEN json_valid(COALESCE(g.input_snapshot_json, r.input_snapshot_json, '')) THEN COALESCE(json_extract(COALESCE(g.input_snapshot_json, r.input_snapshot_json, ''), '$.values'), '{{}}')
+                            ELSE '{{}}'
+                        END
+                    ) AS v
+                    WHERE g.deleted_at IS NULL
+                      AND v.type = 'text'
+                      AND TRIM(CAST(v.value AS TEXT)) != ''
+                      AND (
+                        LOWER(TRIM(CAST(v.value AS TEXT))) LIKE '%.png'
+                        OR LOWER(TRIM(CAST(v.value AS TEXT))) LIKE '%.jpg'
+                        OR LOWER(TRIM(CAST(v.value AS TEXT))) LIKE '%.jpeg'
+                        OR LOWER(TRIM(CAST(v.value AS TEXT))) LIKE '%.webp'
+                        OR LOWER(TRIM(CAST(v.value AS TEXT))) LIKE '%.gif'
+                        OR LOWER(TRIM(CAST(v.value AS TEXT))) LIKE '%.mp4'
+                        OR LOWER(TRIM(CAST(v.value AS TEXT))) LIKE '%.webm'
+                        OR LOWER(TRIM(CAST(v.value AS TEXT))) LIKE '%.mkv'
+                        OR LOWER(TRIM(CAST(v.value AS TEXT))) LIKE '%.mov'
+                        OR LOWER(TRIM(CAST(v.value AS TEXT))) LIKE '%.mp3'
+                        OR LOWER(TRIM(CAST(v.value AS TEXT))) LIKE '%.wav'
+                        OR LOWER(TRIM(CAST(v.value AS TEXT))) LIKE '%.ogg'
+                        OR LOWER(TRIM(CAST(v.value AS TEXT))) LIKE '%.flac'
+                        OR LOWER(TRIM(CAST(v.value AS TEXT))) LIKE '%.m4a'
+                      )
+                    {base_where}
+                ),
+                all_entries AS (
+                    SELECT * FROM media_entries
+                    UNION ALL
+                    SELECT * FROM input_entries
+                ),
+                filtered AS (
+                    SELECT *
+                    FROM all_entries
+                    WHERE filename IS NOT NULL
+                      AND TRIM(filename) != ''
+                      AND run_status = 'done'
+                      AND (media_type IS NULL OR media_type = '' OR media_type IN ('image', 'output', 'input', 'video', 'audio'))
+                      AND (remote_deleted = 0 OR local_storage_status IN ('saved', 'partial'))
+                )
+            """
+            filter_parts: list[str] = []
+            filter_params: list[Any] = []
+            source_norm = (source or "all").strip().lower()
+            if source_norm == "generation":
+                filter_parts.append("media_type != 'input'")
+            elif source_norm == "input":
+                filter_parts.append("media_type = 'input'")
+            if favorites_only:
+                filter_parts.append("media_type != 'input' AND is_favorite = 1")
+            if q and q.strip():
+                pattern = f"%{self._escape_like(q.strip())}%"
+                filter_parts.append(
+                    "("
+                    "filename LIKE ? ESCAPE '\\' "
+                    "OR project_name LIKE ? ESCAPE '\\' "
+                    "OR app_title LIKE ? ESCAPE '\\' "
+                    "OR metadata_snapshot_json LIKE ? ESCAPE '\\' "
+                    "OR input_snapshot_json LIKE ? ESCAPE '\\'"
+                    ")"
+                )
+                filter_params.extend([pattern, pattern, pattern, pattern, pattern])
+            extra_filter = ""
+            if filter_parts:
+                extra_filter = " AND " + " AND ".join(filter_parts)
+            repeated_params = params + params
+
+            sql = cte_sql + f"""
+                SELECT
+                    project_id,
+                    project_name,
+                    project_header_color,
+                    MAX(created_at) AS last_used_at,
+                    COUNT(*) AS media_count
+                FROM filtered
+                WHERE 1 = 1
+                {extra_filter}
+                GROUP BY project_id, project_name, project_header_color
+                ORDER BY last_used_at DESC, LOWER(project_name) ASC
+            """
+            rows = conn.execute(sql, repeated_params + filter_params).fetchall()
+            return [
+                {
+                    "id": r[0],
+                    "name": r[1],
+                    "header_color": r[2],
+                    "last_used_at": r[3],
+                    "media_count": r[4],
+                }
+                for r in rows
+            ]
+        finally:
+            conn.close()
+
     def get_runs_by_project(
         self,
         project_id: str,
@@ -1199,6 +1825,125 @@ class SqliteRunRepository:
             if tag:
                 pass
             return runs
+        finally:
+            conn.close()
+
+    def get_recent_runs(
+        self,
+        *,
+        owner_user_id: str | None,
+        auth_enabled: bool,
+        project_id: str | None = None,
+        app_id: str | None = None,
+        statuses: list[str] | None = None,
+        q: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[Run]:
+        conn = self._conn()
+        try:
+            where_parts: list[str] = ["g.deleted_at IS NULL"]
+            params: list[Any] = []
+
+            if auth_enabled:
+                if owner_user_id:
+                    where_parts.append("r.owner_user_id = ?")
+                    params.append(owner_user_id)
+                else:
+                    where_parts.append("1 = 0")
+            else:
+                where_parts.append("r.owner_user_id IS NULL")
+
+            if project_id:
+                where_parts.append("r.project_id = ?")
+                params.append(project_id)
+            if app_id:
+                where_parts.append("r.app_id = ?")
+                params.append(app_id)
+            if statuses:
+                normalized = [s.strip().lower() for s in statuses if isinstance(s, str) and s.strip()]
+                if normalized:
+                    placeholders = ",".join("?" * len(normalized))
+                    where_parts.append(f"g.status IN ({placeholders})")
+                    params.extend(normalized)
+            if q:
+                pattern = f"%{self._escape_like(q)}%"
+                where_parts.append(
+                    "("
+                    "r.metadata_snapshot_json LIKE ? ESCAPE '\\' OR "
+                    "r.input_snapshot_json LIKE ? ESCAPE '\\' OR "
+                    "r.project_id LIKE ? ESCAPE '\\'"
+                    ")"
+                )
+                params.extend([pattern, pattern, pattern])
+
+            where_sql = " AND ".join(where_parts)
+            sql = (
+                f"SELECT {_run_select_cols()} "
+                "FROM generation g "
+                "JOIN run r ON r.id = g.run_id "
+                f"WHERE {where_sql} "
+                "ORDER BY g.created_at DESC "
+                "LIMIT ? OFFSET ?"
+            )
+            rows = conn.execute(sql, params + [limit, offset]).fetchall()
+            return [_row_to_run(r) for r in rows]
+        finally:
+            conn.close()
+
+    def count_recent_runs(
+        self,
+        *,
+        owner_user_id: str | None,
+        auth_enabled: bool,
+        project_id: str | None = None,
+        app_id: str | None = None,
+        statuses: list[str] | None = None,
+        q: str | None = None,
+    ) -> int:
+        conn = self._conn()
+        try:
+            where_parts: list[str] = ["g.deleted_at IS NULL"]
+            params: list[Any] = []
+
+            if auth_enabled:
+                if owner_user_id:
+                    where_parts.append("r.owner_user_id = ?")
+                    params.append(owner_user_id)
+                else:
+                    where_parts.append("1 = 0")
+            else:
+                where_parts.append("r.owner_user_id IS NULL")
+
+            if project_id:
+                where_parts.append("r.project_id = ?")
+                params.append(project_id)
+            if app_id:
+                where_parts.append("r.app_id = ?")
+                params.append(app_id)
+            if statuses:
+                normalized = [s.strip().lower() for s in statuses if isinstance(s, str) and s.strip()]
+                if normalized:
+                    placeholders = ",".join("?" * len(normalized))
+                    where_parts.append(f"g.status IN ({placeholders})")
+                    params.extend(normalized)
+            if q:
+                pattern = f"%{self._escape_like(q)}%"
+                where_parts.append(
+                    "("
+                    "r.metadata_snapshot_json LIKE ? ESCAPE '\\' OR "
+                    "r.input_snapshot_json LIKE ? ESCAPE '\\' OR "
+                    "r.project_id LIKE ? ESCAPE '\\'"
+                    ")"
+                )
+                params.extend([pattern, pattern, pattern])
+
+            where_sql = " AND ".join(where_parts)
+            row = conn.execute(
+                "SELECT COUNT(*) FROM generation g JOIN run r ON r.id = g.run_id WHERE " + where_sql,
+                params,
+            ).fetchone()
+            return row[0] if row else 0
         finally:
             conn.close()
 

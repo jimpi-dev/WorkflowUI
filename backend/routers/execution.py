@@ -1,4 +1,5 @@
 import hashlib
+import json
 import logging
 import requests
 from pathlib import Path
@@ -6,6 +7,7 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Depends, UploadFile, File, Response
 
+from authz import require_user, ensure_run_access
 from config import get_workflowui_embed_config
 from services.comfyui_info import normalize_comfy_url as _normalize_comfy_url
 from services.workflowui_metadata import (
@@ -17,9 +19,11 @@ from services.mp3_metadata import inject_workflowui_metadata as inject_workflowu
 from services.mp4_metadata import inject_workflowui_metadata as inject_workflowui_metadata_mp4
 
 from dependencies import COMFY_URL, INPUT_DATA_DIR, get_db, get_media_storage_service, get_run_queue_state
+from services.media_storage_service import MediaStorageService
+from services.video_thumbnail import get_or_create_video_thumbnail_webp_bytes
 
 logger = logging.getLogger(__name__)
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_user)])
 
 ALLOWED_IMAGE_EXTENSIONS = frozenset({".png", ".jpg", ".jpeg", ".webp", ".gif"})
 ALLOWED_VIDEO_EXTENSIONS = frozenset({".mp4", ".webm", ".mkv", ".mov"})
@@ -63,10 +67,78 @@ def _media_type_for_path(path: Path) -> str:
     return "application/octet-stream"
 
 
+def _response_media_type(filename: str, reported: str | None, content: bytes) -> str:
+    """
+    Normalize Content-Type for proxied ComfyUI /view responses. Browsers reject <video> when
+    the server sends application/octet-stream or a wrong MIME for MP4.
+    """
+    fn = (filename or "").lower()
+    if fn.endswith(".png"):
+        return "image/png"
+    if fn.endswith((".jpg", ".jpeg")):
+        return "image/jpeg"
+    if fn.endswith(".webp"):
+        return "image/webp"
+    if fn.endswith(".gif"):
+        return "image/gif"
+    if fn.endswith(".mp4"):
+        return "video/mp4"
+    if fn.endswith(".webm"):
+        return "video/webm"
+    if fn.endswith(".mov"):
+        return "video/quicktime"
+    if fn.endswith(".mkv"):
+        return "video/x-matroska"
+    if fn.endswith(".mp3"):
+        return "audio/mpeg"
+    if fn.endswith(".wav"):
+        return "audio/wav"
+    if fn.endswith(".flac"):
+        return "audio/flac"
+    if fn.endswith(".m4a"):
+        return "audio/mp4"
+    if fn.endswith(".ogg"):
+        return "audio/ogg"
+    if content and len(content) >= 12 and content[4:8] == b"ftyp":
+        return "video/mp4"
+    rep = (reported or "").split(";")[0].strip().lower()
+    if rep and rep not in ("application/octet-stream", "binary/octet-stream", "text/plain"):
+        return rep
+    return "application/octet-stream"
+
+
 def _resolved_embed_on_download(app) -> bool:
     if getattr(app, "embed_workflowui_metadata_on_download", None) is not None:
         return bool(app.embed_workflowui_metadata_on_download)
     return get_workflowui_embed_config().embed_on_download
+
+
+def _run_output_type_matches(stored_type: str, requested_type: str) -> bool:
+    """
+    Run JSON may use type \"output\" (folder) while ComfyUI history uses \"video\"/\"audio\"
+    for the same file; clients may send either.
+    """
+    a = (stored_type or "output").strip().lower()
+    b = (requested_type or "output").strip().lower()
+    if a == b:
+        return True
+    if a in ("output", "video", "audio") and b in ("output", "video", "audio"):
+        return True
+    if a in ("output", "image") and b in ("output", "image"):
+        return True
+    return False
+
+
+def _use_workflowui_plugin_media_view(type_str: str, filename: str) -> bool:
+    """Use WorkflowUIPlugin /workflowui/media/view for images only; video/audio need ComfyUI /view (full file)."""
+    t = (type_str or "output").strip().lower()
+    if t in ("video", "audio"):
+        return False
+    fn = (filename or "").lower()
+    for ext in (".mp4", ".webm", ".mkv", ".mov", ".mp3", ".wav", ".ogg", ".flac", ".m4a"):
+        if fn.endswith(ext):
+            return False
+    return True
 
 
 def _coerce_binding_value(field_path: str, value) -> Any:
@@ -122,7 +194,11 @@ def resolve_node(prompt: dict, node_id: str):
 
 
 @router.get("/outputs/{prompt_id}")
-def get_outputs(prompt_id: str, state=Depends(get_run_queue_state)):
+def get_outputs(prompt_id: str, state=Depends(get_run_queue_state), db=Depends(get_db), ctx=Depends(require_user)):
+    run_repo = db[3]
+    run = run_repo.get_run_by_prompt_id(prompt_id) if run_repo else None
+    if run:
+        ensure_run_access(run.id, ctx, run_repo)
     comfy_url = _resolve_comfy_url_for_prompt(prompt_id, state, get_db)
     res = requests.get(f"{comfy_url}/history/{prompt_id}")
     history = res.json()
@@ -135,9 +211,11 @@ def get_outputs(prompt_id: str, state=Depends(get_run_queue_state)):
         if raw_type == "video":
             return "video"
         if raw_type == "output" and filename:
-            lower = filename.lower()
-            if any(lower.endswith(ext) for ext in (".mp3", ".wav", ".ogg", ".flac", ".m4a", ".webm")):
+            ext = Path(filename).suffix.lower()
+            if ext in {".mp3", ".wav", ".ogg", ".flac", ".m4a", ".aac", ".opus"}:
                 return "audio"
+            if ext in {".mp4", ".webm", ".mkv", ".mov", ".avi", ".wmv", ".m4v", ".mpg", ".mpeg"}:
+                return "video"
         return raw_type if raw_type else "image"
 
     outputs = []
@@ -280,22 +358,91 @@ def upload_media(
         file.file.close()
 
 
-@router.get("/image")
-def get_image(
+def load_run_output_content_bytes(
     filename: str,
     subfolder: str,
     type: str,
-    run_id: str | None = None,
-    preview: str | None = None,
-    embed_workflowui_metadata: str | None = None,
-    state=Depends(get_run_queue_state),
-    service=Depends(get_media_storage_service),
-):
-    logger.info("GET /image filename=%s subfolder=%s type=%s run_id=%s preview=%s embed=%s", filename, subfolder, type, run_id, preview, embed_workflowui_metadata)
-    content: bytes
+    run_id: str | None,
+    *,
+    preview: str | None,
+    state,
+    service: MediaStorageService,
+    db,
+    ctx,
+) -> tuple[bytes, str]:
+    """Load raw bytes for GET /image (local or ComfyUI) without WorkflowUI embed injection."""
+    req_type = (type or "").strip().lower()
+    if ctx.auth_enabled and not run_id and req_type != "input":
+        raise HTTPException(status_code=400, detail="run_id is required")
+    if not run_id and req_type == "input":
+        # Input uploads are stored locally under INPUT_DATA_DIR by hashed filename.
+        # Keep strict path checks to avoid traversal.
+        if not filename or "/" in filename or "\\" in filename:
+            raise HTTPException(status_code=400, detail="Invalid input filename")
+        base_dir = INPUT_DATA_DIR.resolve()
+        input_path = (INPUT_DATA_DIR / filename).resolve()
+        if not str(input_path).startswith(str(base_dir)) or not input_path.is_file():
+            raise HTTPException(status_code=404, detail="Input media file not found")
+        return input_path.read_bytes(), _media_type_for_path(input_path)
+    is_video_thumbnail_preview = (
+        (preview or "").strip().lower() == "webp"
+        and (type or "").strip().lower() == "video"
+    )
+    content: bytes | None
     media_type: str
     if run_id:
-        local_path = service.get_local_image_path(run_id, filename, subfolder or "", type or "output")
+        run_entity = ensure_run_access(run_id, ctx, db[3])
+        entries = []
+        try:
+            if run_entity.media_json:
+                entries = json.loads(run_entity.media_json)
+            elif run_entity.images_json:
+                entries = json.loads(run_entity.images_json)
+        except Exception:
+            entries = []
+        matched_ent = None
+        matched_index: int | None = None
+        for idx, ent in enumerate(entries if isinstance(entries, list) else []):
+            if not isinstance(ent, dict):
+                continue
+            ent_type = (ent.get("type") or ent.get("kind") or "output").strip().lower()
+            req_type = (type or "output").strip().lower()
+            if not _run_output_type_matches(ent_type, req_type):
+                continue
+            if (ent.get("filename") or "") == (filename or "") and (ent.get("subfolder") or "") == (subfolder or ""):
+                matched_ent = ent
+                matched_index = idx
+                break
+        if not matched_ent:
+            raise HTTPException(status_code=404, detail="Image not found")
+        if is_video_thumbnail_preview:
+            if matched_index is None:
+                raise HTTPException(status_code=404, detail="Video preview not found")
+            # Always pass Comfy base URL so thumbnails can fall back to ComfyUI /view?preview=webp when ffmpeg is unavailable.
+            comfy_url = None
+            with state.queue_lock:
+                if run_id in state.runs and state.runs[run_id].get("comfyui_url"):
+                    comfy_url = state.runs[run_id]["comfyui_url"]
+            if comfy_url is None:
+                run_repo = get_db()[3]
+                run = run_repo.get_run(run_id) if run_repo else None
+                comfy_url = _normalize_comfy_url(run.comfyui_url or COMFY_URL) if run and run.comfyui_url else COMFY_URL
+        stored_for_local = (matched_ent.get("type") or matched_ent.get("kind") or "output").strip().lower()
+        local_path = service.get_local_image_path(run_id, filename, subfolder or "", stored_for_local)
+        if is_video_thumbnail_preview:
+            input_video_path = local_path if local_path is not None and local_path.is_file() else None
+            thumb_bytes = get_or_create_video_thumbnail_webp_bytes(
+                run_entity=run_entity,
+                output_index=matched_index,
+                filename=filename,
+                subfolder=subfolder or "",
+                comfy_url=comfy_url,
+                view_type="output",
+                input_video_path=input_video_path,
+            )
+            assert thumb_bytes is not None
+            return thumb_bytes, "image/webp"
+
         if local_path is not None and local_path.is_file():
             logger.info("GET /image: serving from local storage %s", local_path)
             media_type = _media_type_for_path(local_path)
@@ -322,18 +469,22 @@ def get_image(
         if preview:
             params["preview"] = preview
         base = comfy_url.rstrip("/")
+        # Plugin view often returns a preview image for video; use ComfyUI /view for real media bytes.
+        use_plugin_view = _use_workflowui_plugin_media_view(type or "", filename or "")
         plugin_view_url = f"{base}/workflowui/media/view"
-        try:
-            res = requests.get(plugin_view_url, params=params, timeout=60)
-            if res.ok:
-                logger.info("GET /image: served via WorkflowUIPlugin view (%s?filename=%s)", plugin_view_url, filename)
-                content = res.content
-                media_type = res.headers.get("content-type") or "image/png"
-            else:
+        res = None
+        if use_plugin_view:
+            try:
+                res = requests.get(plugin_view_url, params=params, timeout=60)
+                if res.ok:
+                    logger.info("GET /image: served via WorkflowUIPlugin view (%s?filename=%s)", plugin_view_url, filename)
+                    content = res.content
+                    media_type = res.headers.get("content-type") or "image/png"
+                else:
+                    res = None
+            except requests.RequestException as e:
+                logger.info("GET /image: WorkflowUIPlugin view not available (%s), using ComfyUI /view", e)
                 res = None
-        except requests.RequestException as e:
-            logger.info("GET /image: WorkflowUIPlugin view not available (%s), using ComfyUI /view", e)
-            res = None
         if res is None or not res.ok:
             comfy_view_url = f"{base}/view"
             try:
@@ -344,7 +495,28 @@ def get_image(
             if not res.ok:
                 raise HTTPException(status_code=res.status_code, detail=f"ComfyUI returned {res.status_code}")
             content = res.content
-            media_type = res.headers.get("content-type") or "image/png"
+            media_type = _response_media_type(filename or "", res.headers.get("content-type"), content)
+    assert content is not None
+    return content, media_type
+
+
+@router.get("/image")
+def get_image(
+    filename: str,
+    subfolder: str,
+    type: str,
+    run_id: str | None = None,
+    preview: str | None = None,
+    embed_workflowui_metadata: str | None = None,
+    state=Depends(get_run_queue_state),
+    service=Depends(get_media_storage_service),
+    db=Depends(get_db),
+    ctx=Depends(require_user),
+):
+    logger.info("GET /image filename=%s subfolder=%s type=%s run_id=%s preview=%s embed=%s", filename, subfolder, type, run_id, preview, embed_workflowui_metadata)
+    content, media_type = load_run_output_content_bytes(
+        filename, subfolder, type, run_id, preview=preview, state=state, service=service, db=db, ctx=ctx
+    )
     if run_id and embed_workflowui_metadata and str(embed_workflowui_metadata).strip() in ("1", "true", "yes"):
         _, _, app_repo, run_repo, _, _, _ = get_db()
         run = run_repo.get_run(run_id) if run_repo else None

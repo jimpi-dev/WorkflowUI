@@ -5,7 +5,8 @@ export const PrimitiveStringMultilineSpec: NodeSpec = {
     fixedInputs: {
         value: {
             type: 'text',
-            label: 'Prompt'
+            label: 'Prompt',
+            multiline: true
         }
     }
 };

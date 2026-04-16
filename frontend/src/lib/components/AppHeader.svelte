@@ -1,15 +1,17 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
+	import { onDestroy, onMount } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { browser } from '$app/environment';
 	import { page } from '$app/stores';
-	import { QUICK_RUNS_PROJECT_ID } from '$lib/constants';
 	import { appConfig, getApiBase } from '$lib/config';
 	import { waitForAppToBeAvailable } from '$lib/api';
 	import { appBooting } from '$lib/stores/appBooting';
+	import { authState } from '$lib/stores/auth';
 	import { headerAppContext } from '$lib/stores/headerAppContext';
 	import { presetHeaderStore, togglePresetHeaderCreation, requestOpenPresetList } from '$lib/stores/presetHeader';
 	import { projectSelectorOpen } from '$lib/stores/projectSelectorOpen';
+	import { getQueue } from '$lib/queueApi';
+	import { quickRunsProject } from '$lib/stores/quickRunsProject';
 	import PresetIcon from '$lib/components/PresetIcon.svelte';
 
 	let theme = $state('dark');
@@ -21,6 +23,15 @@
 			localStorage.getItem('theme') ??
 			(window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
 		document.documentElement.setAttribute('data-theme', theme);
+		refreshActivityCount();
+		activityPollId = setInterval(refreshActivityCount, 5000);
+	});
+
+	onDestroy(() => {
+		if (activityPollId) {
+			clearInterval(activityPollId);
+			activityPollId = null;
+		}
 	});
 
 	function toggleTheme() {
@@ -37,6 +48,9 @@
 	}
 
 	let menuOpen = $state(false);
+	let activityActiveCount = $state(0);
+	let activityPollId: ReturnType<typeof setInterval> | null = null;
+	let showAuthNav = $derived(!$authState.enabled || $authState.authenticated);
 
 	function toggleMenu() {
 		menuOpen = !menuOpen;
@@ -44,6 +58,25 @@
 
 	function closeMenu() {
 		menuOpen = false;
+	}
+
+	async function refreshActivityCount() {
+		try {
+			const queue = await getQueue();
+			const ids = new Set<string>();
+			if (queue.running) ids.add(queue.running.run_group_id ?? queue.running.run_id);
+			for (const item of queue.queued ?? []) ids.add(item.run_group_id ?? item.run_id);
+			activityActiveCount = ids.size;
+		} catch {
+			activityActiveCount = 0;
+		}
+	}
+
+	async function logout() {
+		const apiBase = getApiBase().replace(/\/$/, '');
+		await fetch(`${apiBase}/auth/logout`, { method: 'POST', credentials: 'include' }).catch(() => {});
+		authState.set({ enabled: true, authenticated: false, user: null, loaded: true });
+		goto('/login');
 	}
 
 	function handleKeydown(e: KeyboardEvent) {
@@ -64,11 +97,27 @@
 			try {
 				sessionStorage.setItem(
 					'workflowui_import_prefill',
-					JSON.stringify({ slug: p.slug, input_snapshot: p.input_snapshot })
+					JSON.stringify({
+						slug: p.slug,
+						source: 'file_generation',
+						input_snapshot: p.input_snapshot
+					})
 				);
 			} catch {
 				// ignore
 			}
+		}
+		try {
+			sessionStorage.setItem(
+				'workflowui_import_display',
+				JSON.stringify({
+					slug: p.slug,
+					appTitle: p.appName,
+					workflowName: p.workflowName
+				})
+			);
+		} catch {
+			// ignore
 		}
 		appBooting.set(true);
 		await waitForAppToBeAvailable(p.slug);
@@ -234,17 +283,25 @@
 			</a>
 		</div>
 		<nav class="top-nav" aria-label="Main">
+			{#if showAuthNav}
 			<a href="/" class:active={$page.url.pathname === '/'}>
 				<svg class="top-nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
 				<span>Home</span>
 			</a>
-			<a href="/projects/{QUICK_RUNS_PROJECT_ID}" class:active={$page.url.pathname === '/projects/' + QUICK_RUNS_PROJECT_ID}>
+			<a href="/projects/{$quickRunsProject.id}" class:active={$page.url.pathname === '/projects/' + $quickRunsProject.id}>
 				<svg class="top-nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
 				<span>Quick runs</span>
 			</a>
-			<a href="/projects" data-sveltekit-preload-data="off" class:active={$page.url.pathname === '/projects' || ($page.url.pathname.startsWith('/projects/') && $page.url.pathname !== '/projects/' + QUICK_RUNS_PROJECT_ID)}>
+			<a href="/projects" data-sveltekit-preload-data="off" class:active={$page.url.pathname === '/projects' || ($page.url.pathname.startsWith('/projects/') && $page.url.pathname !== '/projects/' + $quickRunsProject.id)}>
 				<svg class="top-nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
 				<span>Projects</span>
+			</a>
+			<a href="/activity" class:active={$page.url.pathname === '/activity'}>
+				<svg class="top-nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12h4l2-5 4 10 2-5h6"/></svg>
+				<span>Activity</span>
+				{#if activityActiveCount > 0}
+					<span class="nav-count-badge">{activityActiveCount}</span>
+				{/if}
 			</a>
 			<a href="/apps" data-sveltekit-preload-data="off" class:active={$page.url.pathname === '/apps' || $page.url.pathname.startsWith('/apps/')}>
 				<svg class="top-nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
@@ -258,6 +315,17 @@
 				<svg class="top-nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
 				<span>Import</span>
 			</a>
+			{#if $authState.user?.role === 'admin'}
+				<a href="/admin/users" class:active={$page.url.pathname.startsWith('/admin/users')}>
+					<span>Users</span>
+				</a>
+			{/if}
+			{#if $authState.enabled && $authState.authenticated}
+				<a href="/login" onclick={(e) => { e.preventDefault(); logout(); }}>
+					<span>Logout</span>
+				</a>
+			{/if}
+			{/if}
 		</nav>
 		<div class="header-drop-zone-wrap">
 			<div
@@ -303,12 +371,28 @@
 	</div>
 	<div class="nav-drawer-backdrop" class:open={menuOpen} role="presentation" onclick={closeMenu}></div>
 	<nav class="nav-drawer" class:open={menuOpen} aria-label="Main navigation">
-		<a href="/" class:active={$page.url.pathname === '/'} onclick={closeMenu}>Home</a>
-		<a href="/projects/{QUICK_RUNS_PROJECT_ID}" class:active={$page.url.pathname === '/projects/' + QUICK_RUNS_PROJECT_ID} onclick={closeMenu}>Quick runs</a>
-		<a href="/projects" data-sveltekit-preload-data="off" class:active={$page.url.pathname === '/projects' || ($page.url.pathname.startsWith('/projects/') && $page.url.pathname !== '/projects/' + QUICK_RUNS_PROJECT_ID)} onclick={closeMenu}>Projects</a>
-		<a href="/apps" data-sveltekit-preload-data="off" class:active={$page.url.pathname === '/apps' || $page.url.pathname.startsWith('/apps/')} onclick={closeMenu}>Apps</a>
-		<a href="/workflows" class:active={$page.url.pathname === '/workflows' || $page.url.pathname.startsWith('/workflows/')} onclick={closeMenu}>Workflows</a>
-		<a href="/import" class:active={$page.url.pathname === '/import'} onclick={closeMenu}>Import</a>
+		{#if showAuthNav}
+			<a href="/" class:active={$page.url.pathname === '/'} onclick={closeMenu}>Home</a>
+			<a href="/projects/{$quickRunsProject.id}" class:active={$page.url.pathname === '/projects/' + $quickRunsProject.id} onclick={closeMenu}>Quick runs</a>
+			<a href="/projects" data-sveltekit-preload-data="off" class:active={$page.url.pathname === '/projects' || ($page.url.pathname.startsWith('/projects/') && $page.url.pathname !== '/projects/' + $quickRunsProject.id)} onclick={closeMenu}>Projects</a>
+			<a href="/activity" class:active={$page.url.pathname === '/activity'} onclick={closeMenu}>Activity{#if activityActiveCount > 0} ({activityActiveCount}){/if}</a>
+			<a href="/apps" data-sveltekit-preload-data="off" class:active={$page.url.pathname === '/apps' || $page.url.pathname.startsWith('/apps/')} onclick={closeMenu}>Apps</a>
+			<a href="/workflows" class:active={$page.url.pathname === '/workflows' || $page.url.pathname.startsWith('/workflows/')} onclick={closeMenu}>Workflows</a>
+			<a href="/import" class:active={$page.url.pathname === '/import'} onclick={closeMenu}>Import</a>
+			{#if $authState.enabled && $authState.authenticated}
+				<button
+					type="button"
+					class="nav-drawer-logout"
+					onclick={(e) => {
+						e.preventDefault();
+						closeMenu();
+						void logout();
+					}}
+				>
+					Logout
+				</button>
+			{/if}
+		{/if}
 	</nav>
 	{#if importDialogOpen && pendingImport}
 		<div
@@ -457,14 +541,18 @@
 		flex-wrap: wrap;
 		align-items: center;
 		align-self: flex-start;
+		width: 100%;
 		gap: 0.5rem;
+		min-width: 0;
 	}
 
 	.header-row.logo-container {
 		position: relative;
-		display: inline-block;
+		display: flex;
+		align-items: center;
 		cursor: default;
-		margin-bottom: -28px;
+		margin-bottom: 0;
+		flex-shrink: 0;
 	}
 
 	.logo-link {
@@ -474,8 +562,9 @@
 	}
 
 	.workflow-logo {
-		transform: scale(0.85);
-		transform-origin: left top;
+		display: block;
+		width: clamp(220px, 26vw, 380px);
+		height: auto;
 	}
 
 	.header-subtitle-row {
@@ -693,7 +782,11 @@
 		display: flex;
 		gap: 1rem;
 		align-items: center;
-		margin-left: 1rem;
+		flex: 1 1 auto;
+		min-width: 0;
+		margin-left: 0.25rem;
+		flex-wrap: wrap;
+		row-gap: 0.25rem;
 	}
 
 	.top-nav a {
@@ -702,6 +795,7 @@
 		gap: 0.4rem;
 		color: var(--muted);
 		text-decoration: none;
+		white-space: nowrap;
 		font-size: 1rem;
 		font-weight: 500;
 		padding: 0.5rem 0.75rem;
@@ -715,6 +809,22 @@
 		height: 1.125em;
 		flex-shrink: 0;
 		transition: transform 0.2s ease;
+	}
+
+	.nav-count-badge {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		min-width: 1.2rem;
+		height: 1.2rem;
+		padding: 0 0.3rem;
+		border-radius: 999px;
+		background: color-mix(in srgb, var(--accent) 20%, transparent);
+		border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+		color: var(--text);
+		font-size: 0.72rem;
+		font-weight: 700;
+		line-height: 1;
 	}
 
 	.top-nav a:hover {
@@ -741,6 +851,7 @@
 		flex-direction: column;
 		align-items: flex-end;
 		gap: 0.25rem;
+		flex-shrink: 0;
 	}
 	.header-drop-zone {
 		display: flex;
@@ -929,6 +1040,195 @@
 		display: none;
 	}
 
+	@media (max-width: 1440px) {
+		.top-nav {
+			gap: 0.35rem;
+			margin-left: 0.25rem;
+		}
+		.top-nav a {
+			font-size: 0.86rem;
+			padding: 0.35rem 0.42rem;
+		}
+	}
+
+	@media (max-width: 1280px) {
+		.workflow-logo {
+			width: clamp(200px, 24vw, 320px);
+		}
+		.top-nav {
+			gap: 0.25rem;
+			margin-left: 0.1rem;
+		}
+		.top-nav a {
+			font-size: 0.82rem;
+			padding: 0.32rem 0.36rem;
+		}
+		.header-drop-zone {
+			min-height: 44px;
+			min-width: 118px;
+			padding: 0.35rem 0.55rem;
+		}
+		.header-drop-zone-label {
+			font-size: 0.72rem;
+		}
+	}
+
+	@media (max-width: 1120px) {
+		.top-nav {
+			gap: 0.25rem;
+		}
+		.top-nav a {
+			font-size: 0.88rem;
+			padding: 0.38rem 0.42rem;
+		}
+		.header-drop-zone {
+			min-height: 40px;
+			min-width: 102px;
+			padding: 0.25rem 0.45rem;
+		}
+		.header-drop-zone-label {
+			font-size: 0.68rem;
+		}
+	}
+
+	/* Switch to drawer before links start clipping on medium widths. */
+	@media (max-width: 980px) {
+		.header-logo-section {
+			flex-wrap: nowrap;
+			width: 100%;
+			align-items: center;
+		}
+		.header-row.logo-container {
+			flex: 1;
+			min-width: 0;
+			margin-bottom: 0;
+			height: 4.8rem;
+			overflow: hidden;
+		}
+		.logo-link {
+			display: block;
+			min-width: 0;
+		}
+		.workflow-logo {
+			width: clamp(160px, 30vw, 240px);
+		}
+		.top-nav {
+			display: none;
+		}
+		.header-drop-zone-wrap {
+			display: flex;
+			margin-left: 0.35rem;
+			align-items: stretch;
+		}
+		.header-drop-zone {
+			min-height: 36px;
+			min-width: 86px;
+			padding: 0.2rem 0.35rem;
+		}
+		.header-drop-zone-label {
+			font-size: 0.62rem;
+		}
+		.nav-toggle {
+			display: inline-flex;
+			align-items: center;
+			justify-content: center;
+			width: 40px;
+			height: 40px;
+			margin-left: 0.35rem;
+			flex-shrink: 0;
+			padding: 0;
+			background: var(--surface);
+			border: 1px solid var(--border);
+			border-radius: 8px;
+			color: var(--text);
+			cursor: pointer;
+		}
+		.nav-toggle .nav-toggle-icon {
+			width: 20px;
+			height: 20px;
+		}
+		.nav-toggle:hover {
+			background: var(--accent-soft);
+			border-color: var(--accent);
+			color: var(--accent);
+		}
+		.nav-drawer-backdrop {
+			display: block;
+			position: fixed;
+			inset: 0;
+			z-index: 9998;
+			background: rgba(0, 0, 0, 0.5);
+			opacity: 0;
+			visibility: hidden;
+			transition: opacity 0.2s ease, visibility 0.2s ease;
+		}
+		.nav-drawer-backdrop.open {
+			opacity: 1;
+			visibility: visible;
+		}
+		.nav-drawer {
+			display: flex;
+			flex-direction: column;
+			position: fixed;
+			top: 0;
+			right: 0;
+			width: min(280px, 100vw - 2rem);
+			height: 100%;
+			z-index: 9999;
+			background: var(--card);
+			border-left: 1px solid var(--border);
+			box-shadow: -8px 0 24px rgba(0, 0, 0, 0.3);
+			padding: 1rem 0;
+			gap: 0.25rem;
+			transform: translateX(100%);
+			transition: transform 0.25s ease;
+			overflow-y: auto;
+		}
+		.nav-drawer.open {
+			transform: translateX(0);
+		}
+		.nav-drawer a {
+			display: flex;
+			align-items: center;
+			padding: 0.75rem 1.25rem;
+			min-height: 44px;
+			color: var(--muted);
+			text-decoration: none;
+			font-size: 1rem;
+			font-weight: 500;
+			transition: color 0.2s ease, background 0.2s ease;
+		}
+		.nav-drawer-logout {
+			display: flex;
+			align-items: center;
+			padding: 0.75rem 1.25rem;
+			min-height: 44px;
+			color: var(--muted);
+			background: transparent;
+			border: none;
+			border-radius: 0;
+			text-decoration: none;
+			font-size: 1rem;
+			font-weight: 500;
+			text-align: left;
+			box-shadow: none;
+			cursor: pointer;
+			transition: color 0.2s ease, background 0.2s ease;
+		}
+		.nav-drawer a:hover {
+			color: var(--accent);
+			background: var(--accent-soft);
+		}
+		.nav-drawer-logout:hover {
+			color: var(--accent);
+			background: var(--accent-soft);
+		}
+		.nav-drawer a.active {
+			color: var(--text);
+			background: var(--accent-soft);
+		}
+	}
+
 	@media (max-width: 639px) {
 		.app-header-wrap {
 			position: sticky;
@@ -954,8 +1254,7 @@
 			min-width: 0;
 		}
 		.workflow-logo {
-			transform: scale(0.55);
-			transform-origin: left top;
+			width: clamp(148px, 42vw, 220px);
 		}
 		.nav-toggle {
 			display: inline-flex;
@@ -985,7 +1284,17 @@
 			display: none;
 		}
 		.header-drop-zone-wrap {
-			display: none;
+			display: flex;
+			margin-left: 0.3rem;
+			gap: 0;
+		}
+		.header-drop-zone {
+			min-height: 34px;
+			min-width: 74px;
+			padding: 0.15rem 0.25rem;
+		}
+		.header-drop-zone-label {
+			font-size: 0.58rem;
 		}
 		.header-subtitle-row {
 			padding-left: 0;
@@ -1039,7 +1348,28 @@
 			font-weight: 500;
 			transition: color 0.2s ease, background 0.2s ease;
 		}
+		.nav-drawer-logout {
+			display: flex;
+			align-items: center;
+			padding: 0.75rem 1.25rem;
+			min-height: 44px;
+			color: var(--muted);
+			background: transparent;
+			border: none;
+			border-radius: 0;
+			text-decoration: none;
+			font-size: 1rem;
+			font-weight: 500;
+			text-align: left;
+			box-shadow: none;
+			cursor: pointer;
+			transition: color 0.2s ease, background 0.2s ease;
+		}
 		.nav-drawer a:hover {
+			color: var(--accent);
+			background: var(--accent-soft);
+		}
+		.nav-drawer-logout:hover {
 			color: var(--accent);
 			background: var(--accent-soft);
 		}
