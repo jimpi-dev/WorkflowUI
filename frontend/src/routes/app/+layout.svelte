@@ -4,7 +4,7 @@
 	import { activeProject } from '$lib/stores/activeProject';
 	import { projectRunsInvalidate } from '$lib/stores/projectRunsInvalidate';
 	import { headerAppContext } from '$lib/stores/headerAppContext';
-	import { QUICK_RUNS_PROJECT_ID, QUICK_RUNS_PROJECT_NAME } from '$lib/constants';
+	import { quickRunsProject } from '$lib/stores/quickRunsProject';
 	import ProjectSelector from '$lib/components/ProjectSelector.svelte';
 	import { appBooting } from '$lib/stores/appBooting';
 	import { projectSelectorOpen } from '$lib/stores/projectSelectorOpen';
@@ -34,7 +34,7 @@
 		}
 	});
 	$effect(() => {
-		if (!browser || !data.workflowId || !currentProject || currentProject.id === QUICK_RUNS_PROJECT_ID) return;
+		if (!browser || !data.workflowId || !currentProject || currentProject.id === $quickRunsProject.id) return;
 		const projectInUrl = $page.url.searchParams.get('project');
 		if (projectInUrl === currentProject.id) return;
 		const params = new URLSearchParams($page.url.searchParams);
@@ -51,9 +51,24 @@
 
 	$effect(() => {
 		const workflowId = data.workflowId ?? null;
+		let importDisplayTitle: string | null = null;
+		if (browser && workflowId) {
+			try {
+				const raw = sessionStorage.getItem('workflowui_import_display');
+				if (raw) {
+					const d = JSON.parse(raw) as { slug?: string; appTitle?: string };
+					if (d.slug === workflowId && typeof d.appTitle === 'string' && d.appTitle.trim()) {
+						importDisplayTitle = d.appTitle.trim();
+						sessionStorage.removeItem('workflowui_import_display');
+					}
+				}
+			} catch {
+				sessionStorage.removeItem('workflowui_import_display');
+			}
+		}
 		const current = workflowId ? data.workflows?.find((w) => w.id === workflowId) : null;
 		const displayName = workflowId
-			? (data.appTitle ?? current?.label ?? workflowId)
+			? (importDisplayTitle ?? data.appTitle ?? current?.label ?? workflowId)
 			: null;
 		headerAppContext.update((prev) => ({
 			...prev,
@@ -82,7 +97,7 @@
 
 	$effect(() => {
 		const id = currentProject?.id;
-		if (!id || id === QUICK_RUNS_PROJECT_ID) {
+		if (!id || id === $quickRunsProject.id) {
 			projectDetail = null;
 			return;
 		}

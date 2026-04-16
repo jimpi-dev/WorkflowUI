@@ -72,20 +72,20 @@ describe('cookie', () => {
 	});
 
 	describe('getThumbSizeCookie / setThumbSizeCookie', () => {
-		it('returns medium when not set', () => {
-			expect(getThumbSizeCookie()).toBe('medium');
+		it('returns default scale when not set', () => {
+			expect(getThumbSizeCookie()).toBe(100);
 		});
 
-		it('returns saved size when set', () => {
-			setThumbSizeCookie('small');
-			expect(getThumbSizeCookie()).toBe('small');
-			setThumbSizeCookie('large');
-			expect(getThumbSizeCookie()).toBe('large');
+		it('returns saved numeric scale when set', () => {
+			setThumbSizeCookie(75);
+			expect(getThumbSizeCookie()).toBe(75);
+			setThumbSizeCookie(125);
+			expect(getThumbSizeCookie()).toBe(125);
 		});
 
-		it('returns medium for invalid stored value', () => {
+		it('returns default scale for invalid stored value', () => {
 			setCookie(THUMB_SIZE_COOKIE, 'invalid');
-			expect(getThumbSizeCookie()).toBe('medium');
+			expect(getThumbSizeCookie()).toBe(100);
 		});
 	});
 

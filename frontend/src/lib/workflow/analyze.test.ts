@@ -45,6 +45,7 @@ describe('analyzeWorkflow', () => {
 		expect(textInput?.key).toBe('7.text');
 		expect(textInput?.label).toBe('CLIP Text Encode (Prompt)');
 		expect(textInput?.type).toBe('text');
+		expect(textInput?.multiline).toBe(true);
 		expect(textInput?.default).toBe('a prompt');
 	});
 

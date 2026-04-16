@@ -29,6 +29,7 @@ def _ensure_run_generation_tables(conn: sqlite3.Connection) -> None:
                 project_id TEXT NOT NULL REFERENCES project(id),
                 workflow_version_id TEXT NOT NULL REFERENCES workflow_version(id),
                 app_id TEXT REFERENCES workflow_app(id),
+                owner_user_id TEXT REFERENCES user_account(id),
                 created_at INTEGER NOT NULL,
                 input_snapshot_json TEXT,
                 metadata_snapshot_json TEXT,
@@ -76,6 +77,7 @@ def _ensure_run_generation_tables(conn: sqlite3.Connection) -> None:
                     project_id TEXT NOT NULL REFERENCES project(id),
                     workflow_version_id TEXT NOT NULL REFERENCES workflow_version(id),
                     app_id TEXT REFERENCES workflow_app(id),
+                    owner_user_id TEXT REFERENCES user_account(id),
                     created_at INTEGER NOT NULL,
                     input_snapshot_json TEXT,
                     metadata_snapshot_json TEXT,
@@ -109,13 +111,14 @@ def _ensure_run_generation_tables(conn: sqlite3.Connection) -> None:
             """)
             conn.execute("""
                 INSERT INTO run_new
-                (id, project_id, workflow_version_id, app_id, created_at,
+                (id, project_id, workflow_version_id, app_id, owner_user_id, created_at,
                  input_snapshot_json, metadata_snapshot_json, run_group_id, comfyui_url, comfyui_version_id)
                 SELECT
                     """ + group_id_expr + """ AS run_id,
                     project_id,
                     workflow_version_id,
                     app_id,
+                    NULL AS owner_user_id,
                     MIN(created_at) AS created_at,
                     MAX(""" + _col("input_snapshot_json") + """) AS input_snapshot_json,
                     MAX(""" + _col("metadata_snapshot_json") + """) AS metadata_snapshot_json,
@@ -194,7 +197,27 @@ def migrate(db_path: Path | str) -> None:
                 updated_at INTEGER NOT NULL,
                 metadata_json TEXT,
                 tags_json TEXT,
-                storage_mode TEXT DEFAULT 'inherit'
+                storage_mode TEXT DEFAULT 'inherit',
+                owner_user_id TEXT REFERENCES user_account(id)
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS user_account (
+                id TEXT PRIMARY KEY,
+                username TEXT NOT NULL UNIQUE,
+                password_hash TEXT NOT NULL,
+                role TEXT NOT NULL,
+                allow_all_apps INTEGER NOT NULL DEFAULT 0,
+                created_at INTEGER NOT NULL,
+                disabled_at INTEGER NULL,
+                quick_runs_project_id TEXT REFERENCES project(id)
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS user_app_access (
+                user_id TEXT NOT NULL REFERENCES user_account(id) ON DELETE CASCADE,
+                app_id TEXT NOT NULL REFERENCES workflow_app(id) ON DELETE CASCADE,
+                PRIMARY KEY (user_id, app_id)
             )
         """)
         cur = conn.execute("SELECT 1 FROM project WHERE id = ?", (QUICK_RUNS_PROJECT_ID,))
@@ -229,6 +252,8 @@ def migrate(db_path: Path | str) -> None:
             conn.execute("ALTER TABLE run ADD COLUMN comfyui_url TEXT")
         if "comfyui_version_id" not in run_cols:
             conn.execute("ALTER TABLE run ADD COLUMN comfyui_version_id TEXT REFERENCES comfyui_version(id)")
+        if "owner_user_id" not in run_cols:
+            conn.execute("ALTER TABLE run ADD COLUMN owner_user_id TEXT REFERENCES user_account(id)")
         run_cols = _run_columns(conn, "run")
         if "media_json" not in gen_cols:
             conn.execute("ALTER TABLE generation ADD COLUMN media_json TEXT")
@@ -279,10 +304,13 @@ def migrate(db_path: Path | str) -> None:
             conn.execute("ALTER TABLE project ADD COLUMN header_color TEXT")
         if "archived_at" not in proj_cols:
             conn.execute("ALTER TABLE project ADD COLUMN archived_at INTEGER NULL")
+        if "owner_user_id" not in proj_cols:
+            conn.execute("ALTER TABLE project ADD COLUMN owner_user_id TEXT REFERENCES user_account(id)")
         if "slug" in proj_cols:
             conn.execute("DROP INDEX IF EXISTS idx_project_slug")
             conn.execute("ALTER TABLE project DROP COLUMN slug")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_run_project_id ON run(project_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_run_owner_user_id ON run(owner_user_id)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_run_app_id ON run(app_id)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_generation_run_id ON generation(run_id)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_generation_prompt_id ON generation(prompt_id)")
@@ -312,6 +340,9 @@ def migrate(db_path: Path | str) -> None:
         app_cols = _run_columns(conn, "workflow_app")
         if "comfyui_url" not in app_cols:
             conn.execute("ALTER TABLE workflow_app ADD COLUMN comfyui_url TEXT")
+        user_cols = _run_columns(conn, "user_account")
+        if "quick_runs_project_id" not in user_cols:
+            conn.execute("ALTER TABLE user_account ADD COLUMN quick_runs_project_id TEXT REFERENCES project(id)")
         if "supported_input_kinds_json" not in app_cols:
             conn.execute("ALTER TABLE workflow_app ADD COLUMN supported_input_kinds_json TEXT")
         if "header_color" not in app_cols:
@@ -344,6 +375,8 @@ def migrate(db_path: Path | str) -> None:
             )
         """)
         conn.execute("CREATE INDEX IF NOT EXISTS idx_app_preset_app_id ON app_preset(app_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_project_owner_user_id ON project(owner_user_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_user_app_access_user ON user_app_access(user_id)")
         conn.execute("""
             CREATE TABLE IF NOT EXISTS comfyui_version (
                 id TEXT PRIMARY KEY,

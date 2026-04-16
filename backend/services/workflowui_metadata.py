@@ -46,7 +46,6 @@ def build_workflowui_metadata_payload(
     app: WorkflowApp | None = None
     if run.app_id:
         app = app_repo.get_app_by_id(run.app_id)
-    project = project_repo.get_project(run.project_id)
 
     def _parse(s: str | None) -> Any:
         if not s:
@@ -100,10 +99,12 @@ def build_workflowui_metadata_payload(
         "workflow_version_id": run.workflow_version_id,
         "app_id": run.app_id,
         "workflow": workflow_payload,
+        # Backward-compatible aliases used by older sidecar helpers/tests.
+        "comfy_api_prompt": workflow_payload["graph"],
+        "comfy_ui_workflow": None,
         "workflow_hash": version.graph_hash,
         "app": app_payload,
         "run_id": run.id,
-        "project_id": run.project_id,
         "input_snapshot": _parse(run.input_snapshot_json),
         "metadata_snapshot": _parse(run.metadata_snapshot_json),
     }
@@ -112,3 +113,17 @@ def build_workflowui_metadata_payload(
 
 def workflowui_metadata_to_json_string(payload: dict[str, Any]) -> str:
     return json.dumps(payload, ensure_ascii=True, separators=(",", ":"))
+
+
+def comfy_sidecar_json_string(payload: dict[str, Any]) -> str:
+    """Legacy Comfy sidecar format kept for backward compatibility."""
+    prompt = payload.get("comfy_api_prompt")
+    if prompt is None:
+        workflow = payload.get("workflow")
+        if isinstance(workflow, dict):
+            prompt = workflow.get("graph")
+    sidecar = {
+        "prompt": prompt,
+        "workflow": payload.get("comfy_ui_workflow"),
+    }
+    return json.dumps(sidecar, ensure_ascii=True, separators=(",", ":"))

@@ -5,11 +5,12 @@ from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Depends, Response
 
+from authz import require_user
 from services.workflow_analyzer import analyze_workflow
 
 from dependencies import get_db
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_user)])
 
 IMAGE_OUTPUT_NODE_TYPES = {"SaveImage", "Save Image", "Save Image (api)", "SaveImageNode"}
 VIDEO_OUTPUT_NODE_TYPES = {"VHS_VideoCombine"}

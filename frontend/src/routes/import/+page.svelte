@@ -60,6 +60,20 @@
 	let comfyuiFilterInputEl: HTMLInputElement;
 
 	const apiBase = getApiBase() || '';
+	function normalizeComfyuiWorkflows(list: unknown): { id: string; label: string }[] {
+		if (!Array.isArray(list)) return [];
+		return list.flatMap((item) => {
+			if (typeof item === 'string' && item.trim()) {
+				return [{ id: item, label: item }];
+			}
+			if (!item || typeof item !== 'object') return [];
+			const rec = item as Record<string, unknown>;
+			if (typeof rec.id !== 'string' || !rec.id.trim()) return [];
+			const id = rec.id;
+			const label = typeof rec.label === 'string' && rec.label.trim() ? rec.label : id;
+			return [{ id, label }];
+		});
+	}
 	const comfyuiWorkflows = $derived(
 		comfyuiWorkflowsList.length > 0 ? comfyuiWorkflowsList : (data?.comfyuiWorkflows ?? [])
 	);
@@ -369,11 +383,27 @@
 			try {
 				sessionStorage.setItem(
 					'workflowui_import_prefill',
-					JSON.stringify({ slug: p.slug, input_snapshot: p.input_snapshot })
+					JSON.stringify({
+						slug: p.slug,
+						source: 'file_generation',
+						input_snapshot: p.input_snapshot
+					})
 				);
 			} catch {
 				// ignore
 			}
+		}
+		try {
+			sessionStorage.setItem(
+				'workflowui_import_display',
+				JSON.stringify({
+					slug: p.slug,
+					appTitle: p.appName,
+					workflowName: p.workflowName
+				})
+			);
+		} catch {
+			// ignore
 		}
 		appBooting.set(true);
 		await waitForAppToBeAvailable(p.slug);
@@ -389,7 +419,7 @@
 		const list = data?.comfyuiWorkflows;
 		const err = data?.comfyuiWorkflowsError;
 		if (list && list.length > 0) {
-			comfyuiWorkflowsList = list;
+			comfyuiWorkflowsList = normalizeComfyuiWorkflows(list);
 			comfyuiWorkflowsError = null;
 		} else if (err) {
 			comfyuiWorkflowsError = err;
@@ -403,14 +433,7 @@
 			const res = await fetch(`${apiBase}/comfyui/workflows`);
 			const body = await res.json().catch(() => ({}));
 			const list = Array.isArray(body) ? body : body?.workflows;
-			if (Array.isArray(list)) {
-				comfyuiWorkflowsList = list.map((w: { id?: string; label?: string }) => ({
-					id: typeof w.id === 'string' ? w.id : String(w.id ?? ''),
-					label: typeof w.label === 'string' ? w.label : (w.id != null ? String(w.id) : '')
-				})).filter((w: { id: string }) => w.id);
-			} else {
-				comfyuiWorkflowsList = [];
-			}
+			comfyuiWorkflowsList = normalizeComfyuiWorkflows(list);
 			if (comfyuiWorkflowsList.length === 0 && typeof body?.error === 'string' && body.error) {
 				comfyuiWorkflowsError = body.error;
 			}
@@ -435,7 +458,14 @@
 			const res = await fetch(`${apiBase}/comfyui/workflows/${encodeURIComponent(id)}`);
 			if (!res.ok) {
 				const d = await res.json().catch(() => ({}));
-				comfyuiImportError = (d.detail ?? res.statusText) || 'Failed to load workflow';
+				const detail = String(d.detail ?? '').trim();
+				if (res.status === 404 || detail.toLowerCase().includes('not found')) {
+					comfyuiImportError = `Workflow not found in ComfyUI: ${id}`;
+				} else if (detail.toLowerCase().includes('plugin unreachable') || res.status === 502) {
+					comfyuiImportError = detail || 'ComfyUI plugin is unreachable.';
+				} else {
+					comfyuiImportError = detail || res.statusText || 'Failed to load workflow';
+				}
 				return;
 			}
 			const { name: wfName, graph } = await res.json();

@@ -803,15 +803,15 @@ def test_cancel_queued_or_running_run(client):
                 "bindings": [],
             },
         )
-    run_id = run_r.json()["run_id"]
-    cancel_r = client.post(f"/runs/{run_id}/cancel")
-    assert cancel_r.status_code == 200
-    assert cancel_r.json() == {"ok": True, "status": "cancelled"}
+        run_id = run_r.json()["run_id"]
+        cancel_r = client.post(f"/runs/{run_id}/cancel")
+        assert cancel_r.status_code == 200
+        assert cancel_r.json() == {"ok": True, "status": "cancelled"}
 
-    status_r = client.get(f"/run/{run_id}/status")
-    assert status_r.status_code == 200
-    assert status_r.json().get("status") == "cancelled"
-    time.sleep(0.6)
+        status_r = client.get(f"/run/{run_id}/status")
+        assert status_r.status_code == 200
+        assert status_r.json().get("status") == "cancelled"
+        time.sleep(0.6)
 
 
 def test_cancel_run_invalid_status(client):
@@ -1223,9 +1223,49 @@ def test_import_from_workflowui_payload_open_existing_app_by_hash(client):
     assert out["action"] == "open"
     assert out["app_slug"] == "hash-app"
     assert out.get("input_snapshot") == {"values": {"seed": 999}}
+    assert out["app_title"] == "other-slug"
+    assert out["workflow_name"] == "OtherName"
 
     apps_after = client.get("/apps").json()
     assert len(apps_after) == 1
+
+
+def test_import_from_workflowui_payload_open_by_ids_uses_embedded_titles(client):
+    imp = client.post(
+        "/import",
+        json={"name": "IdOpenWF", "graph": SAMPLE_WORKFLOW_GRAPH},
+    )
+    assert imp.status_code == 200
+    version_id = imp.json()["workflow_version_id"]
+    app_r = client.post(
+        "/apps",
+        json={
+            "workflow_version_id": version_id,
+            "slug": "id-open-app",
+            "title": "Db App Title",
+            "ui_config": {},
+        },
+    )
+    assert app_r.status_code == 200
+    app_id = app_r.json()["id"]
+
+    import dependencies
+    from routers import import_ as import_router
+
+    payload = {
+        "workflow_version_id": version_id,
+        "app_id": app_id,
+        "workflow": {"name": "Embedded WF Name", "graph": SAMPLE_WORKFLOW_GRAPH},
+        "app": {"slug": "ignored", "title": "Embedded App Title", "ui_config": {}},
+        "input_snapshot": {"values": {"seed": 42}},
+    }
+    db = dependencies.get_db()
+    out = import_router._import_from_workflowui_payload(payload, db)
+    assert out["action"] == "open"
+    assert out["app_slug"] == "id-open-app"
+    assert out["app_title"] == "Embedded App Title"
+    assert out["workflow_name"] == "Embedded WF Name"
+    assert out.get("input_snapshot") == {"values": {"seed": 42}}
 
 
 def test_import_from_workflowui_payload_restored_when_hash_is_new(client):

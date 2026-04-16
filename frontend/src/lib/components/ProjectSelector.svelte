@@ -2,7 +2,7 @@
 	import { tick } from 'svelte';
 	import { getApiBase } from '$lib/config';
 	import { activeProject } from '$lib/stores/activeProject';
-	import { QUICK_RUNS_PROJECT_ID, QUICK_RUNS_PROJECT_NAME } from '$lib/constants';
+	import { quickRunsProject } from '$lib/stores/quickRunsProject';
 
 	type ProjectItem = { id: string; name: string; slug?: string | null; run_count: number; header_color?: string | null };
 
@@ -88,7 +88,7 @@
 	}
 
 	function selectJustGenerate() {
-		activeProject.select(QUICK_RUNS_PROJECT_ID, QUICK_RUNS_PROJECT_NAME);
+		activeProject.select($quickRunsProject.id, $quickRunsProject.name);
 		onSelect?.();
 	}
 
@@ -156,7 +156,7 @@
 					<button
 						type="button"
 						class="project-item"
-						class:quick-runs={p.id === QUICK_RUNS_PROJECT_ID}
+						class:quick-runs={p.id === $quickRunsProject.id}
 						class:has-color={!!p.header_color}
 						onclick={() => selectExisting(p.id, p.name)}
 						aria-label="{p.name}, {p.run_count ?? 0} runs"

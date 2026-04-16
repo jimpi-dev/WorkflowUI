@@ -44,6 +44,14 @@ eggs/
 .eggs/
 lib/
 lib64/
+!frontend/src/lib/
+frontend/src/lib/*
+!frontend/src/lib/components/
+frontend/src/lib/components/*
+!frontend/src/lib/components/MediaBrowserDialog.svelte
+!frontend/src/lib/types/
+frontend/src/lib/types/*
+!frontend/src/lib/types/mediaBrowser.ts
 parts/
 sdist/
 var/

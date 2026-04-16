@@ -26,7 +26,6 @@ Hint: To toggle the theme, you have click on a certain part of the apps logo
 - Create and use App Presets! Save your favorite values into fully customizable App presets
 - App repository - share workflows/apps with others
 - When importing a workflow, check for used models (checkpoints, clip, vae) and highlight models not found for better user experience
-- Multi tenancy
 - Better UI on mobile devices (its not great right now, but it does work 🫡)
 - Improve media viewer, maybe even integrate custom media gallery
 - Notify about new version available
@@ -34,9 +33,7 @@ Hint: To toggle the theme, you have click on a certain part of the apps logo
 - More sophisticated queueing system (store queue to db, multi user queuing for single and multi comfy instances)
 
 ## Known Issues
-- Media does sometimes not show up in the gallery, only page reload fixes it, will be fixed in next release
 - Only one Seed value (Master Seed) can be generated and passed to ComfyUI, will be made more configurable
-- Edge cases on media deletion on local storage 
 
 ## Sneak peek - App and Features
 
@@ -149,6 +146,12 @@ Optional. Copy from `.env.example`:
 | `WORKFLOWUI_EMBED_METADATA_ON_DOWNLOAD` | Append metadata when user downloads image from UI. This settings can be turned on/off on App-Level.                                                 |
 | `WORKFLOWUI_EMBED_METADATA_ON_SAVE` | Append metadata when saving run to local storage (using save icon). This settings can be turned on/off on App-Level.                                                                               |
 | `WORKFLOWUI_CORS_ORIGINS` | Optional. Comma-separated list of allowed frontend origins for CORS (e.g. `http://localhost:5173,http://127.0.0.1:5173`). Defaults to these two when unset. |
+| `WORKFLOWUI_AUTH_ENABLED` | Optional auth feature flag. When true, users must authenticate before accessing app content/API. |
+| `WORKFLOWUI_AUTH_ENABLED` | Optional auth feature flag. When true, users must authenticate before accessing app content/API. |
+| `WORKFLOWUI_AUTH_SECRET` | Secret used for signing auth tokens. Set a strong value in production. |
+| `WORKFLOWUI_AUTH_TOKEN_TTL_SECONDS` | Taken lifetime in seconds (default `86400`). |
+| `WORKFLOWUI_AUTH_ADMIN_USERNAME` | Bootstrap admin username (created automatically if missing). |
+| `WORKFLOWUI_AUTH_ADMIN_PASSWORD` | Bootstrap admin password (change immediately in production). |
 
 ### Changing dev ports without CORS issues
 

@@ -14,18 +14,58 @@ export function setCookie(name: string, value: string, maxAgeSeconds: number = M
 
 export const THUMB_SIZE_COOKIE = 'workflowui_thumb_size';
 
-export type ThumbSize = 'small' | 'medium' | 'large';
+export const THUMB_SCALE_MIN = 25;
+export const THUMB_SCALE_MAX = 300;
+export const THUMB_SCALE_DEFAULT = 100;
+export type ThumbFitMode = 'cover' | 'contain';
 
-const VALID_THUMB_SIZES: ThumbSize[] = ['small', 'medium', 'large'];
+const VALID_THUMB_FIT_MODES: ThumbFitMode[] = ['cover', 'contain'];
+const LEGACY_THUMB_SIZE_TO_SCALE: Record<string, number> = {
+    small: 75,
+    medium: THUMB_SCALE_DEFAULT,
+    large: 125
+};
 
-export function getThumbSizeCookie(): ThumbSize {
-    const raw = getCookie(THUMB_SIZE_COOKIE);
-    if (raw && VALID_THUMB_SIZES.includes(raw as ThumbSize)) return raw as ThumbSize;
-    return 'medium';
+function clampThumbScale(value: number): number {
+    if (!Number.isFinite(value)) return THUMB_SCALE_DEFAULT;
+    return Math.min(THUMB_SCALE_MAX, Math.max(THUMB_SCALE_MIN, Math.round(value)));
 }
 
-export function setThumbSizeCookie(size: ThumbSize): void {
-    setCookie(THUMB_SIZE_COOKIE, size);
+export function getThumbSizeCookie(): number {
+    const raw = getCookie(THUMB_SIZE_COOKIE);
+    if (!raw) return THUMB_SCALE_DEFAULT;
+    if (Object.prototype.hasOwnProperty.call(LEGACY_THUMB_SIZE_TO_SCALE, raw)) {
+        return LEGACY_THUMB_SIZE_TO_SCALE[raw];
+    }
+    const parsed = Number.parseInt(raw, 10);
+    return clampThumbScale(parsed);
+}
+
+export function setThumbSizeCookie(sizePercent: number): void {
+    setCookie(THUMB_SIZE_COOKIE, String(clampThumbScale(sizePercent)));
+}
+
+export const THUMB_FIT_MODE_COOKIE = 'workflowui_thumb_fit_mode';
+
+export function getThumbFitModeCookie(): ThumbFitMode {
+    const raw = getCookie(THUMB_FIT_MODE_COOKIE);
+    if (raw && VALID_THUMB_FIT_MODES.includes(raw as ThumbFitMode)) return raw as ThumbFitMode;
+    return 'cover';
+}
+
+export function setThumbFitModeCookie(mode: ThumbFitMode): void {
+    setCookie(THUMB_FIT_MODE_COOKIE, mode);
+}
+
+export const THUMB_SHOW_FILENAME_COOKIE = 'workflowui_thumb_show_filename';
+
+export function getThumbShowFilenameCookie(): boolean {
+    const raw = getCookie(THUMB_SHOW_FILENAME_COOKIE);
+    return raw === '1' || raw === 'true';
+}
+
+export function setThumbShowFilenameCookie(show: boolean): void {
+    setCookie(THUMB_SHOW_FILENAME_COOKIE, show ? '1' : '0');
 }
 
 export const NOTES_COLLAPSED_COOKIE = 'workflowui_notes_collapsed';
