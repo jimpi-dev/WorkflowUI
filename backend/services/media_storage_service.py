@@ -188,7 +188,7 @@ class MediaStorageService:
                     self._run_repo.update_run(
                         run_id,
                         images_json=json.dumps(new_images),
-                        media_json=json.dumps(new_media) if new_media else None,
+                        media_json=json.dumps(new_media),
                     )
                     updated_run_ids_list = [run_id]
                 else:
@@ -337,7 +337,7 @@ class MediaStorageService:
             self._run_repo.update_run(
                 run_id,
                 images_json=json.dumps(new_images),
-                media_json=json.dumps(new_media) if new_media else None,
+                media_json=json.dumps(new_media),
                 deleted_outputs_json=json.dumps(deleted_outputs),
             )
             run3 = self._run_repo.get_run(run_id)
@@ -955,7 +955,7 @@ class MediaStorageService:
         self._run_repo.update_run(
             run_id,
             images_json=json.dumps(updated),
-            media_json=json.dumps(new_media) if new_media else None,
+            media_json=json.dumps(new_media),
             remote_status="deleted",
             deleted_outputs_json=json.dumps(deleted_outputs),
         )
