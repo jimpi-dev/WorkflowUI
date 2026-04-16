@@ -14,6 +14,8 @@
         showSeed = true,
         showDownload = true,
         showSendToApp = true,
+        fileName = undefined as string | undefined,
+        showFilenameAlways = false,
         onMetadataClick = undefined as (() => void) | undefined,
         onToggleFavorite = undefined as (() => void) | undefined,
         onToggleSelection = undefined as (() => void) | undefined,
@@ -33,6 +35,8 @@
         showSeed?: boolean;
         showDownload?: boolean;
         showSendToApp?: boolean;
+        fileName?: string;
+        showFilenameAlways?: boolean;
         onMetadataClick?: () => void;
         onToggleFavorite?: () => void;
         onToggleSelection?: () => void;
@@ -40,6 +44,13 @@
         onSendToApp?: () => void;
         children?: Snippet;
     } = $props();
+
+    const showFilenameChip = $derived(!!(showFilenameAlways && fileName != null && String(fileName).trim() !== ''));
+    const showSeedChip = $derived(
+        (!!(mediaType !== 'audio' && resolution)) ||
+            (showSeed && seed !== undefined && seed !== null && String(seed).trim() !== '') ||
+            executionTimeSec != null
+    );
 
     function stop(e: Event) {
         e.preventDefault();
@@ -113,28 +124,40 @@
         </div>
     {/if}
 
-    {#if (mediaType !== 'audio' && resolution) || (showSeed && seed !== undefined && seed !== null && String(seed).trim() !== '') || executionTimeSec != null}
-        <span class="thumb-overlay-seed" title={[
-            mediaType !== 'audio' && resolution ? 'Media resolution' : '',
-            showSeed && seed != null ? 'Seed value' : '',
-            executionTimeSec != null ? 'Generation time' : ''
-        ].filter(Boolean).join(' · ') || undefined}>
-            {#if mediaType !== 'audio' && resolution}
-                <span class="thumb-overlay-resolution">{resolution}</span>
+    {#if showFilenameChip || showSeedChip}
+        <div class="thumb-overlay-bl-stack">
+            {#if showSeedChip}
+                <span
+                    class="thumb-overlay-seed"
+                    title={[
+                        mediaType !== 'audio' && resolution ? 'Media resolution' : '',
+                        showSeed && seed != null ? 'Seed value' : '',
+                        executionTimeSec != null ? 'Generation time' : ''
+                    ]
+                        .filter(Boolean)
+                        .join(' · ') || undefined}
+                >
+                    {#if mediaType !== 'audio' && resolution}
+                        <span class="thumb-overlay-resolution">{resolution}</span>
+                    {/if}
+                    {#if showSeed && seed !== undefined && seed !== null && String(seed).trim() !== ''}
+                        {#if mediaType !== 'audio' && resolution}
+                            <span class="thumb-overlay-sep" aria-hidden="true"> · </span>
+                        {/if}
+                        <span class="seed-value">{seed}</span>
+                    {/if}
+                    {#if executionTimeSec != null}
+                        {#if (showSeed && seed !== undefined && seed !== null && String(seed).trim() !== '') || (mediaType !== 'audio' && resolution)}
+                            <span class="thumb-overlay-sep" aria-hidden="true"> · </span>
+                        {/if}
+                        <span class="thumb-overlay-time">{Math.round(Number(executionTimeSec))} sec</span>
+                    {/if}
+                </span>
             {/if}
-            {#if showSeed && seed !== undefined && seed !== null && String(seed).trim() !== ''}
-                {#if mediaType !== 'audio' && resolution}
-                    <span class="thumb-overlay-sep" aria-hidden="true"> · </span>
-                {/if}
-                <span class="seed-value">{seed}</span>
+            {#if showFilenameChip}
+                <span class="thumb-overlay-filename" title={fileName}>{fileName}</span>
             {/if}
-            {#if executionTimeSec != null}
-                {#if (showSeed && seed !== undefined && seed !== null && String(seed).trim() !== '') || (mediaType !== 'audio' && resolution)}
-                    <span class="thumb-overlay-sep" aria-hidden="true"> · </span>
-                {/if}
-                <span class="thumb-overlay-time">{Math.round(Number(executionTimeSec))} sec</span>
-            {/if}
-        </span>
+        </div>
     {/if}
 
     {#if showDownload || showSendToApp}
@@ -299,11 +322,23 @@
         opacity: 1;
     }
 
-    .thumb-overlay-seed {
+    .thumb-overlay-bl-stack {
         position: absolute;
         bottom: 6px;
         left: 6px;
         z-index: 2;
+        display: flex;
+        flex-direction: column-reverse;
+        align-items: flex-start;
+        gap: 4px;
+        max-width: calc(100% - 80px);
+        pointer-events: none;
+    }
+    .thumb-overlay-bl-stack .thumb-overlay-seed,
+    .thumb-overlay-bl-stack .thumb-overlay-filename {
+        pointer-events: auto;
+    }
+    .thumb-overlay-seed {
         padding: 2px 6px;
         border-radius: 4px;
         background: rgba(0, 0, 0, 0.6);
@@ -311,10 +346,22 @@
         font-size: 0.7rem;
         font-variant-numeric: tabular-nums;
         white-space: nowrap;
-        max-width: calc(100% - 80px);
+        max-width: 100%;
         overflow: hidden;
         text-overflow: ellipsis;
         opacity: 0;
+    }
+    .thumb-overlay-filename {
+        padding: 2px 6px;
+        border-radius: 4px;
+        background: rgba(0, 0, 0, 0.6);
+        color: rgba(255, 255, 255, 0.9);
+        font-size: 0.7rem;
+        white-space: nowrap;
+        max-width: 100%;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        opacity: 1;
     }
     :global(.output-thumb:hover) .thumb-overlay-seed,
     :global(.output-thumb:focus-within) .thumb-overlay-seed {
@@ -349,17 +396,13 @@
         top: 6px;
         left: 6px;
     }
-    :global(.output-thumb.output-thumb-video) .thumb-overlay-seed {
-        bottom: 6px;
-        left: 6px;
-    }
     :global(.output-thumb.output-thumb-audio) {
         --thumb-audio-bar-offset: 52px;
     }
     :global(.output-thumb.output-thumb-audio) .thumb-overlay-br {
         bottom: var(--thumb-audio-bar-offset, 48px);
     }
-    :global(.output-thumb.output-thumb-audio) .thumb-overlay-seed {
+    :global(.output-thumb.output-thumb-audio) .thumb-overlay-bl-stack {
         bottom: var(--thumb-audio-bar-offset, 48px);
         left: 6px;
     }
