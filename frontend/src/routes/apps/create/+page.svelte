@@ -64,6 +64,10 @@
 	let availableUpscaleMethods = $state<string[]>([]);
 	let collapsedInputNodes = $state<Set<string>>(new Set());
 	let collapsedOutputNodes = $state<Set<string>>(new Set());
+	let draggedInputNodeId = $state<string | null>(null);
+	let draggedOverInputNodeId = $state<string | null>(null);
+	let draggedOutputNodeId = $state<string | null>(null);
+	let draggedOverOutputNodeId = $state<string | null>(null);
 
 	function addTagFromInput() {
 		const raw = tagInput.trim();
@@ -93,6 +97,16 @@
 		collapsedOutputNodes = new Set(collapsedOutputNodes);
 		if (collapsedOutputNodes.has(nodeId)) collapsedOutputNodes.delete(nodeId);
 		else collapsedOutputNodes.add(nodeId);
+	}
+	function onInputHeaderDblClick(event: MouseEvent, nodeId: string) {
+		const target = event.target as HTMLElement | null;
+		if (target?.closest('.node-group-actions')) return;
+		toggleInputNode(nodeId);
+	}
+	function onOutputHeaderDblClick(event: MouseEvent, nodeId: string) {
+		const target = event.target as HTMLElement | null;
+		if (target?.closest('.output-node-actions')) return;
+		toggleOutputNode(nodeId);
 	}
 	function expandAllInputs() {
 		collapsedInputNodes = new Set();
@@ -210,6 +224,68 @@
 		if (!appDraft || keys.length === 0) return;
 		for (const key of keys) setInputVisible(appDraft, key, false);
 		appDraft = { ...appDraft, visibleInputs: new Set(appDraft.visibleInputs) };
+	}
+
+	function reorderNodeOrder(order: string[], visibleNodeIds: string[], sourceNodeId: string, targetNodeId: string): string[] {
+		if (sourceNodeId === targetNodeId) return order;
+		const mergedOrder = Array.from(new Set([...order, ...visibleNodeIds]));
+		const sourceIdx = mergedOrder.indexOf(sourceNodeId);
+		const targetIdx = mergedOrder.indexOf(targetNodeId);
+		if (sourceIdx < 0 || targetIdx < 0) return order;
+		const next = [...mergedOrder];
+		const [moved] = next.splice(sourceIdx, 1);
+		next.splice(targetIdx, 0, moved);
+		return next;
+	}
+
+	function onInputDragStart(event: DragEvent, nodeId: string) {
+		draggedInputNodeId = nodeId;
+		draggedOverInputNodeId = nodeId;
+		if (event.dataTransfer) {
+			event.dataTransfer.effectAllowed = 'move';
+			event.dataTransfer.setData('text/plain', nodeId);
+		}
+	}
+
+	function onInputDragOver(event: DragEvent, nodeId: string) {
+		event.preventDefault();
+		draggedOverInputNodeId = nodeId;
+		if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
+	}
+
+	function onInputDrop(event: DragEvent, targetNodeId: string) {
+		event.preventDefault();
+		if (!appDraft || !draggedInputNodeId) return;
+		const visibleNodeIds = inputGroups.map((g: { nodeId: string }) => g.nodeId);
+		const nextOrder = reorderNodeOrder(appDraft.inputNodeOrder, visibleNodeIds, draggedInputNodeId, targetNodeId);
+		appDraft = { ...appDraft, inputNodeOrder: nextOrder };
+		draggedInputNodeId = null;
+		draggedOverInputNodeId = null;
+	}
+
+	function onOutputDragStart(event: DragEvent, nodeId: string) {
+		draggedOutputNodeId = nodeId;
+		draggedOverOutputNodeId = nodeId;
+		if (event.dataTransfer) {
+			event.dataTransfer.effectAllowed = 'move';
+			event.dataTransfer.setData('text/plain', nodeId);
+		}
+	}
+
+	function onOutputDragOver(event: DragEvent, nodeId: string) {
+		event.preventDefault();
+		draggedOverOutputNodeId = nodeId;
+		if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
+	}
+
+	function onOutputDrop(event: DragEvent, targetNodeId: string) {
+		event.preventDefault();
+		if (!appDraft || !draggedOutputNodeId) return;
+		const visibleNodeIds = sortedOutputs.map((o: { nodeId?: string }) => o.nodeId).filter(Boolean) as string[];
+		const nextOrder = reorderNodeOrder(appDraft.outputNodeOrder, visibleNodeIds, draggedOutputNodeId, targetNodeId);
+		appDraft = { ...appDraft, outputNodeOrder: nextOrder };
+		draggedOutputNodeId = null;
+		draggedOverOutputNodeId = null;
 	}
 
 	$effect(() => {
@@ -519,6 +595,9 @@
 					/>
 				</div>
 			</div>
+			<p class="drag-reorder-hint" role="note">
+				Tip: Drag node cards by the grip icon (<span aria-hidden="true">⋮⋮</span>) to change their order.
+			</p>
 			{#if activeTab === 'inputs' && appDraft}
 				<div class="expand-collapse-row">
 					<button type="button" class="expand-collapse-btn" onclick={expandAllInputs} title="Expand all node segments">Expand all</button>
@@ -529,9 +608,24 @@
 						{@const nodeLabel = group.metaTitle ?? group.parent ?? group.classType ?? group.nodeId}
 						{@const nodeInputKeys = group.inputs.map((i: { key?: string }) => i.key).filter(Boolean) as string[]}
 						{@const inputExpanded = !collapsedInputNodes.has(group.nodeId)}
-						<div class="node-group" class:collapsed={!inputExpanded} data-node-id={group.nodeId}>
-							<div class="node-group-header">
+						<div
+							class="node-group"
+							class:collapsed={!inputExpanded}
+							class:dragging-node={draggedInputNodeId === group.nodeId}
+							class:drag-over-node={draggedOverInputNodeId === group.nodeId && draggedInputNodeId !== group.nodeId}
+							data-node-id={group.nodeId}
+							draggable="true"
+							ondragstart={(e) => onInputDragStart(e, group.nodeId)}
+							ondragover={(e) => onInputDragOver(e, group.nodeId)}
+							ondrop={(e) => onInputDrop(e, group.nodeId)}
+							ondragend={() => {
+								draggedInputNodeId = null;
+								draggedOverInputNodeId = null;
+							}}
+						>
+							<div class="node-group-header" ondblclick={(e) => onInputHeaderDblClick(e, group.nodeId)}>
 								<span class="node-group-title" title="Node {group.nodeId}">
+									<span class="drag-grip" aria-hidden="true" title="Drag to reorder">⋮⋮</span>
 									<span class="node-group-badge">Node {group.nodeId}</span>
 									{#if nodeLabel}
 										<span class="node-group-label">{nodeLabel}</span>
@@ -629,9 +723,24 @@
 					{#each sortedOutputs as output (output.nodeId)}
 						{#if output.nodeId}
 							{@const outputExpanded = !collapsedOutputNodes.has(output.nodeId)}
-							<div class="output-node-wrap" class:collapsed={!outputExpanded} data-node-id={output.nodeId}>
-								<div class="output-node-header">
+							<div
+								class="output-node-wrap"
+								class:collapsed={!outputExpanded}
+								class:dragging-node={draggedOutputNodeId === output.nodeId}
+								class:drag-over-node={draggedOverOutputNodeId === output.nodeId && draggedOutputNodeId !== output.nodeId}
+								data-node-id={output.nodeId}
+								draggable="true"
+								ondragstart={(e) => onOutputDragStart(e, output.nodeId)}
+								ondragover={(e) => onOutputDragOver(e, output.nodeId)}
+								ondrop={(e) => onOutputDrop(e, output.nodeId)}
+								ondragend={() => {
+									draggedOutputNodeId = null;
+									draggedOverOutputNodeId = null;
+								}}
+							>
+								<div class="output-node-header" ondblclick={(e) => onOutputHeaderDblClick(e, output.nodeId)}>
 									<span class="output-node-title">
+										<span class="drag-grip" aria-hidden="true" title="Drag to reorder">⋮⋮</span>
 										<span class="node-group-badge">Node {output.nodeId}</span>
 									</span>
 									<div class="output-node-actions">
@@ -968,6 +1077,12 @@
 		border-radius: 10px;
 		overflow: hidden;
 		background: var(--surface);
+		transition: border-color 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
+	}
+	.node-group:hover {
+		border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+		background: color-mix(in srgb, var(--accent) 6%, var(--surface));
+		box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 28%, transparent);
 	}
 	.node-group-header {
 		display: flex;
@@ -977,6 +1092,10 @@
 		padding: 0.5rem 0.75rem;
 		background: var(--card);
 		border-bottom: 1px solid var(--border);
+		cursor: grab;
+	}
+	.node-group:active .node-group-header {
+		cursor: grabbing;
 	}
 	.node-group.collapsed .node-group-fields {
 		display: none;
@@ -990,6 +1109,13 @@
 		gap: 0.5rem;
 		font-size: 0.9rem;
 		min-width: 0;
+	}
+	.drag-grip {
+		color: var(--muted);
+		font-size: 0.95rem;
+		line-height: 1;
+		letter-spacing: -0.08em;
+		user-select: none;
 	}
 	.node-group-badge {
 		font-family: ui-monospace, monospace;
@@ -1040,6 +1166,19 @@
 		border-radius: 10px;
 		overflow: hidden;
 		background: var(--surface);
+		transition: border-color 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
+	}
+	.output-node-wrap:hover {
+		border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+		background: color-mix(in srgb, var(--accent) 6%, var(--surface));
+		box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 28%, transparent);
+	}
+	.dragging-node {
+		opacity: 0.78;
+	}
+	.drag-over-node {
+		border-color: var(--accent);
+		box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 35%, transparent);
 	}
 	.output-node-header {
 		display: flex;
@@ -1049,10 +1188,22 @@
 		padding: 0.5rem 0.75rem;
 		background: var(--card);
 		border-bottom: 1px solid var(--border);
+		cursor: grab;
+	}
+	.output-node-wrap:active .output-node-header {
+		cursor: grabbing;
 	}
 	.output-node-title {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.45rem;
 		font-size: 0.9rem;
 		min-width: 0;
+	}
+	.drag-reorder-hint {
+		margin: -0.45rem 0 0.7rem 0;
+		font-size: 0.8rem;
+		color: var(--muted);
 	}
 	.output-node-wrap.collapsed .output-node-header {
 		border-bottom: none;
