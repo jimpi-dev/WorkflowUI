@@ -31,7 +31,7 @@ from dependencies import get_db, get_user_repo
 from config import get_auth_config
 from services.auth_service import parse_token
 from authz import AUTH_COOKIE_NAME
-from routers import config, runs, projects, comfyui, import_, apps, workflows, execution, auth, users
+from routers import config, runs, projects, comfyui, import_, apps, workflows, execution, auth, users, vault
 
 
 def _load_cors_origins() -> list[str]:
@@ -79,6 +79,7 @@ def _include_api_routes(prefix: str) -> None:
     app.include_router(execution.router, prefix=prefix, tags=["execution"])
     app.include_router(auth.router, prefix=prefix, tags=["auth"])
     app.include_router(users.router, prefix=prefix, tags=["users"])
+    app.include_router(vault.router, prefix=prefix, tags=["vault"])
 
 
 _include_api_routes(API_PREFIX)
@@ -86,7 +87,7 @@ if API_PREFIX != CANONICAL_API_PREFIX:
     _include_api_routes(CANONICAL_API_PREFIX)
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
-_SPA_PATH_PREFIXES = ("app", "apps", "projects", "workflows", "import")
+_SPA_PATH_PREFIXES = ("app", "apps", "projects", "workflows", "import", "vault")
 
 
 def _is_spa_document_request(path: str, sec_fetch_dest: str, sec_fetch_mode: str, accept: str) -> bool:

@@ -14,6 +14,8 @@
         showSeed = true,
         showDownload = true,
         showSendToApp = true,
+        showDelete = false,
+        deleteDisabled = false,
         fileName = undefined as string | undefined,
         showFilenameAlways = false,
         onMetadataClick = undefined as (() => void) | undefined,
@@ -21,6 +23,7 @@
         onToggleSelection = undefined as (() => void) | undefined,
         onDownload = undefined as (() => void) | undefined,
         onSendToApp = undefined as (() => void) | undefined,
+        onDelete = undefined as (() => void) | undefined,
         children
     }: {
         mediaType?: 'image' | 'video' | 'audio';
@@ -35,6 +38,8 @@
         showSeed?: boolean;
         showDownload?: boolean;
         showSendToApp?: boolean;
+        showDelete?: boolean;
+        deleteDisabled?: boolean;
         fileName?: string;
         showFilenameAlways?: boolean;
         onMetadataClick?: () => void;
@@ -42,6 +47,7 @@
         onToggleSelection?: () => void;
         onDownload?: () => void;
         onSendToApp?: () => void;
+        onDelete?: () => void;
         children?: Snippet;
     } = $props();
 
@@ -160,7 +166,7 @@
         </div>
     {/if}
 
-    {#if showDownload || showSendToApp}
+    {#if showDownload || showSendToApp || (showDelete && onDelete)}
         <div class="thumb-overlay-br">
             {#if showDownload && onDownload}
                 <button
@@ -187,6 +193,24 @@
                 >
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
                         <path d="M5 12h14M12 5l7 7-7 7"/>
+                    </svg>
+                </button>
+            {/if}
+            {#if showDelete && onDelete}
+                <button
+                    type="button"
+                    class="thumb-overlay-btn thumb-overlay-delete"
+                    disabled={deleteDisabled}
+                    title="Remove from Vault"
+                    aria-label="Remove from Vault"
+                    onclick={(e) => { stop(e); if (!deleteDisabled) onDelete(); }}
+                >
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <path d="M3 6h18" />
+                        <path d="M8 6V4h8v2" />
+                        <path d="M10 11v6" />
+                        <path d="M14 11v6" />
+                        <path d="M6 6l1 14h10l1-14" />
                     </svg>
                 </button>
             {/if}
@@ -256,6 +280,14 @@
         border-color: var(--accent, rgba(99, 102, 241, 0.8));
         background: rgba(0, 0, 0, 0.7);
         color: #fff;
+    }
+    .thumb-overlay-delete:hover:not(:disabled) {
+        border-color: rgba(248, 113, 113, 0.85);
+        color: #fecaca;
+    }
+    .thumb-overlay-delete:disabled {
+        opacity: 0.35;
+        cursor: not-allowed;
     }
     .thumb-overlay-btn svg {
         width: 14px;
