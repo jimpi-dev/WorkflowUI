@@ -1,14 +1,13 @@
-export function portal(node: HTMLElement): { destroy(): void } {
-	let cancelled = false;
-	const id = requestAnimationFrame(() => {
-		if (cancelled) return;
-		document.body.appendChild(node);
-	});
+import type { Action } from 'svelte/action';
+
+/** Move node to `document.body` (or selector) so it escapes ancestor stacking / paint order (e.g. flex siblings). */
+export const portal: Action<HTMLElement, string | undefined> = (node, selector = 'body') => {
+	const target =
+		typeof selector === 'string' ? (document.querySelector(selector) ?? document.body) : document.body;
+	target.appendChild(node);
 	return {
 		destroy() {
-			cancelled = true;
-			cancelAnimationFrame(id);
 			if (node.parentNode) node.parentNode.removeChild(node);
 		}
 	};
-}
+};
