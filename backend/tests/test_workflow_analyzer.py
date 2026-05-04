@@ -71,6 +71,26 @@ def test_analyze_unknown_node_skipped():
     assert "bindings" in result
 
 
+def test_analyze_load_image_mask_image_and_channel_bindings():
+    workflow = {
+        "42": {
+            "class_type": "LoadImageMask",
+            "inputs": {"image": "mask.png", "channel": "alpha"},
+        },
+    }
+    result = analyze_workflow(workflow)
+    keys = {inp["key"] for inp in result["inputs"]}
+    fields_by_key = {inp["key"]: inp for inp in result["inputs"]}
+    binding_by_field = {b["field"]: b for b in result["bindings"]}
+    assert "42.image" in keys
+    assert "42.channel" in keys
+    assert fields_by_key["42.image"]["type"] == "image"
+    assert fields_by_key["42.channel"]["type"] == "select"
+    assert fields_by_key["42.channel"]["options"] == ["alpha", "red", "green", "blue"]
+    assert binding_by_field["image"]["key"] == "42.image"
+    assert binding_by_field["channel"]["key"] == "42.channel"
+
+
 def test_analyze_empty_latent_image_produces_width_height_bindings():
     workflow = {
         "5": {
