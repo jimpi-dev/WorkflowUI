@@ -2175,6 +2175,26 @@ class SqliteRunRepository:
         finally:
             conn.close()
 
+    def user_run_references_input_filename(self, user_id: str, filename: str) -> bool:
+        """True if this user owns a run whose input snapshot JSON mentions the filename (e.g. hashed input image)."""
+        if not filename:
+            return False
+        conn = self._conn()
+        try:
+            row = conn.execute(
+                """
+                SELECT 1 FROM run
+                WHERE owner_user_id = ?
+                  AND input_snapshot_json IS NOT NULL
+                  AND instr(input_snapshot_json, ?) > 0
+                LIMIT 1
+                """,
+                (user_id, filename),
+            ).fetchone()
+            return row is not None
+        finally:
+            conn.close()
+
 
 class SqliteAppPresetRepository:
     def __init__(self, db_path: str | Path):
