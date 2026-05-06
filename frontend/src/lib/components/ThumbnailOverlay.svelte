@@ -51,7 +51,7 @@
         children?: Snippet;
     } = $props();
 
-    const showFilenameChip = $derived(!!(showFilenameAlways && fileName != null && String(fileName).trim() !== ''));
+    const showFilenameChip = $derived(!!(fileName != null && String(fileName).trim() !== ''));
     const showSeedChip = $derived(
         (!!(mediaType !== 'audio' && resolution)) ||
             (showSeed && seed !== undefined && seed !== null && String(seed).trim() !== '') ||
@@ -161,7 +161,11 @@
                 </span>
             {/if}
             {#if showFilenameChip}
-                <span class="thumb-overlay-filename" title={fileName}>{fileName}</span>
+                <span
+                    class="thumb-overlay-filename"
+                    class:thumb-overlay-filename--always={showFilenameAlways}
+                    title={fileName}
+                >{fileName}</span>
             {/if}
         </div>
     {/if}
@@ -393,10 +397,17 @@
         max-width: 100%;
         overflow: hidden;
         text-overflow: ellipsis;
+        opacity: 0;
+    }
+    .thumb-overlay-filename.thumb-overlay-filename--always {
         opacity: 1;
     }
     :global(.output-thumb:hover) .thumb-overlay-seed,
     :global(.output-thumb:focus-within) .thumb-overlay-seed {
+        opacity: 1;
+    }
+    :global(.output-thumb:hover) .thumb-overlay-filename,
+    :global(.output-thumb:focus-within) .thumb-overlay-filename {
         opacity: 1;
     }
     .thumb-overlay-seed .seed-value {
