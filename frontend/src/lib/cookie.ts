@@ -59,6 +59,19 @@ export function setThumbFitModeCookie(mode: ThumbFitMode): void {
 
 export const THUMB_SHOW_FILENAME_COOKIE = 'workflowui_thumb_show_filename';
 
+export const VAULT_SORT_COOKIE = 'workflowui_vault_sort';
+export type VaultSortMode = 'recent' | 'usage';
+
+export function getVaultSortCookie(): VaultSortMode {
+    const raw = getCookie(VAULT_SORT_COOKIE);
+    if (raw === 'usage' || raw === 'recent') return raw;
+    return 'recent';
+}
+
+export function setVaultSortCookie(mode: VaultSortMode): void {
+    setCookie(VAULT_SORT_COOKIE, mode);
+}
+
 export function getThumbShowFilenameCookie(): boolean {
     const raw = getCookie(THUMB_SHOW_FILENAME_COOKIE);
     return raw === '1' || raw === 'true';

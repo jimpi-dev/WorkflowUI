@@ -4,7 +4,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException
 
 from authz import RequestContext, require_user
-from dependencies import INPUT_DATA_DIR, get_vault_input_repo
+from dependencies import INPUT_DATA_DIR, get_db, get_vault_input_repo
 from repositories.vault_input_repository import SqliteVaultInputRepository
 from routers.execution import ALLOWED_IMAGE_EXTENSIONS, _ensure_input_data_dir
 from services.vault_input_access import can_delete_vault_input
@@ -43,12 +43,34 @@ def _list_disk_images() -> list[tuple[str, int, int]]:
     return out
 
 
+def _annotate_usage_counts(
+    items: list[dict],
+    *,
+    run_repo,
+    ctx: RequestContext,
+) -> None:
+    """Mutate items with `usage_generation_count`: completed generations referencing this input filename."""
+    names = [str(i.get("filename") or "").strip() for i in items if i.get("filename")]
+    if not names:
+        return
+    counts = run_repo.count_generations_by_input_filenames_batch(
+        names,
+        owner_user_id=ctx.user.id if (ctx.auth_enabled and ctx.user) else None,
+        auth_enabled=bool(ctx.auth_enabled),
+    )
+    for i in items:
+        fn = str(i.get("filename") or "").strip()
+        i["usage_generation_count"] = int(counts.get(fn, 0) or 0)
+
+
 @router.get("/vault/inputs")
 def list_vault_inputs(
     ctx: RequestContext = Depends(require_user),
     vault_repo: SqliteVaultInputRepository = Depends(get_vault_input_repo),
+    db=Depends(get_db),
 ):
     """List input images stored for WorkflowUI (hashed uploads under INPUT_DATA_DIR), scoped by auth context."""
+    _, _, _, run_repo, _, _, _ = db
     disk = _list_disk_images()
     disk_names = {d[0] for d in disk}
     disk_meta = {name: (sz, mt) for name, sz, mt in disk}
@@ -68,6 +90,7 @@ def list_vault_inputs(
                     "can_delete": True,
                 }
             )
+        _annotate_usage_counts(items, run_repo=run_repo, ctx=ctx)
         return {"items": items}
 
     assert ctx.user is not None
@@ -99,6 +122,7 @@ def list_vault_inputs(
                     }
                 )
         items.sort(key=lambda x: (x.get("mtime_ms") or 0, x.get("uploaded_at") or 0), reverse=True)
+        _annotate_usage_counts(items, run_repo=run_repo, ctx=ctx)
         return {"items": items}
 
     rows = vault_repo.list_rows_for_owner(ctx.user.id)
@@ -127,6 +151,7 @@ def list_vault_inputs(
                 "can_delete": True,
             }
         )
+    _annotate_usage_counts(items, run_repo=run_repo, ctx=ctx)
     return {"items": items}
 
 

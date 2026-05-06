@@ -12,9 +12,13 @@
 		setThumbSizeCookie,
 		getThumbShowFilenameCookie,
 		setThumbShowFilenameCookie,
-		type ThumbFitMode
+		getVaultSortCookie,
+		setVaultSortCookie,
+		type ThumbFitMode,
+		type VaultSortMode
 	} from '$lib/cookie';
 	import LightboxViewer, { type LightboxItem } from '$lib/components/LightboxViewer.svelte';
+	import MediaBrowserDialog from '$lib/components/MediaBrowserDialog.svelte';
 	import ThumbnailOverlay from '$lib/components/ThumbnailOverlay.svelte';
 
 	type VaultItem = {
@@ -24,9 +28,11 @@
 		uploaded_at: number | null;
 		owner_user_id: string | null;
 		can_delete: boolean;
+		usage_generation_count?: number;
 	};
 
 	const apiBase = getApiBase() || '';
+	const VAULT_LIST_TIMEOUT_MS = 120_000;
 
 	let items = $state<VaultItem[]>([]);
 	let loading = $state(true);
@@ -39,10 +45,35 @@
 	let thumbnailScale = $state<number>(browser ? getThumbSizeCookie() : 100);
 	let thumbnailFitMode = $state<ThumbFitMode>(browser ? getThumbFitModeCookie() : 'cover');
 	let showThumbFilename = $state<boolean>(browser ? getThumbShowFilenameCookie() : false);
+	let vaultSortMode = $state<VaultSortMode>(browser ? getVaultSortCookie() : 'recent');
+
+	const sortedVaultItems = $derived.by(() => {
+		const copy = [...items];
+		if (vaultSortMode === 'usage') {
+			copy.sort((a, b) => {
+				const u = (b.usage_generation_count ?? 0) - (a.usage_generation_count ?? 0);
+				if (u !== 0) return u;
+				return (b.mtime_ms ?? b.uploaded_at ?? 0) - (a.mtime_ms ?? a.uploaded_at ?? 0);
+			});
+		} else {
+			copy.sort(
+				(a, b) => (b.mtime_ms ?? b.uploaded_at ?? 0) - (a.mtime_ms ?? a.uploaded_at ?? 0)
+			);
+		}
+		return copy;
+	});
+
+	function setVaultSortMode(mode: VaultSortMode) {
+		vaultSortMode = mode;
+		if (browser) setVaultSortCookie(mode);
+	}
 
 	let lightboxOpen = $state(false);
 	let lightboxImages = $state<LightboxItem[]>([]);
 	let lightboxIndex = $state(0);
+
+	let mediaBrowserOpen = $state(false);
+	let mediaBrowserVaultInput = $state<string | null>(null);
 
 	/** Natural size labels `width×height` once each vault image has loaded */
 	let imageDims = $state<Record<string, string>>({});
@@ -103,6 +134,18 @@
 		lightboxOpen = false;
 	}
 
+	function openOutputsBrowser(filename: string, e?: Event) {
+		e?.stopPropagation?.();
+		e?.preventDefault?.();
+		mediaBrowserVaultInput = filename;
+		mediaBrowserOpen = true;
+	}
+
+	function closeMediaBrowser() {
+		mediaBrowserOpen = false;
+		mediaBrowserVaultInput = null;
+	}
+
 	async function downloadLightboxItem(item: LightboxItem) {
 		const res = await fetch(item.url);
 		if (!res.ok) return;
@@ -139,8 +182,12 @@
 			loading = true;
 			loadError = null;
 		}
+		const controller = new AbortController();
+		const timeoutId = silent
+			? null
+			: window.setTimeout(() => controller.abort(), VAULT_LIST_TIMEOUT_MS);
 		try {
-			const res = await fetch(`${apiBase}/vault/inputs`);
+			const res = await fetch(`${apiBase}/vault/inputs`, { signal: controller.signal });
 			if (!res.ok) {
 				const d = await res.json().catch(() => ({}));
 				loadError = (d.detail as string) || res.statusText || 'Failed to load Vault';
@@ -157,10 +204,15 @@
 				scrollEl.scrollTop = prevScrollTop;
 			}
 		} catch (e) {
-			loadError = e instanceof Error ? e.message : 'Failed to load Vault';
+			if (e instanceof DOMException && e.name === 'AbortError') {
+				loadError = `Vault list timed out after ${VAULT_LIST_TIMEOUT_MS / 1000}s. Try again or reduce input files on disk.`;
+			} else {
+				loadError = e instanceof Error ? e.message : 'Failed to load Vault';
+			}
 			items = [];
 			if (!silent) imageDims = {};
 		} finally {
+			if (timeoutId != null) window.clearTimeout(timeoutId);
 			if (!silent) loading = false;
 		}
 	}
@@ -272,6 +324,11 @@
 				Input images for workflow runs: hover a thumbnail for download and delete, or click the image to open the
 				viewer. Resolution appears on each thumbnail once the image has loaded.
 			</p>
+			{#if !loading}
+				<p class="vault-total muted" role="status">
+					{items.length} input image{items.length === 1 ? '' : 's'}
+				</p>
+			{/if}
 			<p class="vault-hint muted">{authHint}</p>
 		</div>
 		<div class="gallery-controls-right">
@@ -313,7 +370,7 @@
 					Fit into thumbnail
 				</button>
 			</div>
-			<label class="thumb-filename-option" title="Show filenames on thumbnails">
+			<label class="thumb-filename-option" title="When off, filenames appear on thumbnail hover only">
 				<span class="thumb-filename-label">Filenames</span>
 				<button
 					type="button"
@@ -321,7 +378,7 @@
 					aria-checked={showThumbFilename}
 					class="thumb-filename-toggle"
 					class:on={showThumbFilename}
-					aria-label="Show filenames on thumbnails"
+					aria-label="Always show filenames on thumbnails"
 					onclick={() => setShowThumbFilename(!showThumbFilename)}
 				>
 					<span class="thumb-filename-toggle-track">
@@ -329,6 +386,27 @@
 					</span>
 				</button>
 			</label>
+			<div class="vault-sort" role="group" aria-label="Sort vault list">
+				<span class="vault-sort-label muted">Sort</span>
+				<button
+					type="button"
+					class="thumb-fit-btn"
+					class:active={vaultSortMode === 'recent'}
+					onclick={() => setVaultSortMode('recent')}
+					aria-pressed={vaultSortMode === 'recent'}
+				>
+					Recent
+				</button>
+				<button
+					type="button"
+					class="thumb-fit-btn"
+					class:active={vaultSortMode === 'usage'}
+					onclick={() => setVaultSortMode('usage')}
+					aria-pressed={vaultSortMode === 'usage'}
+				>
+					Most generated
+				</button>
+			</div>
 		</div>
 	</header>
 
@@ -370,8 +448,18 @@
 			class:thumb-fit-contain={thumbnailFitMode === 'contain'}
 			style={`--thumb-size-scale:${thumbnailScale / 100};`}
 		>
-			{#each items as it (it.filename)}
+			{#each sortedVaultItems as it (it.filename)}
 				<div class="vault-tile-wrap">
+					<button
+						type="button"
+						class="vault-usage-badge"
+						class:vault-usage-badge--zero={(it.usage_generation_count ?? 0) === 0}
+						title="Open media browser: generations that used this input file"
+						aria-label={`Generations using this input: ${it.usage_generation_count ?? 0}. Open browser.`}
+						onclick={(e) => openOutputsBrowser(it.filename, e)}
+					>
+						{it.usage_generation_count ?? 0}×
+					</button>
 					{#if it.size_bytes != null}
 						<div
 							class="vault-thumb output-thumb"
@@ -408,7 +496,7 @@
 									alt=""
 									loading="lazy"
 									onload={(e) => {
-										const el = e.currentTarget;
+										const el = e.currentTarget as HTMLImageElement;
 										if (el.naturalWidth > 0 && el.naturalHeight > 0) {
 											imageDims = {
 												...imageDims,
@@ -425,7 +513,6 @@
 						</div>
 					{/if}
 					<div class="vault-tile-footer">
-						<span class="vault-filename" title={it.filename}>{it.filename}</span>
 						<span class="vault-size muted">{formatBytes(it.size_bytes)}</span>
 					</div>
 				</div>
@@ -444,6 +531,12 @@
 	onClose={closeLightbox}
 	onDownload={(item) => void downloadLightboxItem(item)}
 	ariaTitle="Vault image viewer"
+/>
+
+<MediaBrowserDialog
+	open={mediaBrowserOpen}
+	filterByVaultInputFilename={mediaBrowserVaultInput}
+	onClose={closeMediaBrowser}
 />
 
 <style>
@@ -654,6 +747,35 @@
 		flex-direction: column;
 		gap: 0.45rem;
 		min-width: 0;
+		position: relative;
+	}
+
+	.vault-usage-badge {
+		position: absolute;
+		top: 0.35rem;
+		right: 0.35rem;
+		/* Below .vault-page-header (z-index: 5) so badges don’t float over the sticky top bar when scrolling */
+		z-index: 3;
+		min-width: 1.65rem;
+		padding: 0.15rem 0.4rem;
+		border-radius: 999px;
+		border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border));
+		background: color-mix(in srgb, var(--accent) 22%, var(--card));
+		color: var(--text);
+		font-size: 0.72rem;
+		font-weight: 700;
+		font-variant-numeric: tabular-nums;
+		line-height: 1.2;
+		cursor: pointer;
+		box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
+	}
+	.vault-usage-badge:hover {
+		border-color: var(--accent);
+		color: var(--accent);
+	}
+	.vault-usage-badge--zero {
+		opacity: 0.65;
+		font-weight: 600;
 	}
 
 	.output-thumb {
@@ -693,21 +815,8 @@
 		min-width: 0;
 	}
 
-	.vault-filename {
-		font-size: 0.72rem;
-		font-family: ui-monospace, monospace;
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-	}
-
 	.vault-size {
 		font-size: 0.75rem;
-	}
-
-	/* Keep resolution (and optional seed line) readable without requiring hover */
-	:global(.vault-thumb.output-thumb) .thumb-overlay-bl-stack .thumb-overlay-seed {
-		opacity: 1;
 	}
 
 	@media (max-width: 900px) {
