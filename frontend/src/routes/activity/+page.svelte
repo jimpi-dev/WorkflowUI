@@ -13,6 +13,7 @@
 	import SendToAppDialog from '$lib/components/SendToAppDialog.svelte';
 	import LightboxViewer, { type LightboxItem } from '$lib/components/LightboxViewer.svelte';
 	import ConfirmDeleteDialog from '$lib/components/ConfirmDeleteDialog.svelte';
+	import InfiniteScrollLoadMore from '$lib/components/InfiniteScrollLoadMore.svelte';
 
 	type ProjectOption = { id: string; name: string; headerColor?: string | null };
 
@@ -535,8 +536,13 @@
 		const selected = new Set(selectedInGroup[group.groupId] ?? []);
 		const full = buildGroupImageList(group);
 		const filtered = selected.size ? full.filter((img) => selected.has(img.id)) : full;
-		const list = filtered.length ? filtered : full;
-		const idx = list.findIndex((img) => img.id === key);
+		let list = filtered.length ? filtered : full;
+		let idx = list.findIndex((img) => img.id === key);
+		// Subset selection limits the lightbox to selected items; clicking another thumb should still open it.
+		if (idx === -1 && selected.size) {
+			list = full;
+			idx = list.findIndex((img) => img.id === key);
+		}
 		if (idx === -1) return;
 		lightboxImages = list;
 		lightboxIndex = idx;
@@ -1050,9 +1056,21 @@
 		}
 	}
 
+	function dedupeRecentRunsById(runs: ActivityRun[]): ActivityRun[] {
+		const seen = new Set<string>();
+		const out: ActivityRun[] = [];
+		for (const r of runs) {
+			if (seen.has(r.id)) continue;
+			seen.add(r.id);
+			out.push(r);
+		}
+		return out;
+	}
+
 	async function loadRecent(offset = 0) {
 		recentAbort?.abort();
 		recentAbort = new AbortController();
+		const { signal } = recentAbort;
 		if (offset === 0) {
 			recentLoading = true;
 			recentError = null;
@@ -1065,14 +1083,16 @@
 				status: currentStatusFilter(),
 				q: filterQuery || undefined,
 				limit: PAGE_SIZE,
-				offset
+				offset,
+				signal
 			});
 			const mapped = (data.runs ?? []).map(normalizeRecent);
-			if (offset === 0) recentRuns = mapped;
-			else recentRuns = [...recentRuns, ...mapped];
+			if (offset === 0) recentRuns = dedupeRecentRunsById(mapped);
+			else recentRuns = dedupeRecentRunsById([...recentRuns, ...mapped]);
 			totalRecent = typeof data.total === 'number' ? data.total : recentRuns.length;
 			void refetchStorageSizesForActivityRuns(mapped);
 		} catch (e) {
+			if (e instanceof DOMException && e.name === 'AbortError') return;
 			recentError = e instanceof Error ? e.message : 'Failed to load recent generations';
 			if (offset === 0) {
 				recentRuns = [];
@@ -1096,10 +1116,10 @@
 				limit: PAGE_SIZE,
 				offset: 0
 			});
-			const top = (data.runs ?? []).map(normalizeRecent);
+			const top = dedupeRecentRunsById((data.runs ?? []).map(normalizeRecent));
 			const topIds = new Set(top.map((r) => r.id));
 			const rest = recentRuns.filter((r) => !topIds.has(r.id));
-			recentRuns = [...top, ...rest];
+			recentRuns = dedupeRecentRunsById([...top, ...rest]);
 			totalRecent = typeof data.total === 'number' ? data.total : totalRecent;
 			void refetchStorageSizesForActivityRuns(top);
 		} catch {
@@ -1646,12 +1666,22 @@
 				</section>
 			{/each}
 			{#if hasMoreRecent}
-				<div class="load-more">
-					<button type="button" disabled={recentLoadingMore} onclick={() => loadRecent(recentRuns.length)}>
-						{recentLoadingMore ? 'Loading…' : 'Load more'}
-					</button>
-				</div>
-				<div class="load-more-sentinel" use:useLoadMoreSentinel aria-hidden="true"></div>
+				<InfiniteScrollLoadMore
+					loading={recentLoadingMore}
+					loadedCount={recentRuns.length}
+					totalCount={totalRecent}
+					thumbScalePercent={thumbnailScale}
+					buttonDisabled={recentLoading}
+					onLoadMore={() => loadRecent(recentRuns.length)}
+					loadMoreLabel="Load more"
+					statusTitle="Loading more generations"
+					countNoun="generations"
+					statusAriaLabel="Loading more generations from history"
+				>
+					{#snippet sentinel()}
+						<div class="load-more-sentinel" use:useLoadMoreSentinel aria-hidden="true"></div>
+					{/snippet}
+				</InfiniteScrollLoadMore>
 			{/if}
 		{/if}
 	</section>
@@ -1947,9 +1977,9 @@
 	.output-thumb-play { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; background: rgba(0, 0, 0, 0.2); pointer-events: none; transition: background 0.15s ease; }
 	.output-thumb:hover .output-thumb-play { background: rgba(0, 0, 0, 0.4); }
 	.output-thumb-play svg { width: 48px; height: 48px; color: #fff; filter: drop-shadow(0 1px 3px rgba(0,0,0,0.8)); }
-	.load-more-sentinel { width: 100%; height: 1px; }
+	.load-more-sentinel { width: 100%; height: 1px; flex-shrink: 0; }
 	.run-group-no-images { color: var(--muted); font-size: 0.84rem; padding-top: 0.45rem; }
-	.load-more { margin-top: 0.75rem; }
+
 	.muted { color: var(--muted); }
 	.error { color: var(--error, #ef4444); }
 

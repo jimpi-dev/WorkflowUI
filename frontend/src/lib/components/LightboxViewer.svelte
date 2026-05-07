@@ -288,7 +288,16 @@ let {
 		zoom = 1;
 	}
 
+	function wheelShouldIgnore(e: WheelEvent): boolean {
+		const t = e.target as HTMLElement | null;
+		if (!t?.closest) return false;
+		return !!t.closest(
+			'.lightbox-carousel, .lightbox-playback-bar, .lightbox-media-actions, .lightbox-controls'
+		);
+	}
+
 	function onWheel(e: WheelEvent) {
+		if (wheelShouldIgnore(e)) return;
 		dismissZoomHint();
 		e.preventDefault();
 		if (zoomMode) {
@@ -547,12 +556,13 @@ let {
 </script>
 
 {#if open}
-	<div class="lightbox" bind:this={lightboxRootEl} role="dialog" aria-modal="true" aria-label={ariaTitle}>
+	<div class="lightbox" bind:this={lightboxRootEl} role="dialog" aria-modal="true" aria-label={ariaTitle} use:wheelAction>
 		<div
 			class="lightbox-backdrop"
 			role="button"
 			tabindex="-1"
 			aria-label="Close viewer"
+			title="Click outside the media to close · Esc"
 			onclick={handleClose}
 			onkeydown={(e) => e.key === 'Enter' && handleClose()}
 		></div>
@@ -601,7 +611,6 @@ let {
 			class:zoom-mode={zoomMode}
 			class:panning={isPanning}
 			bind:this={scrollEl}
-			use:wheelAction
 			role="presentation"
 			ondblclick={(e) => {
 				const t = e.target as HTMLElement;
@@ -655,52 +664,76 @@ let {
 						<path d="M19 12H5M12 19l-7-7 7-7" />
 					</svg>
 				</button>
-				{#if showDeleted}
-					<div class="lightbox-deleted-placeholder">
-						<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M8 6l1 14h6l1-14"/></svg>
-						<span>Deleted</span>
-					</div>
-				{:else if isVideo && currentItem}
-					<video
-						bind:this={videoEl}
-						class="lightbox-media"
-						src={currentItem.url}
-						controls
-						autoplay
-						playsinline
-						loop={videoLoopMode === 'single'}
-						style={videoStyle}
-						onended={onVideoEnded}
-						onerror={() => {
-							loadFailed = true;
+				<div class="lightbox-media-center">
+					<button
+						type="button"
+						class="lightbox-dismiss-sash"
+						aria-label="Close viewer"
+						title="Close · Esc"
+						onclick={(e) => {
+							e.stopPropagation();
+							void handleClose();
 						}}
-					><track kind="captions" /></video>
-				{:else if isAudio && currentItem}
-					<div class="lightbox-audio-wrap">
-						<audio
-							bind:this={audioEl}
-							class="lightbox-media lightbox-audio"
-							src={currentItem.url}
-							controls
-							autoplay
-							onended={onAudioEnded}
-							onerror={() => {
-								loadFailed = true;
-							}}
-						></audio>
+					></button>
+					<div class="lightbox-media-slot">
+						{#if showDeleted}
+							<div class="lightbox-deleted-placeholder">
+								<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M8 6l1 14h6l1-14"/></svg>
+								<span>Deleted</span>
+							</div>
+						{:else if isVideo && currentItem}
+							<video
+								bind:this={videoEl}
+								class="lightbox-media"
+								src={currentItem.url}
+								controls
+								autoplay
+								playsinline
+								loop={videoLoopMode === 'single'}
+								style={videoStyle}
+								onended={onVideoEnded}
+								onerror={() => {
+									loadFailed = true;
+								}}
+							><track kind="captions" /></video>
+						{:else if isAudio && currentItem}
+							<div class="lightbox-audio-wrap">
+								<audio
+									bind:this={audioEl}
+									class="lightbox-media lightbox-audio"
+									src={currentItem.url}
+									controls
+									autoplay
+									onended={onAudioEnded}
+									onerror={() => {
+										loadFailed = true;
+									}}
+								></audio>
+							</div>
+						{:else if currentItem}
+							<img
+								bind:this={imgEl}
+								src={currentItem.url}
+								alt=""
+								draggable="false"
+								style={mediaStyle}
+								onerror={() => {
+									loadFailed = true;
+								}}
+							/>
+						{/if}
 					</div>
-				{:else if currentItem}
-					<img
-						bind:this={imgEl}
-						src={currentItem.url}
-						alt=""
-						draggable="false"
-						style={mediaStyle}
-						onerror={() => {
-							loadFailed = true;
+					<button
+						type="button"
+						class="lightbox-dismiss-sash"
+						aria-label="Close viewer"
+						title="Close · Esc"
+						onclick={(e) => {
+							e.stopPropagation();
+							void handleClose();
 						}}
-					/>
-				{/if}
+					></button>
+				</div>
 				<button
 					type="button"
 					class="lightbox-nav lightbox-next"
@@ -929,6 +962,21 @@ let {
 							</svg>
 						</button>
 					{/if}
+					<span class="lightbox-media-toolbar-sep" aria-hidden="true"></span>
+					<button
+						type="button"
+						class="lightbox-media-btn lightbox-media-close"
+						title="Close viewer (Esc)"
+						aria-label="Close viewer"
+						onclick={(e) => {
+							e.stopPropagation();
+							void handleClose();
+						}}
+					>
+						<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+							<path d="M18 6L6 18M6 6l12 12" />
+						</svg>
+					</button>
 				</div>
 			</div>
 		{/if}

@@ -16,6 +16,7 @@ import { get } from 'svelte/store';
 	import DeleteProjectDialog from '$lib/components/DeleteProjectDialog.svelte';
 	import ConfirmDeleteDialog from '$lib/components/ConfirmDeleteDialog.svelte';
 	import LightboxViewer, { type LightboxItem } from '$lib/components/LightboxViewer.svelte';
+	import InfiniteScrollLoadMore from '$lib/components/InfiniteScrollLoadMore.svelte';
 	import { appBooting } from '$lib/stores/appBooting';
 	import { quickRunsProject } from '$lib/stores/quickRunsProject';
 
@@ -3150,12 +3151,18 @@ let lightboxDeletePending = $state<
 				{:else if filterFavoritesOnly && loadedGroupCount < totalGroups && totalGroups > 0}
 					<div class="runs-scroll runs-scroll-empty-favorites" bind:this={runsScrollEl}>
 						<p class="muted">No favorites in the first {loadedGroupCount} run group{loadedGroupCount === 1 ? '' : 's'}. Load more to find favorites.</p>
-						<button type="button" class="load-more-favorites-btn" onclick={() => loadMoreRuns()} disabled={loading || loadingMore}>
-							{#if loadingMore}Loading…{:else}Load more runs{/if}
-						</button>
-						{#if loadingMore}
-							<div class="load-more-loading" aria-live="polite">Loading more runs…</div>
-						{/if}
+						<InfiniteScrollLoadMore
+							loading={loadingMore}
+							loadedCount={loadedGroupCount}
+							totalCount={totalGroups}
+							thumbScalePercent={thumbnailScale}
+							buttonDisabled={loading}
+							onLoadMore={loadMoreRuns}
+							loadMoreLabel="Load more runs"
+							statusTitle="Loading more runs"
+							countNoun="run groups"
+							statusAriaLabel="Loading more run groups for this project"
+						></InfiniteScrollLoadMore>
 					</div>
 				{:else}
 					<p class="muted">{filterActive ? 'No runs match the current filters.' : 'No runs in this project.'}</p>
@@ -3607,14 +3614,26 @@ let lightboxDeletePending = $state<
 					{/each}
 					{/key}
 					{#if loadedGroupCount < totalGroups && totalGroups > 0}
-						<div
-							class="load-more-sentinel"
-							use:useLoadMoreSentinel={runsScrollEl}
-							aria-hidden="true"
-						></div>
-						{#if loadingMore}
-							<div class="load-more-loading" aria-live="polite">Loading more runs…</div>
-						{/if}
+						<InfiniteScrollLoadMore
+							loading={loadingMore}
+							loadedCount={loadedGroupCount}
+							totalCount={totalGroups}
+							thumbScalePercent={thumbnailScale}
+							buttonDisabled={loading}
+							onLoadMore={loadMoreRuns}
+							loadMoreLabel="Load more runs"
+							statusTitle="Loading more runs"
+							countNoun="run groups"
+							statusAriaLabel="Loading more run groups for this project"
+						>
+							{#snippet sentinel()}
+								<div
+									class="load-more-sentinel"
+									use:useLoadMoreSentinel={runsScrollEl}
+									aria-hidden="true"
+								></div>
+							{/snippet}
+						</InfiniteScrollLoadMore>
 					{/if}
 				</div>
 			{/if}
@@ -5164,32 +5183,6 @@ let lightboxDeletePending = $state<
 		visibility: hidden;
 		pointer-events: none;
 	}
-	.load-more-loading {
-		padding: 0.75rem;
-		text-align: center;
-		color: var(--muted);
-		font-size: 0.875rem;
-	}
-	.load-more-favorites-btn {
-		display: block;
-		margin: 1rem auto;
-		padding: 0.5rem 1rem;
-		background: var(--accent);
-		color: var(--accent-contrast, #fff);
-		border: none;
-		border-radius: 8px;
-		font-size: 0.9rem;
-		font-weight: 500;
-		cursor: pointer;
-	}
-	.load-more-favorites-btn:hover:not(:disabled) {
-		background: var(--accent-hover);
-	}
-	.load-more-favorites-btn:disabled {
-		opacity: 0.7;
-		cursor: not-allowed;
-	}
-	
 	.run-section {
 		background: var(--bg);
 		border: 2px solid #1f1f1f;
