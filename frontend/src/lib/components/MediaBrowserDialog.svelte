@@ -3,6 +3,7 @@
     import { getCookie, setCookie } from '$lib/cookie';
     import LightboxViewer, { type LightboxItem } from '$lib/components/LightboxViewer.svelte';
     import ThumbnailOverlay from '$lib/components/ThumbnailOverlay.svelte';
+    import InfiniteScrollLoadMore from '$lib/components/InfiniteScrollLoadMore.svelte';
     import type { MediaBrowserItem, MediaBrowserSelection } from '$lib/types/mediaBrowser';
 
     type ProjectOption = { id: string; name: string; headerColor?: string | null; lastUsedAt?: number | null };
@@ -1196,12 +1197,25 @@
                             </div>
                         {/each}
                     </div>
-                    <div bind:this={sentinelEl} use:observeSentinel class="sentinel"></div>
-                    {#if loadingMore}
-                        <div class="state loading-state">
-                            <span class="loading-spinner" aria-hidden="true"></span>
-                            <span>Loading more…</span>
-                        </div>
+                    {#if hasMore}
+                        <InfiniteScrollLoadMore
+                            loading={loadingMore}
+                            loadedCount={items.length}
+                            totalCount={total}
+                            thumbScalePercent={thumbScale}
+                            stickyWhileLoading={false}
+                            skeletonLayout="media"
+                            buttonDisabled={loading}
+                            onLoadMore={loadMore}
+                            loadMoreLabel="Load more"
+                            statusTitle="Loading more media"
+                            countNoun="items"
+                            statusAriaLabel="Loading more media items"
+                        >
+                            {#snippet sentinel()}
+                                <div bind:this={sentinelEl} use:observeSentinel class="sentinel"></div>
+                            {/snippet}
+                        </InfiniteScrollLoadMore>
                     {/if}
                 {/if}
             </div>
@@ -1604,7 +1618,8 @@
         overflow: hidden;
         flex: 0 0 auto;
     }
-    .media-card.output-thumb:not(.media-card--input) {
+    /* ThumbnailOverlay is position:absolute (out of flow); without aspect-ratio the card height collapses. */
+    .media-card.output-thumb {
         aspect-ratio: 1 / 1;
     }
     .media-card:hover {
