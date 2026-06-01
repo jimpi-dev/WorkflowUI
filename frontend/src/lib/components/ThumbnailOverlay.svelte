@@ -14,6 +14,9 @@
         showSeed = true,
         showDownload = true,
         showSendToApp = true,
+        showSendToVault = false,
+        isInVault = false,
+        sendingToVault = false,
         showDelete = false,
         deleteDisabled = false,
         fileName = undefined as string | undefined,
@@ -23,6 +26,7 @@
         onToggleSelection = undefined as (() => void) | undefined,
         onDownload = undefined as (() => void) | undefined,
         onSendToApp = undefined as (() => void) | undefined,
+        onSendToVault = undefined as (() => void) | undefined,
         onDelete = undefined as (() => void) | undefined,
         children
     }: {
@@ -38,6 +42,9 @@
         showSeed?: boolean;
         showDownload?: boolean;
         showSendToApp?: boolean;
+        showSendToVault?: boolean;
+        isInVault?: boolean;
+        sendingToVault?: boolean;
         showDelete?: boolean;
         deleteDisabled?: boolean;
         fileName?: string;
@@ -47,6 +54,7 @@
         onToggleSelection?: () => void;
         onDownload?: () => void;
         onSendToApp?: () => void;
+        onSendToVault?: () => void;
         onDelete?: () => void;
         children?: Snippet;
     } = $props();
@@ -170,7 +178,7 @@
         </div>
     {/if}
 
-    {#if showDownload || showSendToApp || (showDelete && onDelete)}
+    {#if showDownload || showSendToApp || showSendToVault || (showDelete && onDelete)}
         <div class="thumb-overlay-br">
             {#if showDownload && onDownload}
                 <button
@@ -200,6 +208,22 @@
                     </svg>
                 </button>
             {/if}
+            {#if showSendToVault && onSendToVault}
+                <button
+                    type="button"
+                    class="thumb-overlay-btn"
+                    class:thumb-overlay-btn-active={isInVault}
+                    title="Save to GenVault"
+                    aria-label="Save to GenVault"
+                    onclick={(e) => { stop(e); onSendToVault(); }}
+                >
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                        <rect x="3" y="3" width="18" height="18" rx="2" />
+                        <path d="M8 12h8" />
+                        <path d="M12 8v8" />
+                    </svg>
+                </button>
+            {/if}
             {#if showDelete && onDelete}
                 <button
                     type="button"
@@ -218,6 +242,15 @@
                     </svg>
                 </button>
             {/if}
+        </div>
+    {/if}
+
+    {#if sendingToVault}
+        <div class="thumb-transfer-overlay" aria-hidden="true">
+            <span class="thumb-transfer-label">Sending to GenVault…</span>
+            <span class="thumb-transfer-bar">
+                <span class="thumb-transfer-bar-fill"></span>
+            </span>
         </div>
     {/if}
 </div>
@@ -296,6 +329,12 @@
     .thumb-overlay-btn svg {
         width: 14px;
         height: 14px;
+    }
+    .thumb-overlay-btn-active {
+        border-color: color-mix(in srgb, var(--accent) 70%, var(--border));
+        background: color-mix(in srgb, var(--accent) 28%, rgba(0, 0, 0, 0.55));
+        color: var(--accent);
+        opacity: 1;
     }
 
     .thumb-overlay-ul {
@@ -432,6 +471,53 @@
         display: flex;
         gap: 6px;
         align-items: center;
+    }
+    .thumb-transfer-overlay {
+        position: absolute;
+        inset: 0;
+        z-index: 4;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 0.5rem;
+        background: color-mix(in srgb, rgba(10, 12, 20, 0.72) 85%, transparent);
+        backdrop-filter: blur(1.5px);
+        pointer-events: none;
+    }
+    .thumb-transfer-label {
+        font-size: 0.74rem;
+        font-weight: 600;
+        letter-spacing: 0.02em;
+        color: rgba(255, 255, 255, 0.96);
+        text-shadow: 0 1px 2px rgba(0, 0, 0, 0.7);
+    }
+    .thumb-transfer-bar {
+        width: min(84%, 170px);
+        height: 5px;
+        border-radius: 999px;
+        overflow: hidden;
+        background: rgba(255, 255, 255, 0.22);
+        border: 1px solid rgba(255, 255, 255, 0.25);
+    }
+    .thumb-transfer-bar-fill {
+        display: block;
+        height: 100%;
+        width: 42%;
+        border-radius: 999px;
+        background: linear-gradient(
+            90deg,
+            rgba(255, 255, 255, 0.25) 0%,
+            color-mix(in srgb, var(--accent) 80%, #9fb4ff) 38%,
+            color-mix(in srgb, var(--accent) 65%, #dbe5ff) 62%,
+            rgba(255, 255, 255, 0.2) 100%
+        );
+        animation: thumb-transfer-slide 1.15s ease-in-out infinite;
+        will-change: transform;
+    }
+    @keyframes thumb-transfer-slide {
+        0% { transform: translateX(-110%); }
+        100% { transform: translateX(250%); }
     }
 
     :global(.output-thumb.output-thumb-audio) .thumb-overlay-ul,

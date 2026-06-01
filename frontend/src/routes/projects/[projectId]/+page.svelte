@@ -19,6 +19,8 @@ import { get } from 'svelte/store';
 	import InfiniteScrollLoadMore from '$lib/components/InfiniteScrollLoadMore.svelte';
 	import { appBooting } from '$lib/stores/appBooting';
 	import { quickRunsProject } from '$lib/stores/quickRunsProject';
+	import { genVaultExistsByRunOutputs, pushRunOutputToGenVault } from '$lib/api/genvault';
+	import { toastError, toastSuccess } from '$lib/stores/toast';
 
 	let { data }: {
 		data: {
@@ -97,11 +99,69 @@ import { get } from 'svelte/store';
 	let deletingBothImageKeys = $state<Set<string>>(new Set());
 	let deletingRunIds = $state<Set<string>>(new Set());
 	let deleteError = $state<string | null>(null);
+	let pushingGenVaultKeys = $state<Set<string>>(new Set());
+	let outputInVault = $state<Record<string, boolean>>({});
+	let genVaultStatusTimer: ReturnType<typeof setTimeout> | null = null;
 
 	let thumbLoadFailed = $state<Set<string>>(new Set());
 	function markThumbLoadFailed(thumbKey: string) {
 		thumbLoadFailed = new Set([...thumbLoadFailed, thumbKey]);
 	}
+
+	async function sendOutputToGenVault(runId: string, outputIndex: number) {
+		const key = `${runId}:${outputIndex}`;
+		if (pushingGenVaultKeys.has(key)) return;
+		pushingGenVaultKeys = new Set([...pushingGenVaultKeys, key]);
+		try {
+			const res = await pushRunOutputToGenVault(runId, outputIndex);
+			toastSuccess(res?.uploaded?.duplicate ? 'Bild ist bereits in GenVault gespeichert.' : 'An GenVault gesendet.');
+			outputInVault = { ...outputInVault, [key]: true };
+		} catch (e) {
+			toastError(e instanceof Error ? e.message : 'Send to GenVault failed.');
+		} finally {
+			const next = new Set(pushingGenVaultKeys);
+			next.delete(key);
+			pushingGenVaultKeys = next;
+		}
+	}
+
+	async function refreshGenVaultStatusForProject() {
+		const requestItems: { clientKey: string; runId: string; outputIndex: number }[] = [];
+		const seen = new Set<string>();
+		for (const run of runs) {
+			for (const [origI] of (run.images ?? []).entries()) {
+				const key = `${run.id}:${origI}`;
+				if (seen.has(key)) continue;
+				seen.add(key);
+				requestItems.push({ clientKey: key, runId: run.id, outputIndex: origI });
+			}
+		}
+		if (!requestItems.length) return;
+		try {
+			const rows = await genVaultExistsByRunOutputs(requestItems);
+			const next = { ...outputInVault };
+			for (const row of rows) {
+				if (row?.client_key) next[row.client_key] = !!row.in_vault;
+			}
+			outputInVault = next;
+		} catch {
+			// ignore: non-critical badge enhancement
+		}
+	}
+
+	$effect(() => {
+		runs;
+		if (genVaultStatusTimer) clearTimeout(genVaultStatusTimer);
+		genVaultStatusTimer = setTimeout(() => {
+			void refreshGenVaultStatusForProject();
+		}, 180);
+		return () => {
+			if (genVaultStatusTimer) {
+				clearTimeout(genVaultStatusTimer);
+				genVaultStatusTimer = null;
+			}
+		};
+	});
 	let mediaResolutionByImageKey = $state<Record<string, { width: number; height: number }>>({});
 	const videoResolutionFetchInFlight = new Set<string>();
 	function setMediaResolution(key: string, width: number, height: number) {
@@ -3483,11 +3543,15 @@ let lightboxDeletePending = $state<
 															showSeed={true}
 															showDownload={!showAnyMediaPlaceholder}
 															showSendToApp={!showAnyMediaPlaceholder}
+															showSendToVault={!showAnyMediaPlaceholder}
+															isInVault={!!outputInVault[`${run.id}:${origI}`]}
+															sendingToVault={pushingGenVaultKeys.has(`${run.id}:${origI}`)}
 															onMetadataClick={() => { metadataPanelRunId = run.id; metadataPanelMode = 'output'; }}
 															onToggleFavorite={() => toggleOutputFavorite(run.id, origI, run)}
 															onToggleSelection={() => toggleImageSelection(group.groupId, key)}
 															onDownload={() => thumbDownloadImage(item as { filename: string; subfolder?: string; type?: string }, run.id)}
 															onSendToApp={() => { if (run?.id != null) { sendToAppRunId = run.id; sendToAppOutputIndex = origI; } }}
+															onSendToVault={() => { if (run?.id != null) void sendOutputToGenVault(run.id, origI); }}
 														>
 															{#if showDeletedPlaceholder}
 																<div class="output-thumb-deleted-placeholder" aria-hidden="true">
@@ -3826,6 +3890,12 @@ let lightboxDeletePending = $state<
 		onToggleSelection={lightboxGroupId ? (item) => toggleImageSelection(lightboxGroupId!, item.id) : undefined}
 		isSelected={lightboxGroupId ? (item) => isImageSelected(lightboxGroupId!, item.id) : undefined}
 		onSendToApp={(item) => { closeLightbox(); sendToAppRunId = item.runId!; sendToAppOutputIndex = item.outputIndex ?? 0; }}
+		onSendToVault={(item) => {
+			if (!item.runId || item.outputIndex == null) return;
+			void sendOutputToGenVault(item.runId, item.outputIndex);
+		}}
+		isInVault={(item) => !!(item.runId && item.outputIndex != null && outputInVault[`${item.runId}:${item.outputIndex}`])}
+		isSendingToVault={(item) => !!(item.runId && item.outputIndex != null && pushingGenVaultKeys.has(`${item.runId}:${item.outputIndex}`))}
 		onDeleteLocal={requestDeleteLightboxLocal}
 		onDeleteRemote={requestDeleteLightboxRemote}
 		onDeleteBoth={requestDeleteLightboxBoth}

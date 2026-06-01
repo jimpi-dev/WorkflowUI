@@ -10,6 +10,7 @@
 	import QueueBadge from '$lib/components/QueueBadge.svelte';
 	import QueuePanel from '$lib/components/QueuePanel.svelte';
 	import PluginWelcomeModal from '$lib/components/PluginWelcomeModal.svelte';
+	import ToastHost from '$lib/components/ToastHost.svelte';
 	import { consolePanelOpen } from '$lib/stores/consolePanelOpen';
 	import { queuePanelOpen } from '$lib/stores/queuePanelOpen';
 	import { queuePanelWidth } from '$lib/stores/queuePanelWidth';
@@ -193,6 +194,7 @@
 
 <div class="app-layout has-status-bar" bind:this={layoutEl}>
 	<PluginWelcomeModal />
+	<ToastHost />
 	{#if showAuthenticatedUi && !isLoginRoute}
 		<AppHeader />
 	{/if}

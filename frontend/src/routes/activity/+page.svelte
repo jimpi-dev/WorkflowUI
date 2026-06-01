@@ -14,6 +14,8 @@
 	import LightboxViewer, { type LightboxItem } from '$lib/components/LightboxViewer.svelte';
 	import ConfirmDeleteDialog from '$lib/components/ConfirmDeleteDialog.svelte';
 	import InfiniteScrollLoadMore from '$lib/components/InfiniteScrollLoadMore.svelte';
+	import { genVaultExistsByRunOutputs, pushRunOutputToGenVault } from '$lib/api/genvault';
+	import { toastError, toastSuccess } from '$lib/stores/toast';
 
 	type ProjectOption = { id: string; name: string; headerColor?: string | null };
 
@@ -111,6 +113,9 @@
 	let favorites = $state<Set<string>>(new Set());
 	let projectMetadataCache = $state<Record<string, { metadata: Record<string, unknown>; favorites: string[] }>>({});
 	let deleteRunGroupPending = $state<ActivityGroup | null>(null);
+	let pushingGenVaultKeys = $state<Set<string>>(new Set());
+	let outputInVault = $state<Record<string, boolean>>({});
+	let genVaultStatusTimer: ReturnType<typeof setTimeout> | null = null;
 
 	let queuePollId: ReturnType<typeof setInterval> | null = null;
 	let recentPollId: ReturnType<typeof setInterval> | null = null;
@@ -139,6 +144,64 @@
 		if (filterStatus === 'in_flight') return ['queued', 'running'];
 		return [filterStatus];
 	}
+
+	async function sendOutputToGenVault(runId: string, outputIndex: number) {
+		const key = `${runId}:${outputIndex}`;
+		if (pushingGenVaultKeys.has(key)) return;
+		pushingGenVaultKeys = new Set([...pushingGenVaultKeys, key]);
+		try {
+			const res = await pushRunOutputToGenVault(runId, outputIndex);
+			toastSuccess(res?.uploaded?.duplicate ? 'Bild ist bereits in GenVault gespeichert.' : 'An GenVault gesendet.');
+			outputInVault = { ...outputInVault, [key]: true };
+		} catch (e) {
+			toastError(e instanceof Error ? e.message : 'Send to GenVault failed.');
+		} finally {
+			const next = new Set(pushingGenVaultKeys);
+			next.delete(key);
+			pushingGenVaultKeys = next;
+		}
+	}
+
+	async function refreshGenVaultStatusForActivity() {
+		const requestItems: { clientKey: string; runId: string; outputIndex: number }[] = [];
+		const seen = new Set<string>();
+		for (const group of [...nowGroups, ...recentGroups]) {
+			for (const run of group.runs ?? []) {
+				for (const [origI] of (run.images ?? []).entries()) {
+					const key = `${run.id}:${origI}`;
+					if (seen.has(key)) continue;
+					seen.add(key);
+					requestItems.push({ clientKey: key, runId: run.id, outputIndex: origI });
+				}
+			}
+		}
+		if (!requestItems.length) return;
+		try {
+			const rows = await genVaultExistsByRunOutputs(requestItems);
+			const next = { ...outputInVault };
+			for (const row of rows) {
+				if (row?.client_key) next[row.client_key] = !!row.in_vault;
+			}
+			outputInVault = next;
+		} catch {
+			// ignore: non-critical badge enhancement
+		}
+	}
+
+	$effect(() => {
+		nowGroups;
+		recentGroups;
+		if (genVaultStatusTimer) clearTimeout(genVaultStatusTimer);
+		genVaultStatusTimer = setTimeout(() => {
+			void refreshGenVaultStatusForActivity();
+		}, 180);
+		return () => {
+			if (genVaultStatusTimer) {
+				clearTimeout(genVaultStatusTimer);
+				genVaultStatusTimer = null;
+			}
+		};
+	});
 
 	function normalizeRecent(r: RecentRunItem): ActivityRun {
 		return {
@@ -1405,11 +1468,15 @@
 											showSeed={true}
 											showDownload={true}
 											showSendToApp={true}
+											showSendToVault={true}
+											isInVault={!!outputInVault[`${run.id}:${origI}`]}
+											sendingToVault={pushingGenVaultKeys.has(`${run.id}:${origI}`)}
 											onMetadataClick={() => { metadataPanelRunId = run.id; metadataPanelMode = 'output'; }}
 											onToggleFavorite={() => { void toggleFavorite(run); }}
 											onToggleSelection={() => toggleImageSelection(group.groupId, imageKey(run.id, origI))}
 											onDownload={() => thumbDownloadImage(item, run.id)}
 											onSendToApp={() => { sendToAppRunId = run.id; sendToAppOutputIndex = origI; sendToAppProjectId = run.project_id; }}
+											onSendToVault={() => { void sendOutputToGenVault(run.id, origI); }}
 										>
 											{#if isVideo}
 												{#if playingVideoThumbKey === thumbKey}
@@ -1617,11 +1684,15 @@
 											showSeed={true}
 											showDownload={true}
 											showSendToApp={true}
+											showSendToVault={true}
+											isInVault={!!outputInVault[`${run.id}:${origI}`]}
+											sendingToVault={pushingGenVaultKeys.has(`${run.id}:${origI}`)}
 											onMetadataClick={() => { metadataPanelRunId = run.id; metadataPanelMode = 'output'; }}
 											onToggleFavorite={() => { void toggleFavorite(run); }}
 											onToggleSelection={() => toggleImageSelection(group.groupId, imageKey(run.id, origI))}
 											onDownload={() => thumbDownloadImage(item, run.id)}
 											onSendToApp={() => { sendToAppRunId = run.id; sendToAppOutputIndex = origI; sendToAppProjectId = run.project_id; }}
+											onSendToVault={() => { void sendOutputToGenVault(run.id, origI); }}
 										>
 											{#if isVideo}
 												{#if playingVideoThumbKey === thumbKey}
@@ -1788,6 +1859,12 @@
 		sendToAppProjectId = run?.project_id ?? null;
 		closeLightbox();
 	}}
+	onSendToVault={(item) => {
+		if (!item.runId || item.outputIndex == null) return;
+		void sendOutputToGenVault(item.runId, item.outputIndex);
+	}}
+	isInVault={(item) => !!(item.runId && item.outputIndex != null && outputInVault[`${item.runId}:${item.outputIndex}`])}
+	isSendingToVault={(item) => !!(item.runId && item.outputIndex != null && pushingGenVaultKeys.has(`${item.runId}:${item.outputIndex}`))}
 	onDeleteLocal={(item) => {
 		if (window.confirm('Delete local file?')) void deleteLightboxLocal(item);
 	}}
