@@ -42,6 +42,9 @@ let {
 		onDownload = undefined as ((item: LightboxItem) => void | Promise<void>) | undefined,
 		onMetadata = undefined as ((item: LightboxItem) => void) | undefined,
 		onSendToApp = undefined as ((item: LightboxItem) => void) | undefined,
+		onSendToVault = undefined as ((item: LightboxItem) => void) | undefined,
+		isInVault = undefined as ((item: LightboxItem) => boolean) | undefined,
+		isSendingToVault = undefined as ((item: LightboxItem) => boolean) | undefined,
 		onToggleFavorite = undefined as ((item: LightboxItem) => void) | undefined,
 		isFavorite = undefined as ((item: LightboxItem) => boolean) | undefined,
 		onToggleSelection = undefined as ((item: LightboxItem) => void) | undefined,
@@ -60,6 +63,9 @@ let {
 		onDownload?: (item: LightboxItem) => void | Promise<void>;
 		onMetadata?: (item: LightboxItem) => void;
 		onSendToApp?: (item: LightboxItem) => void;
+		onSendToVault?: (item: LightboxItem) => void;
+		isInVault?: (item: LightboxItem) => boolean;
+		isSendingToVault?: (item: LightboxItem) => boolean;
 		onToggleFavorite?: (item: LightboxItem) => void;
 		isFavorite?: (item: LightboxItem) => boolean;
 		onToggleSelection?: (item: LightboxItem) => void;
@@ -722,6 +728,12 @@ let {
 								}}
 							/>
 						{/if}
+						{#if currentItem && isSendingToVault?.(currentItem)}
+							<div class="lightbox-transfer-overlay" aria-hidden="true">
+								<span class="lightbox-transfer-label">Sending to GenVault…</span>
+								<span class="lightbox-transfer-bar"><span class="lightbox-transfer-bar-fill"></span></span>
+							</div>
+						{/if}
 					</div>
 					<button
 						type="button"
@@ -765,6 +777,9 @@ let {
 			{@const hasRemote = img.hasRemote ?? !img.remote_deleted}
 			{@const hasLocal = img.hasLocal ?? true}
 			{@const showSend = !!onSendToApp && !img.remote_deleted}
+			{@const showSendVault = !!onSendToVault && !img.remote_deleted}
+			{@const inVault = !!isInVault?.(img)}
+			{@const sendingToVault = !!isSendingToVault?.(img)}
 			{@const showDeleteLocal = !!onDeleteLocal && hasLocal}
 			{@const showDeleteRemote = !!onDeleteRemote && hasRemote}
 			{@const showDeleteBoth = !!onDeleteBoth && hasLocal && hasRemote}
@@ -960,6 +975,30 @@ let {
 							<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
 								<path d="M5 12h14M12 5l7 7-7 7" />
 							</svg>
+						</button>
+					{/if}
+					{#if showSendVault}
+						<button
+							type="button"
+							class="lightbox-media-btn"
+							class:lightbox-media-btn-active={inVault}
+							disabled={sendingToVault}
+							title="Save to GenVault"
+							aria-label="Save to GenVault"
+							onclick={(e) => {
+								e.stopPropagation();
+								onSendToVault?.(img);
+							}}
+						>
+							{#if sendingToVault}
+								<span class="lightbox-send-spinner" aria-hidden="true"></span>
+							{:else}
+								<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+									<rect x="3" y="3" width="18" height="18" rx="2" />
+									<path d="M8 12h8" />
+									<path d="M12 8v8" />
+								</svg>
+							{/if}
 						</button>
 					{/if}
 					<span class="lightbox-media-toolbar-sep" aria-hidden="true"></span>
@@ -1210,6 +1249,65 @@ let {
 	}
 	.lightbox-media-delete-both {
 		color: var(--error, #b91c1c);
+	}
+	.lightbox-media-btn-active {
+		border-color: color-mix(in srgb, var(--accent) 70%, var(--border));
+		background: color-mix(in srgb, var(--accent) 28%, rgba(0, 0, 0, 0.55));
+		color: var(--accent);
+	}
+	.lightbox-send-spinner {
+		width: 14px;
+		height: 14px;
+		border-radius: 50%;
+		border: 2px solid rgba(255, 255, 255, 0.3);
+		border-top-color: rgba(255, 255, 255, 0.95);
+		animation: workflowui-lightbox-spin 0.8s linear infinite;
+	}
+	.lightbox-transfer-overlay {
+		position: absolute;
+		inset: 0;
+		z-index: 8;
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		justify-content: center;
+		gap: 0.45rem;
+		padding: 1rem;
+		background: rgba(10, 12, 20, 0.5);
+		backdrop-filter: blur(5px);
+		pointer-events: none;
+	}
+	.lightbox-transfer-label {
+		font-size: 0.9rem;
+		font-weight: 600;
+		color: rgba(255, 255, 255, 0.96);
+		text-shadow: 0 1px 3px rgba(0, 0, 0, 0.7);
+	}
+	.lightbox-transfer-bar {
+		width: min(68%, 320px);
+		height: 5px;
+		border-radius: 999px;
+		overflow: hidden;
+		background: rgba(255, 255, 255, 0.22);
+		border: 1px solid rgba(255, 255, 255, 0.2);
+	}
+	.lightbox-transfer-bar-fill {
+		display: block;
+		height: 100%;
+		width: 42%;
+		border-radius: 999px;
+		background: linear-gradient(
+			90deg,
+			rgba(255, 255, 255, 0.25) 0%,
+			color-mix(in srgb, var(--accent) 80%, #9fb4ff) 38%,
+			color-mix(in srgb, var(--accent) 65%, #dbe5ff) 62%,
+			rgba(255, 255, 255, 0.2) 100%
+		);
+		animation: lightbox-transfer-slide 1.15s ease-in-out infinite;
+	}
+	@keyframes lightbox-transfer-slide {
+		0% { transform: translateX(-110%); }
+		100% { transform: translateX(250%); }
 	}
 	.lightbox-media-filename {
 		margin-top: 0.15rem;

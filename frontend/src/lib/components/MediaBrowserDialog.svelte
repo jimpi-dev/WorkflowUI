@@ -5,6 +5,8 @@
     import ThumbnailOverlay from '$lib/components/ThumbnailOverlay.svelte';
     import InfiniteScrollLoadMore from '$lib/components/InfiniteScrollLoadMore.svelte';
     import type { MediaBrowserItem, MediaBrowserSelection } from '$lib/types/mediaBrowser';
+    import { genVaultExistsByRunOutputs, pushRunOutputToGenVault } from '$lib/api/genvault';
+    import { toastError, toastSuccess } from '$lib/stores/toast';
 
     type ProjectOption = { id: string; name: string; headerColor?: string | null; lastUsedAt?: number | null };
     type AppOption = { id: string; title: string };
@@ -75,6 +77,9 @@
     let projectMetadataCache = $state<Record<string, { metadata: Record<string, unknown>; favorites: string[] }>>({});
     let favoritesSaving = $state(false);
     let deletingKeys = $state<Set<string>>(new Set());
+    let pushingToVaultKeys = $state<Set<string>>(new Set());
+    let outputInVault = $state<Record<string, boolean>>({});
+    let genVaultStatusTimer: ReturnType<typeof setTimeout> | null = null;
 
     const hasMore = $derived(items.length < total);
     const displayedItems = $derived.by(() => {
@@ -245,6 +250,61 @@
         if (!hasMore || loading || loadingMore) return;
         loadItems(items.length);
     }
+
+    async function pushToGenVault(item: MediaBrowserItem) {
+        if (item.source !== 'generation' || !item.run_id || typeof item.output_index !== 'number') return;
+        const key = `${item.run_id}:${item.output_index}`;
+        if (pushingToVaultKeys.has(key)) return;
+        pushingToVaultKeys = new Set([...pushingToVaultKeys, key]);
+        try {
+            const data = await pushRunOutputToGenVault(item.run_id, item.output_index);
+            toastSuccess(data?.uploaded?.duplicate ? 'Bild ist bereits in GenVault gespeichert.' : 'An GenVault gesendet.');
+            outputInVault = { ...outputInVault, [key]: true };
+        } catch (e) {
+            toastError(e instanceof Error ? e.message : 'Failed to send to GenVault.');
+        } finally {
+            const next = new Set(pushingToVaultKeys);
+            next.delete(key);
+            pushingToVaultKeys = next;
+        }
+    }
+
+    async function refreshGenVaultStatusForBrowserItems() {
+        const requestItems: { clientKey: string; runId: string; outputIndex: number }[] = [];
+        const seen = new Set<string>();
+        for (const item of displayedItems) {
+            if (item.source !== 'generation' || !item.run_id || typeof item.output_index !== 'number') continue;
+            const key = `${item.run_id}:${item.output_index}`;
+            if (seen.has(key)) continue;
+            seen.add(key);
+            requestItems.push({ clientKey: key, runId: item.run_id, outputIndex: item.output_index });
+        }
+        if (!requestItems.length) return;
+        try {
+            const rows = await genVaultExistsByRunOutputs(requestItems);
+            const next = { ...outputInVault };
+            for (const row of rows) {
+                if (row?.client_key) next[row.client_key] = !!row.in_vault;
+            }
+            outputInVault = next;
+        } catch {
+            // ignore: visual hint only
+        }
+    }
+
+    $effect(() => {
+        displayedItems;
+        if (genVaultStatusTimer) clearTimeout(genVaultStatusTimer);
+        genVaultStatusTimer = setTimeout(() => {
+            void refreshGenVaultStatusForBrowserItems();
+        }, 180);
+        return () => {
+            if (genVaultStatusTimer) {
+                clearTimeout(genVaultStatusTimer);
+                genVaultStatusTimer = null;
+            }
+        };
+    });
 
     function imageUrlFor(item: MediaBrowserItem): string {
         const params = new URLSearchParams();
@@ -463,7 +523,7 @@
             );
             if (!res.ok) {
                 const d = await res.json().catch(() => ({}));
-                window.alert((d as { detail?: string }).detail || 'Delete failed');
+                toastError((d as { detail?: string }).detail || 'Delete failed');
                 return;
             }
             removeItemFromList(item);
@@ -570,7 +630,7 @@
         const res = await fetch(`${apiBase}/runs/${encodeURIComponent(rid)}/${path}`, { method: 'POST' });
         if (!res.ok) {
             const d = await res.json().catch(() => ({}));
-            window.alert((d as { detail?: string }).detail || 'Delete failed');
+            toastError((d as { detail?: string }).detail || 'Delete failed');
             return;
         }
         const it = findMediaItemForLightbox(li);
@@ -600,6 +660,12 @@
     }
     function onLightboxDeleteBoth(li: LightboxItem) {
         void postDeleteLightbox(li, 'both');
+    }
+
+    function onLightboxSendToVault(li: LightboxItem) {
+        const it = findMediaItemForLightbox(li);
+        if (!it || it.source !== 'generation') return;
+        void pushToGenVault(it);
     }
 
     const lightboxAllowsRunMutations = $derived.by(() => {
@@ -1094,10 +1160,13 @@
                                             showSeed={false}
                                             showDownload={true}
                                             showSendToApp={false}
+                                            showSendToVault={true}
+                                            isInVault={!!(item.run_id && typeof item.output_index === 'number' && outputInVault[`${item.run_id}:${item.output_index}`])}
                                             showDelete={true}
                                             deleteDisabled={deletingKeys.has(deleteOpKey(item))}
                                             onToggleFavorite={() => void toggleItemFavorite(item)}
                                             onDownload={() => void downloadMediaItem(item)}
+                                            onSendToVault={() => void pushToGenVault(item)}
                                             onDelete={() => void deleteItemFromRun(item)}
                                         >
                                             <div
@@ -1181,6 +1250,21 @@
                                     <div class="sub">
                                         {item.project_name} · {item.source === 'input' ? 'Input' : 'Output'}
                                     </div>
+                                    {#if item.source === 'generation' && item.run_id && typeof item.output_index === 'number'}
+                                        <button
+                                            type="button"
+                                            class="media-use-btn media-genvault-btn"
+                                            disabled={pushingToVaultKeys.has(`${item.run_id}:${item.output_index}`)}
+                                            onclick={(e) => {
+                                                e.stopPropagation();
+                                                void pushToGenVault(item);
+                                            }}
+                                        >
+                                            {pushingToVaultKeys.has(`${item.run_id}:${item.output_index}`)
+                                                ? 'Sending…'
+                                                : 'Send to GenVault'}
+                                        </button>
+                                    {/if}
                                     {#if onSelect}
                                         <button
                                             type="button"
@@ -1234,6 +1318,9 @@
         onDeleteLocal={lightboxAllowsRunMutations ? onLightboxDeleteLocal : undefined}
         onDeleteRemote={lightboxAllowsRunMutations ? onLightboxDeleteRemote : undefined}
         onDeleteBoth={lightboxAllowsRunMutations ? onLightboxDeleteBoth : undefined}
+        onSendToVault={lightboxAllowsRunMutations ? onLightboxSendToVault : undefined}
+        isInVault={(item) => !!(item.runId && item.outputIndex != null && outputInVault[`${item.runId}:${item.outputIndex}`])}
+        isSendingToVault={(item) => !!(item.runId && item.outputIndex != null && pushingToVaultKeys.has(`${item.runId}:${item.outputIndex}`))}
         ariaTitle="Media browser viewer"
     />
 </dialog>
@@ -1646,6 +1733,9 @@
         background: var(--surface, rgba(255, 255, 255, 0.06));
         color: var(--text);
         cursor: pointer;
+    }
+    .media-genvault-btn {
+        margin-top: 0.25rem;
     }
     .media-use-btn:hover {
         border-color: var(--accent);

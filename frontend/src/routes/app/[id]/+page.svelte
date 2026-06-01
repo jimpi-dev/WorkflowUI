@@ -17,6 +17,8 @@
     import { goto } from '$app/navigation';
     import { appConfig, getApiBase } from '$lib/config';
     import { startQueue } from '$lib/queueApi';
+    import { genVaultExistsByRunOutputs, pushRunOutputToGenVault } from '$lib/api/genvault';
+    import { toastError, toastSuccess } from '$lib/stores/toast';
 
     let { data } = $props();
     let currentProject = $state<{ id: string; name: string } | null>(null);
@@ -511,6 +513,9 @@
 
     let sendToAppRunId = $state<string | null>(null);
     let sendToAppOutputIndex = $state<number | null>(null);
+    let pushingGenVaultKeys = $state<Set<string>>(new Set());
+    let outputInVault = $state<Record<string, boolean>>({});
+    let genVaultStatusTimer: ReturnType<typeof setTimeout> | null = null;
 
     let metadataPanelRunId = $state<string | null>(null);
 
@@ -1123,6 +1128,68 @@
         }
     }
 
+    async function sendOutputToGenVault(backendRunId: string, outputIndex: number) {
+        const key = `${backendRunId}:${outputIndex}`;
+        if (pushingGenVaultKeys.has(key)) return;
+        pushingGenVaultKeys = new Set([...pushingGenVaultKeys, key]);
+        try {
+            const res = await pushRunOutputToGenVault(backendRunId, outputIndex);
+            toastSuccess(res?.uploaded?.duplicate ? 'Bild ist bereits in GenVault gespeichert.' : 'An GenVault gesendet.');
+            outputInVault = { ...outputInVault, [`${backendRunId}:${outputIndex}`]: true };
+        } catch (e) {
+            toastError(e instanceof Error ? e.message : 'Send to GenVault failed.');
+        } finally {
+            const next = new Set(pushingGenVaultKeys);
+            next.delete(key);
+            pushingGenVaultKeys = next;
+        }
+    }
+
+    function outputVaultKey(runId: string, outputIndex: number): string {
+        return `${runId}:${outputIndex}`;
+    }
+
+    async function refreshGenVaultStatusForRuns() {
+        const requestItems: { clientKey: string; runId: string; outputIndex: number }[] = [];
+        const seen = new Set<string>();
+        for (const run of runs) {
+            for (const img of run.images ?? []) {
+                const runId = img.backendRunId;
+                const outputIndex = img.outputIndex ?? 0;
+                if (!runId) continue;
+                const key = outputVaultKey(runId, outputIndex);
+                if (seen.has(key)) continue;
+                seen.add(key);
+                requestItems.push({ clientKey: key, runId, outputIndex });
+            }
+        }
+        if (!requestItems.length) return;
+        try {
+            const rows = await genVaultExistsByRunOutputs(requestItems);
+            const next = { ...outputInVault };
+            for (const row of rows) {
+                if (row?.client_key) next[row.client_key] = !!row.in_vault;
+            }
+            outputInVault = next;
+        } catch {
+            // silent: status badge enhancement only
+        }
+    }
+
+    $effect(() => {
+        runs;
+        if (genVaultStatusTimer) clearTimeout(genVaultStatusTimer);
+        genVaultStatusTimer = setTimeout(() => {
+            void refreshGenVaultStatusForRuns();
+        }, 120);
+        return () => {
+            if (genVaultStatusTimer) {
+                clearTimeout(genVaultStatusTimer);
+                genVaultStatusTimer = null;
+            }
+        };
+    });
+
     function onAddLora(nodeId: string, groupKey: string) {
         extraLoraSlots = {
             ...extraLoraSlots,
@@ -1353,6 +1420,9 @@
                     onDeleteLocalImage={deleteLocalImage}
                     onDeleteBothImage={deleteBothImage}
                     onSendToApp={currentProject ? (backendRunId, outputIndex) => { sendToAppRunId = backendRunId; sendToAppOutputIndex = outputIndex; } : undefined}
+                    onSendToVault={(backendRunId, outputIndex) => { void sendOutputToGenVault(backendRunId, outputIndex); }}
+                    isOutputInVault={(backendRunId, outputIndex) => !!outputInVault[outputVaultKey(backendRunId, outputIndex)]}
+                    isOutputSendingToVault={(backendRunId, outputIndex) => pushingGenVaultKeys.has(outputVaultKey(backendRunId, outputIndex))}
                     onMetadataClick={(_run, image) => { metadataPanelRunId = image.backendRunId; }}
                     onDeleteRemoteSelected={deleteRemoteSelected}
                     onDeleteLocalSelected={deleteLocalSelected}

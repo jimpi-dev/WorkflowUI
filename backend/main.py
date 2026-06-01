@@ -31,7 +31,7 @@ from dependencies import get_db, get_user_repo
 from config import get_auth_config
 from services.auth_service import parse_token
 from authz import AUTH_COOKIE_NAME
-from routers import config, runs, projects, comfyui, import_, apps, workflows, execution, auth, users, vault
+from routers import config, runs, projects, comfyui, import_, apps, workflows, execution, auth, users, vault, genvault
 
 
 def _load_cors_origins() -> list[str]:
@@ -80,6 +80,7 @@ def _include_api_routes(prefix: str) -> None:
     app.include_router(auth.router, prefix=prefix, tags=["auth"])
     app.include_router(users.router, prefix=prefix, tags=["users"])
     app.include_router(vault.router, prefix=prefix, tags=["vault"])
+    app.include_router(genvault.router, prefix=prefix, tags=["genvault"])
 
 
 _include_api_routes(API_PREFIX)

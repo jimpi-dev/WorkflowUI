@@ -20,6 +20,8 @@
 	import LightboxViewer, { type LightboxItem } from '$lib/components/LightboxViewer.svelte';
 	import MediaBrowserDialog from '$lib/components/MediaBrowserDialog.svelte';
 	import ThumbnailOverlay from '$lib/components/ThumbnailOverlay.svelte';
+	import { genVaultExistsByInputFilenames, pushInputToGenVault } from '$lib/api/genvault';
+	import { toastError, toastSuccess } from '$lib/stores/toast';
 
 	type VaultItem = {
 		filename: string;
@@ -41,6 +43,9 @@
 	let uploadMessage = $state<string | null>(null);
 	let deleting = $state<Set<string>>(new Set());
 	let fileInputEl = $state<HTMLInputElement | null>(null);
+	let pushingVaultInputs = $state<Set<string>>(new Set());
+	let inputInVault = $state<Record<string, boolean>>({});
+	let genVaultStatusTimer: ReturnType<typeof setTimeout> | null = null;
 
 	let thumbnailScale = $state<number>(browser ? getThumbSizeCookie() : 100);
 	let thumbnailFitMode = $state<ThumbFitMode>(browser ? getThumbFitModeCookie() : 'cover');
@@ -249,7 +254,7 @@
 			const url = previewUrl(filename);
 			const res = await fetch(url);
 			if (!res.ok) {
-				window.alert('Download failed.');
+				toastError('Download failed.');
 				return;
 			}
 			const blob = await res.blob();
@@ -261,7 +266,7 @@
 			document.body.removeChild(a);
 			URL.revokeObjectURL(a.href);
 		} catch {
-			window.alert('Download failed.');
+			toastError('Download failed.');
 		}
 	}
 
@@ -274,7 +279,7 @@
 			});
 			if (!res.ok) {
 				const d = await res.json().catch(() => ({}));
-				window.alert((d.detail as string) || 'Delete failed');
+				toastError((d.detail as string) || 'Delete failed');
 				return;
 			}
 			if (lightboxOpen) {
@@ -291,13 +296,60 @@
 			}
 			await loadList({ silent: true });
 		} catch {
-			window.alert('Delete failed');
+			toastError('Delete failed');
 		} finally {
 			const next = new Set(deleting);
 			next.delete(filename);
 			deleting = next;
 		}
 	}
+
+	async function sendInputToGenVault(filename: string) {
+		if (pushingVaultInputs.has(filename)) return;
+		pushingVaultInputs = new Set([...pushingVaultInputs, filename]);
+		try {
+			const res = await pushInputToGenVault(filename);
+			toastSuccess(res?.uploaded?.duplicate ? 'Bild ist bereits in GenVault gespeichert.' : 'An GenVault gesendet.');
+			inputInVault = { ...inputInVault, [filename]: true };
+		} catch (e) {
+			toastError(e instanceof Error ? e.message : 'Send to GenVault failed.');
+		} finally {
+			const next = new Set(pushingVaultInputs);
+			next.delete(filename);
+			pushingVaultInputs = next;
+		}
+	}
+
+	async function refreshInputGenVaultStatus() {
+		const filenames = Array.from(new Set(items.map((it) => it.filename).filter(Boolean)));
+		if (!filenames.length) return;
+		try {
+			const rows = await genVaultExistsByInputFilenames(
+				filenames.map((filename) => ({ clientKey: filename, filename }))
+			);
+			const next = { ...inputInVault };
+			for (const row of rows) {
+				if (row?.client_key) next[row.client_key] = !!row.in_vault;
+			}
+			inputInVault = next;
+		} catch {
+			// ignore: purely visual status hint
+		}
+	}
+
+	$effect(() => {
+		items;
+		if (genVaultStatusTimer) clearTimeout(genVaultStatusTimer);
+		genVaultStatusTimer = setTimeout(() => {
+			void refreshInputGenVaultStatus();
+		}, 180);
+		return () => {
+			if (genVaultStatusTimer) {
+				clearTimeout(genVaultStatusTimer);
+				genVaultStatusTimer = null;
+			}
+		};
+	});
 
 	onMount(() => {
 		void loadList();
@@ -320,6 +372,10 @@
 	<header class="vault-page-header">
 		<div class="vault-title-block">
 			<h1>Vault</h1>
+			<div class="vault-subnav">
+				<a href="/vault" class="vault-subnav-link active">Input Images</a>
+				<a href="/vault/genvault" class="vault-subnav-link">GenVault</a>
+			</div>
 			<p class="vault-lead">
 				Input images for workflow runs: hover a thumbnail for download and delete, or click the image to open the
 				viewer. Resolution appears on each thumbnail once the image has loaded.
@@ -485,9 +541,12 @@
 								showSeed={false}
 								showDownload={true}
 								showSendToApp={false}
+								showSendToVault={true}
+								isInVault={!!inputInVault[it.filename]}
 								showDelete={it.can_delete}
 								deleteDisabled={deleting.has(it.filename)}
 								onDownload={() => void downloadFile(it.filename)}
+								onSendToVault={() => void sendInputToGenVault(it.filename)}
 								onDelete={() => void deleteFile(it.filename)}
 							>
 								<img
@@ -530,6 +589,18 @@
 	}}
 	onClose={closeLightbox}
 	onDownload={(item) => void downloadLightboxItem(item)}
+	onSendToVault={(item) => {
+		const name = item.filename || item.id;
+		if (name) void sendInputToGenVault(name);
+	}}
+	isInVault={(item) => {
+		const name = item.filename || item.id;
+		return !!(name && inputInVault[name]);
+	}}
+	isSendingToVault={(item) => {
+		const name = item.filename || item.id;
+		return !!(name && pushingVaultInputs.has(name));
+	}}
 	ariaTitle="Vault image viewer"
 />
 
@@ -581,6 +652,25 @@
 		color: var(--text);
 		line-height: 1.45;
 		max-width: 72ch;
+	}
+	.vault-subnav {
+		display: inline-flex;
+		gap: 0.5rem;
+		margin: 0 0 0.45rem 0;
+	}
+	.vault-subnav-link {
+		text-decoration: none;
+		padding: 0.3rem 0.6rem;
+		border: 1px solid var(--border);
+		border-radius: 8px;
+		color: var(--text);
+		background: var(--surface);
+		font-size: 0.82rem;
+	}
+	.vault-subnav-link.active {
+		border-color: var(--accent);
+		color: var(--accent);
+		background: var(--accent-soft);
 	}
 
 	.vault-hint {
