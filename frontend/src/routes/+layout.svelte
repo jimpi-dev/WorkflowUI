@@ -14,10 +14,12 @@
 	import { consolePanelOpen } from '$lib/stores/consolePanelOpen';
 	import { queuePanelOpen } from '$lib/stores/queuePanelOpen';
 	import { queuePanelWidth } from '$lib/stores/queuePanelWidth';
+	import { ensureQueueWatching } from '$lib/stores/queueState';
 	import { goto } from '$app/navigation';
 	import { getApiBase } from '$lib/config';
 	import { authState } from '$lib/stores/auth';
 	import { quickRunsProject } from '$lib/stores/quickRunsProject';
+	import { resetGenVaultEnabledToDefault, setGenVaultEnabledFromConfig } from '$lib/stores/genvaultEnabled';
 	import { tick, onMount } from 'svelte';
 	let { children } = $props();
 
@@ -92,12 +94,21 @@
 					fetch(`${base}/config`)
 						.then((cfgRes) => (cfgRes.ok ? cfgRes.json() : null))
 						.then((cfg) => {
-							if (cfg) quickRunsProject.setFromConfig(cfg);
-							else quickRunsProject.resetToDefault();
+							if (cfg) {
+								quickRunsProject.setFromConfig(cfg);
+								setGenVaultEnabledFromConfig(cfg);
+							} else {
+								quickRunsProject.resetToDefault();
+								resetGenVaultEnabledToDefault();
+							}
 						})
-						.catch(() => quickRunsProject.resetToDefault());
+						.catch(() => {
+							quickRunsProject.resetToDefault();
+							resetGenVaultEnabledToDefault();
+						});
 				} else {
 					quickRunsProject.resetToDefault();
+					resetGenVaultEnabledToDefault();
 				}
 				const path = window.location.pathname;
 				if (enabled && !authenticated && !isLoginPath(path)) goto('/login');
@@ -106,7 +117,17 @@
 			.catch(() => {
 				authState.set({ enabled: false, authenticated: false, user: null, loaded: true });
 				quickRunsProject.resetToDefault();
+				resetGenVaultEnabledToDefault();
 			});
+	});
+
+	$effect(() => {
+		if (!$authState.loaded) return;
+		const path = $page.url.pathname;
+		const canWatchQueue =
+			(!$authState.enabled || $authState.authenticated) && !isLoginPath(path);
+		if (!canWatchQueue) return;
+		return ensureQueueWatching();
 	});
 
 	$effect(() => {

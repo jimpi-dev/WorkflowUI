@@ -7,7 +7,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Depends
 
 from authz import require_user, require_admin
-from config import get_media_storage_config, get_workflowui_embed_config, update_media_storage_config
+from config import get_genvault_config, get_media_storage_config, get_workflowui_embed_config, update_media_storage_config
 from db.maintenance import vacuum_db
 from services.comfyui_info import (
     get_workflowui_plugin_status,
@@ -174,6 +174,7 @@ def get_config(db=Depends(get_db), ctx=Depends(require_user)):
     )
     comfyui_delete_supported, workflowui_plugin_available, workflowui_plugin_incompatible = get_workflowui_plugin_status(COMFY_URL)
     embed_cfg = get_workflowui_embed_config()
+    genvault_cfg = get_genvault_config()
     frontend_version = _get_frontend_version()
     # Always report the size of the media storage root folder if it exists,
     # regardless of whether media storage is currently enabled.
@@ -195,6 +196,7 @@ def get_config(db=Depends(get_db), ctx=Depends(require_user)):
         "localStorageRootPath": media_cfg.root_path,
         "embedWorkflowuiMetadataOnDownload": embed_cfg.embed_on_download,
         "embedWorkflowuiMetadataOnSave": embed_cfg.embed_on_save,
+        "genvaultEnabled": genvault_cfg.enabled,
         "dbSizeBytes": _get_db_size_bytes(db_path),
         "dbBreakdown": _get_db_breakdown(db_path),
     }

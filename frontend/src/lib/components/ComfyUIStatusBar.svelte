@@ -1,12 +1,11 @@
 <script lang="ts">
 import { getApiBase, appConfig } from '$lib/config';
 import { onMount, onDestroy } from 'svelte';
-import { get } from 'svelte/store';
 import { page } from '$app/stores';
 	import DbSizeBar from '$lib/components/DbSizeBar.svelte';
 	import { consolePanelOpen } from '$lib/stores/consolePanelOpen';
 	import { queuePanelOpen } from '$lib/stores/queuePanelOpen';
-	import { getQueue } from '$lib/queueApi';
+	import { queueSummary as queueSummaryStore } from '$lib/stores/queueState';
 	import { authState } from '$lib/stores/auth';
 
 	interface Status {
@@ -21,7 +20,6 @@ import { page } from '$app/stores';
 	}
 
 	let status = $state<Status | null>(null);
-	let queueSummary = $state<{ running: number; queued: number; total: number } | null>(null);
 	let error = $state<string | null>(null);
 	let workflowuiPluginAvailable = $state<boolean | null>(null);
 	let workflowuiPluginIncompatible = $state(false);
@@ -48,6 +46,8 @@ import { page } from '$app/stores';
 		if (!$authState.enabled) return true;
 		return $authState.authenticated;
 	});
+
+	const queueSummary = $derived($queueSummaryStore);
 
 	function formatLocalStorageLabel(bytes: number | null): string {
 		if (bytes == null) return '—';
@@ -147,24 +147,6 @@ import { page } from '$app/stores';
 		}
 	}
 
-	async function fetchQueueSummary() {
-		if (!canQueryRuntimeStatus) {
-			queueSummary = null;
-			return;
-		}
-		if (get(queuePanelOpen)) {
-			return;
-		}
-		try {
-			const data = await getQueue();
-			const running = data.running ? 1 : 0;
-			const queued = data.queued?.length ?? 0;
-			queueSummary = { running, queued, total: running + queued };
-		} catch {
-			queueSummary = null;
-		}
-	}
-
 	function startPolling() {
 		if (intervalId || configIntervalId) return;
 		if (typeof document === 'undefined') return;
@@ -172,10 +154,8 @@ import { page } from '$app/stores';
 		const ms = () => (isHidden() ? POLL_INTERVAL_HIDDEN_MS : POLL_INTERVAL_MS);
 		fetchConfig();
 		fetchStatus();
-		fetchQueueSummary();
 		intervalId = setInterval(() => {
 			fetchStatus();
-			fetchQueueSummary();
 		}, ms());
 		configIntervalId = setInterval(fetchConfig, CONFIG_POLL_INTERVAL_MS);
 		document.addEventListener('visibilitychange', onVisibilityChange);
@@ -192,12 +172,9 @@ import { page } from '$app/stores';
 		clearInterval(intervalId);
 		const delay =
 			document.visibilityState === 'hidden' ? POLL_INTERVAL_HIDDEN_MS : POLL_INTERVAL_MS;
-		// Immediately refresh once on visibility change, then continue polling both status and queue.
 		fetchStatus();
-		fetchQueueSummary();
 		intervalId = setInterval(() => {
 			fetchStatus();
-			fetchQueueSummary();
 		}, delay);
 	}
 
@@ -229,7 +206,6 @@ import { page } from '$app/stores';
 		}
 		stopPolling();
 		status = null;
-		queueSummary = null;
 		error = null;
 		workflowuiPluginAvailable = null;
 		workflowuiPluginIncompatible = false;

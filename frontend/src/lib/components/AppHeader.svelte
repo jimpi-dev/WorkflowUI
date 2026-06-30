@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { onDestroy, onMount } from 'svelte';
+	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { browser } from '$app/environment';
 	import { page } from '$app/stores';
@@ -10,8 +10,9 @@
 	import { headerAppContext } from '$lib/stores/headerAppContext';
 	import { presetHeaderStore, togglePresetHeaderCreation, requestOpenPresetList } from '$lib/stores/presetHeader';
 	import { projectSelectorOpen } from '$lib/stores/projectSelectorOpen';
-	import { getQueue } from '$lib/queueApi';
+	import { activityActiveCount } from '$lib/stores/queueState';
 	import { quickRunsProject } from '$lib/stores/quickRunsProject';
+	import { genvaultEnabled } from '$lib/stores/genvaultEnabled';
 	import PresetIcon from '$lib/components/PresetIcon.svelte';
 
 	let theme = $state('dark');
@@ -23,16 +24,10 @@
 			localStorage.getItem('theme') ??
 			(window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
 		document.documentElement.setAttribute('data-theme', theme);
-		refreshActivityCount();
-		activityPollId = setInterval(refreshActivityCount, 5000);
 	});
 
-	onDestroy(() => {
-		if (activityPollId) {
-			clearInterval(activityPollId);
-			activityPollId = null;
-		}
-	});
+	let menuOpen = $state(false);
+	let showAuthNav = $derived(!$authState.enabled || $authState.authenticated);
 
 	function toggleTheme() {
 		theme = theme === 'dark' ? 'light' : 'dark';
@@ -47,29 +42,12 @@
 		}
 	}
 
-	let menuOpen = $state(false);
-	let activityActiveCount = $state(0);
-	let activityPollId: ReturnType<typeof setInterval> | null = null;
-	let showAuthNav = $derived(!$authState.enabled || $authState.authenticated);
-
 	function toggleMenu() {
 		menuOpen = !menuOpen;
 	}
 
 	function closeMenu() {
 		menuOpen = false;
-	}
-
-	async function refreshActivityCount() {
-		try {
-			const queue = await getQueue();
-			const ids = new Set<string>();
-			if (queue.running) ids.add(queue.running.run_group_id ?? queue.running.run_id);
-			for (const item of queue.queued ?? []) ids.add(item.run_group_id ?? item.run_id);
-			activityActiveCount = ids.size;
-		} catch {
-			activityActiveCount = 0;
-		}
 	}
 
 	async function logout() {
@@ -299,8 +277,8 @@
 			<a href="/activity" class:active={$page.url.pathname === '/activity'}>
 				<svg class="top-nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12h4l2-5 4 10 2-5h6"/></svg>
 				<span>Activity</span>
-				{#if activityActiveCount > 0}
-					<span class="nav-count-badge">{activityActiveCount}</span>
+				{#if $activityActiveCount > 0}
+					<span class="nav-count-badge">{$activityActiveCount}</span>
 				{/if}
 			</a>
 			<a href="/apps" data-sveltekit-preload-data="off" class:active={$page.url.pathname === '/apps' || $page.url.pathname.startsWith('/apps/')}>
@@ -319,10 +297,12 @@
 				<svg class="top-nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="11" width="18" height="10" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
 				<span>Vault</span>
 			</a>
+			{#if $genvaultEnabled}
 			<a href="/vault/genvault" class:active={$page.url.pathname === '/vault/genvault'}>
 				<svg class="top-nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3h7v7"/><path d="M10 14L21 3"/><path d="M21 14v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h6"/></svg>
 				<span>GenVault</span>
 			</a>
+			{/if}
 			{#if $authState.user?.role === 'admin'}
 				<a href="/admin/users" class:active={$page.url.pathname.startsWith('/admin/users')}>
 					<span>Users</span>
@@ -383,12 +363,14 @@
 			<a href="/" class:active={$page.url.pathname === '/'} onclick={closeMenu}>Home</a>
 			<a href="/projects/{$quickRunsProject.id}" class:active={$page.url.pathname === '/projects/' + $quickRunsProject.id} onclick={closeMenu}>Quick runs</a>
 			<a href="/projects" data-sveltekit-preload-data="off" class:active={$page.url.pathname === '/projects' || ($page.url.pathname.startsWith('/projects/') && $page.url.pathname !== '/projects/' + $quickRunsProject.id)} onclick={closeMenu}>Projects</a>
-			<a href="/activity" class:active={$page.url.pathname === '/activity'} onclick={closeMenu}>Activity{#if activityActiveCount > 0} ({activityActiveCount}){/if}</a>
+			<a href="/activity" class:active={$page.url.pathname === '/activity'} onclick={closeMenu}>Activity{#if $activityActiveCount > 0} ({$activityActiveCount}){/if}</a>
 			<a href="/apps" data-sveltekit-preload-data="off" class:active={$page.url.pathname === '/apps' || $page.url.pathname.startsWith('/apps/')} onclick={closeMenu}>Apps</a>
 			<a href="/workflows" class:active={$page.url.pathname === '/workflows' || $page.url.pathname.startsWith('/workflows/')} onclick={closeMenu}>Workflows</a>
 			<a href="/import" class:active={$page.url.pathname === '/import'} onclick={closeMenu}>Import</a>
 			<a href="/vault" class:active={$page.url.pathname === '/vault'} onclick={closeMenu}>Vault</a>
+			{#if $genvaultEnabled}
 			<a href="/vault/genvault" class:active={$page.url.pathname === '/vault/genvault'} onclick={closeMenu}>GenVault</a>
+			{/if}
 			{#if $authState.enabled && $authState.authenticated}
 				<button
 					type="button"

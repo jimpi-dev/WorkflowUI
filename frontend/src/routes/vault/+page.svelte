@@ -1,5 +1,6 @@
 <script lang="ts">
-	import { onMount, tick } from 'svelte';
+	import { onMount, onDestroy, tick } from 'svelte';
+	import { get } from 'svelte/store';
 	import { browser } from '$app/environment';
 	import { getApiBase } from '$lib/config';
 	import { authState } from '$lib/stores/auth';
@@ -21,6 +22,8 @@
 	import MediaBrowserDialog from '$lib/components/MediaBrowserDialog.svelte';
 	import ThumbnailOverlay from '$lib/components/ThumbnailOverlay.svelte';
 	import { genVaultExistsByInputFilenames, pushInputToGenVault } from '$lib/api/genvault';
+	import { createGenVaultExistsPoller, type GenVaultExistsPoller } from '$lib/genvault/existsPoller';
+	import { genvaultEnabled } from '$lib/stores/genvaultEnabled';
 	import { toastError, toastSuccess } from '$lib/stores/toast';
 
 	type VaultItem = {
@@ -45,7 +48,7 @@
 	let fileInputEl = $state<HTMLInputElement | null>(null);
 	let pushingVaultInputs = $state<Set<string>>(new Set());
 	let inputInVault = $state<Record<string, boolean>>({});
-	let genVaultStatusTimer: ReturnType<typeof setTimeout> | null = null;
+	let genVaultExistsPoller = $state<GenVaultExistsPoller | null>(null);
 
 	let thumbnailScale = $state<number>(browser ? getThumbSizeCookie() : 100);
 	let thumbnailFitMode = $state<ThumbFitMode>(browser ? getThumbFitModeCookie() : 'cover');
@@ -338,17 +341,24 @@
 	}
 
 	$effect(() => {
-		items;
-		if (genVaultStatusTimer) clearTimeout(genVaultStatusTimer);
-		genVaultStatusTimer = setTimeout(() => {
-			void refreshInputGenVaultStatus();
-		}, 180);
-		return () => {
-			if (genVaultStatusTimer) {
-				clearTimeout(genVaultStatusTimer);
-				genVaultStatusTimer = null;
-			}
-		};
+		if (!$genvaultEnabled) {
+			genVaultExistsPoller?.destroy();
+			genVaultExistsPoller = null;
+			return;
+		}
+		if (!genVaultExistsPoller) {
+			genVaultExistsPoller = createGenVaultExistsPoller(
+				refreshInputGenVaultStatus,
+				() => get(genvaultEnabled)
+			);
+		}
+		const keys = Array.from(new Set(items.map((it) => it.filename).filter(Boolean)));
+		genVaultExistsPoller.notifyKeys(keys);
+	});
+
+	onDestroy(() => {
+		genVaultExistsPoller?.destroy();
+		genVaultExistsPoller = null;
 	});
 
 	onMount(() => {
@@ -374,7 +384,9 @@
 			<h1>Vault</h1>
 			<div class="vault-subnav">
 				<a href="/vault" class="vault-subnav-link active">Input Images</a>
-				<a href="/vault/genvault" class="vault-subnav-link">GenVault</a>
+				{#if $genvaultEnabled}
+					<a href="/vault/genvault" class="vault-subnav-link">GenVault</a>
+				{/if}
 			</div>
 			<p class="vault-lead">
 				Input images for workflow runs: hover a thumbnail for download and delete, or click the image to open the
@@ -541,7 +553,7 @@
 								showSeed={false}
 								showDownload={true}
 								showSendToApp={false}
-								showSendToVault={true}
+								showSendToVault={$genvaultEnabled}
 								isInVault={!!inputInVault[it.filename]}
 								showDelete={it.can_delete}
 								deleteDisabled={deleting.has(it.filename)}
@@ -589,18 +601,24 @@
 	}}
 	onClose={closeLightbox}
 	onDownload={(item) => void downloadLightboxItem(item)}
-	onSendToVault={(item) => {
-		const name = item.filename || item.id;
-		if (name) void sendInputToGenVault(name);
-	}}
-	isInVault={(item) => {
-		const name = item.filename || item.id;
-		return !!(name && inputInVault[name]);
-	}}
-	isSendingToVault={(item) => {
-		const name = item.filename || item.id;
-		return !!(name && pushingVaultInputs.has(name));
-	}}
+	onSendToVault={$genvaultEnabled
+		? (item) => {
+				const name = item.filename || item.id;
+				if (name) void sendInputToGenVault(name);
+			}
+		: undefined}
+	isInVault={$genvaultEnabled
+		? (item) => {
+				const name = item.filename || item.id;
+				return !!(name && inputInVault[name]);
+			}
+		: undefined}
+	isSendingToVault={$genvaultEnabled
+		? (item) => {
+				const name = item.filename || item.id;
+				return !!(name && pushingVaultInputs.has(name));
+			}
+		: undefined}
 	ariaTitle="Vault image viewer"
 />
 

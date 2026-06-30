@@ -8,6 +8,7 @@
     import { buildRunValues } from '$lib/run/buildRunPayload';
     import { pollRunStatus } from '$lib/run/pollRunStatus';
     import { safeUUID } from '$lib/utils/id';
+    import { notifyQueueChanged } from '$lib/queueNotify';
     import type { MediaBrowserSelection } from '$lib/types/mediaBrowser';
 
     export let workflowId: string;
@@ -226,6 +227,7 @@
                     }
                     backendIds.add(backendRunId);
                     onRunQueued(runId, queuePosition, backendRunId);
+                    notifyQueueChanged();
                     pollRunStatus(
                         backendRunId,
                         runId,

@@ -1,4 +1,6 @@
 <script lang="ts">
+	import { tick } from 'svelte';
+
 	let {
 		open = false,
 		title = 'Confirm deletion',
@@ -18,9 +20,14 @@
 	} = $props();
 
 	let dontShowAgain = $state(false);
+	let cancelBtn = $state<HTMLButtonElement | null>(null);
+	let confirmBtn = $state<HTMLButtonElement | null>(null);
+	let dialogEl = $state<HTMLDivElement | null>(null);
 
 	$effect(() => {
-		if (open) dontShowAgain = false;
+		if (!open) return;
+		dontShowAgain = false;
+		void tick().then(() => cancelBtn?.focus());
 	});
 
 	function handleConfirm() {
@@ -35,6 +42,30 @@
 	function handleBackdropClick() {
 		onCancel();
 	}
+
+	function handleDialogKeydown(e: KeyboardEvent) {
+		if (!open) return;
+		if (e.key === 'Escape') {
+			e.preventDefault();
+			e.stopPropagation();
+			handleCancel();
+			return;
+		}
+		if (e.key === 'Enter' && !e.repeat) {
+			const active = document.activeElement;
+			if (active === cancelBtn) {
+				e.preventDefault();
+				e.stopPropagation();
+				handleCancel();
+				return;
+			}
+			if (active === confirmBtn || active === dialogEl) {
+				e.preventDefault();
+				e.stopPropagation();
+				handleConfirm();
+			}
+		}
+	}
 </script>
 
 {#if open}
@@ -44,8 +75,9 @@
 		aria-modal="true"
 		aria-labelledby="confirm-delete-dialog-title"
 		tabindex="-1"
+		bind:this={dialogEl}
 		onclick={handleBackdropClick}
-		onkeydown={(e) => { if (e.key === 'Escape') handleBackdropClick(); }}
+		onkeydown={handleDialogKeydown}
 	>
 		<div class="confirm-delete-card" role="presentation" tabindex="-1" onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.stopPropagation()}>
 			<p id="confirm-delete-dialog-title" class="confirm-delete-title">{title}</p>
@@ -57,9 +89,10 @@
 				</label>
 			{/if}
 			<div class="confirm-delete-actions">
-				<button type="button" class="confirm-delete-btn secondary" onclick={handleCancel}>Cancel</button>
-				<button type="button" class="confirm-delete-btn danger" onclick={handleConfirm}>{confirmLabel}</button>
+				<button type="button" class="confirm-delete-btn secondary" bind:this={cancelBtn} onclick={handleCancel}>Cancel</button>
+				<button type="button" class="confirm-delete-btn danger" bind:this={confirmBtn} onclick={handleConfirm}>{confirmLabel}</button>
 			</div>
+			<p class="confirm-delete-hints" aria-hidden="true"><kbd>Tab</kbd> move focus · <kbd>Enter</kbd> confirm · <kbd>Esc</kbd> cancel</p>
 		</div>
 	</div>
 {/if}
@@ -147,5 +180,19 @@
 	.confirm-delete-btn.danger:hover {
 		background: var(--error-hover, #e55);
 		border-color: var(--error-hover, #e55);
+	}
+	.confirm-delete-hints {
+		margin: 0.45rem 0 0;
+		font-size: 0.72rem;
+		color: var(--muted);
+		text-align: right;
+	}
+	.confirm-delete-hints kbd {
+		font: inherit;
+		font-size: 0.68rem;
+		padding: 0 0.25rem;
+		border-radius: 0.25rem;
+		border: 1px solid var(--border);
+		background: color-mix(in srgb, var(--surface) 85%, var(--text));
 	}
 </style>

@@ -1,57 +1,17 @@
 <script lang="ts">
-	import { onMount, onDestroy } from 'svelte';
 	import { queuePanelOpen } from '$lib/stores/queuePanelOpen';
-	import { getQueue } from '$lib/queueApi';
+	import { queueState, queueItemCount } from '$lib/stores/queueState';
 
-	let queue = $state<{ running: unknown; queued: unknown[]; processing_halted?: boolean } | null>(null);
-	const BADGE_POLL_MS = 5000;
-	let badgePollId: ReturnType<typeof setInterval> | null = null;
-
-	const totalCount = $derived(
-		queue ? (queue.running ? 1 : 0) + (queue.queued?.length ?? 0) : 0
-	);
+	const totalCount = $derived(queueItemCount($queueState.queue));
 	const hasItems = $derived(totalCount > 0);
-
-	async function fetchQueue() {
-		try {
-			queue = await getQueue();
-		} catch {
-			queue = null;
-		}
-	}
-
-	function startBadgePolling() {
-		if (badgePollId) return;
-		fetchQueue();
-		badgePollId = setInterval(fetchQueue, BADGE_POLL_MS);
-	}
-
-	function stopBadgePolling() {
-		if (badgePollId) {
-			clearInterval(badgePollId);
-			badgePollId = null;
-		}
-	}
-
-	$effect(() => {
-		if ($queuePanelOpen) {
-			stopBadgePolling();
-		} else {
-			startBadgePolling();
-		}
-	});
-
-	onDestroy(() => {
-		stopBadgePolling();
-	});
 </script>
 
 {#if !$queuePanelOpen}
 	<button
 		type="button"
 		class="queue-badge"
-		class:active={hasItems && !queue?.processing_halted}
-		class:paused={hasItems && !!queue?.processing_halted}
+		class:active={hasItems && !$queueState.queue?.processing_halted}
+		class:paused={hasItems && !!$queueState.queue?.processing_halted}
 		onclick={() => queuePanelOpen.set(true)}
 		title="Open run queue"
 		aria-label="Open run queue panel"

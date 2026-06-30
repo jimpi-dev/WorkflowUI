@@ -1,4 +1,5 @@
 import { api } from '$lib/api';
+import { notifyQueueChanged } from '$lib/queueNotify';
 
 export type QueueSummary = {
 	seed?: number;
@@ -117,24 +118,31 @@ export async function getRecentRuns(params?: {
 export async function pauseQueue(): Promise<{ ok: boolean; processing_halted: boolean }> {
 	const res = await api.post('queue/pause', {});
 	if (!res.ok) throw new Error(res.statusText || 'Failed to pause queue');
-	return res.json();
+	const data = await res.json();
+	notifyQueueChanged();
+	return data;
 }
 
 export async function startQueue(): Promise<{ ok: boolean; processing_halted: boolean }> {
 	const res = await api.post('queue/start', {});
 	if (!res.ok) throw new Error(res.statusText || 'Failed to start queue');
-	return res.json();
+	const data = await res.json();
+	notifyQueueChanged();
+	return data;
 }
 
 export async function cancelRun(runId: string): Promise<void> {
 	const res = await api.post(`runs/${runId}/cancel`, {});
 	if (!res.ok) throw new Error(res.statusText || 'Failed to cancel run');
+	notifyQueueChanged();
 }
 
 export async function retryRun(runId: string): Promise<{ ok: boolean; queue_position: number }> {
 	const res = await api.post(`runs/${runId}/retry`, {});
 	if (!res.ok) throw new Error(res.statusText || 'Failed to retry run');
-	return res.json();
+	const data = await res.json();
+	notifyQueueChanged();
+	return data;
 }
 
 export async function reorderRun(
@@ -143,7 +151,9 @@ export async function reorderRun(
 ): Promise<{ ok: boolean; queue_position: number }> {
 	const res = await api.post(`runs/${runId}/reorder`, { direction });
 	if (!res.ok) throw new Error(res.statusText || 'Failed to reorder run');
-	return res.json();
+	const data = await res.json();
+	notifyQueueChanged();
+	return data;
 }
 
 export async function moveRun(
@@ -152,5 +162,7 @@ export async function moveRun(
 ): Promise<{ ok: boolean; queue_position: number }> {
 	const res = await api.post(`runs/${runId}/move`, { position });
 	if (!res.ok) throw new Error(res.statusText || 'Failed to move run');
-	return res.json();
+	const data = await res.json();
+	notifyQueueChanged();
+	return data;
 }

@@ -1,4 +1,6 @@
 <script lang="ts">
+    import { onDestroy } from 'svelte';
+    import { get } from 'svelte/store';
     import { getApiBase } from '$lib/config';
     import { getCookie, setCookie } from '$lib/cookie';
     import LightboxViewer, { type LightboxItem } from '$lib/components/LightboxViewer.svelte';
@@ -6,7 +8,18 @@
     import InfiniteScrollLoadMore from '$lib/components/InfiniteScrollLoadMore.svelte';
     import type { MediaBrowserItem, MediaBrowserSelection } from '$lib/types/mediaBrowser';
     import { genVaultExistsByRunOutputs, pushRunOutputToGenVault } from '$lib/api/genvault';
+    import { createGenVaultExistsPoller, type GenVaultExistsPoller } from '$lib/genvault/existsPoller';
+    import { genvaultEnabled } from '$lib/stores/genvaultEnabled';
     import { toastError, toastSuccess } from '$lib/stores/toast';
+    import {
+        favoritesListChanged,
+        normalizeFavoriteMediaType,
+        isMediaItemFavorite as isMediaItemFavoriteLib,
+        migrateFavoritesToStable,
+        parseFavoriteEntry,
+        toggleOutputFavoriteEntries,
+        type RunWithImages,
+    } from '$lib/favorites';
 
     type ProjectOption = { id: string; name: string; headerColor?: string | null; lastUsedAt?: number | null };
     type AppOption = { id: string; title: string };
@@ -79,7 +92,7 @@
     let deletingKeys = $state<Set<string>>(new Set());
     let pushingToVaultKeys = $state<Set<string>>(new Set());
     let outputInVault = $state<Record<string, boolean>>({});
-    let genVaultStatusTimer: ReturnType<typeof setTimeout> | null = null;
+    let genVaultExistsPoller = $state<GenVaultExistsPoller | null>(null);
 
     const hasMore = $derived(items.length < total);
     const displayedItems = $derived.by(() => {
@@ -293,17 +306,32 @@
     }
 
     $effect(() => {
-        displayedItems;
-        if (genVaultStatusTimer) clearTimeout(genVaultStatusTimer);
-        genVaultStatusTimer = setTimeout(() => {
-            void refreshGenVaultStatusForBrowserItems();
-        }, 180);
-        return () => {
-            if (genVaultStatusTimer) {
-                clearTimeout(genVaultStatusTimer);
-                genVaultStatusTimer = null;
-            }
-        };
+        if (!$genvaultEnabled) {
+            genVaultExistsPoller?.destroy();
+            genVaultExistsPoller = null;
+            return;
+        }
+        if (!genVaultExistsPoller) {
+            genVaultExistsPoller = createGenVaultExistsPoller(
+                refreshGenVaultStatusForBrowserItems,
+                () => get(genvaultEnabled)
+            );
+        }
+        const keys: string[] = [];
+        const seen = new Set<string>();
+        for (const item of displayedItems) {
+            if (item.source !== 'generation' || !item.run_id || typeof item.output_index !== 'number') continue;
+            const key = `${item.run_id}:${item.output_index}`;
+            if (seen.has(key)) continue;
+            seen.add(key);
+            keys.push(key);
+        }
+        genVaultExistsPoller.notifyKeys(keys);
+    });
+
+    onDestroy(() => {
+        genVaultExistsPoller?.destroy();
+        genVaultExistsPoller = null;
     });
 
     function imageUrlFor(item: MediaBrowserItem): string {
@@ -355,12 +383,25 @@
         return `${item.run_id}:${item.source}:${item.output_index}:${item.filename}:${idx}`;
     }
 
-    function outputFavoriteKey(runId: string, outputIndex: number): string {
-        return `${runId}:${outputIndex}`;
-    }
-
     function deleteOpKey(item: MediaBrowserItem): string {
         return `${item.run_id}:${item.output_index}`;
+    }
+
+    async function resolveRunForFavorites(runId: string): Promise<RunWithImages | undefined> {
+        const res = await fetch(`${apiBase}/runs/${encodeURIComponent(runId)}`);
+        if (!res.ok) return undefined;
+        const run = await res.json();
+        const runData = run as {
+            id?: string;
+            media?: unknown[];
+            images?: unknown[];
+            local_storage_status?: string;
+        };
+        const imgs =
+            Array.isArray(runData.media) && runData.media.length
+                ? runData.media
+                : (runData.images ?? []);
+        return { id: runId, images: imgs, local_storage_status: runData.local_storage_status };
     }
 
     async function ensureProjectMetadata(projectId: string): Promise<{ metadata: Record<string, unknown>; favorites: string[] }> {
@@ -371,7 +412,27 @@
         const metadata =
             data?.metadata && typeof data.metadata === 'object' ? (data.metadata as Record<string, unknown>) : {};
         const fav = Array.isArray(metadata.favorites) ? metadata.favorites.map((x: unknown) => String(x)) : [];
-        const entry = { metadata, favorites: fav };
+        const migrated = migrateFavoritesToStable(fav, () => undefined);
+        let favoritesOut = migrated;
+        let metaOut: Record<string, unknown> = metadata;
+        if (favoritesListChanged(fav, migrated)) {
+            metaOut = { ...metadata, favorites: migrated };
+            try {
+                const patchRes = await fetch(`${apiBase}/projects/${encodeURIComponent(projectId)}`, {
+                    method: 'PATCH',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ metadata: metaOut })
+                });
+                if (!patchRes.ok) {
+                    favoritesOut = fav;
+                    metaOut = metadata;
+                }
+            } catch {
+                favoritesOut = fav;
+                metaOut = metadata;
+            }
+        }
+        const entry = { metadata: metaOut, favorites: favoritesOut };
         projectMetadataCache = { ...projectMetadataCache, [projectId]: entry };
         return entry;
     }
@@ -408,8 +469,14 @@
                 it.project_id === projectId && it.source === 'generation'
                     ? {
                           ...it,
-                          is_favorite:
-                              favSet.has(outputFavoriteKey(it.run_id, it.output_index)) || favSet.has(it.run_id)
+                          is_favorite: isMediaItemFavoriteLib(
+                              favSet,
+                              it.run_id,
+                              it.output_index,
+                              it.filename,
+                              it.subfolder ?? '',
+                              normalizeFavoriteMediaType(it.type)
+                          )
                       }
                     : it
             );
@@ -422,8 +489,14 @@
         if (item.source !== 'generation') return false;
         const entry = projectMetadataCache[item.project_id];
         if (!entry) return item.is_favorite === true;
-        const s = new Set(entry.favorites);
-        return s.has(outputFavoriteKey(item.run_id, item.output_index)) || s.has(item.run_id);
+        return isMediaItemFavoriteLib(
+            entry.favorites,
+            item.run_id,
+            item.output_index,
+            item.filename,
+            item.subfolder ?? '',
+            normalizeFavoriteMediaType(item.type)
+        );
     }
 
     async function toggleItemFavorite(item: MediaBrowserItem) {
@@ -432,35 +505,27 @@
         const runId = item.run_id;
         const outputIndex = item.output_index;
         const entry = await ensureProjectMetadata(projectId);
-        const next = new Set(entry.favorites);
-        const key = outputFavoriteKey(runId, outputIndex);
-        const isFav = next.has(key) || next.has(runId);
-        if (isFav) {
-            if (next.has(key)) next.delete(key);
-            else if (next.has(runId)) {
-                next.delete(runId);
-                const runRes = await fetch(`${apiBase}/runs/${encodeURIComponent(runId)}`);
-                if (runRes.ok) {
-                    const run = await runRes.json();
-                    const runData = run as {
-                        media?: { remote_deleted?: boolean }[];
-                        images?: { remote_deleted?: boolean }[];
-                        local_storage_status?: string;
-                    };
-                    const imgs =
-                        Array.isArray(runData.media) && runData.media.length
-                            ? runData.media
-                            : (runData.images ?? []);
-                    const localSt = runData.local_storage_status;
-                    for (const i of displayableOutputIndicesFromImages(imgs, localSt)) {
-                        if (i !== outputIndex) next.add(outputFavoriteKey(runId, i));
-                    }
-                }
-            }
-        } else {
-            next.add(key);
-        }
-        await saveProjectFavorites(projectId, [...next]);
+        const run = await resolveRunForFavorites(runId);
+        if (!run) return;
+        const displayable = displayableOutputIndicesFromImages(
+            (run.images ?? []) as { remote_deleted?: boolean }[],
+            run.local_storage_status ?? undefined
+        );
+        const toggled = toggleOutputFavoriteEntries(
+            entry.favorites.filter((ent) => parseFavoriteEntry(ent).runId === runId),
+            runId,
+            outputIndex,
+            run,
+            displayable
+        );
+        const nextFav = migrateFavoritesToStable(
+            [
+                ...entry.favorites.filter((ent) => parseFavoriteEntry(ent).runId !== runId),
+                ...toggled
+            ],
+            () => run
+        );
+        await saveProjectFavorites(projectId, nextFav);
     }
 
     async function downloadMediaItem(item: MediaBrowserItem) {
@@ -1160,7 +1225,7 @@
                                             showSeed={false}
                                             showDownload={true}
                                             showSendToApp={false}
-                                            showSendToVault={true}
+                                            showSendToVault={$genvaultEnabled}
                                             isInVault={!!(item.run_id && typeof item.output_index === 'number' && outputInVault[`${item.run_id}:${item.output_index}`])}
                                             showDelete={true}
                                             deleteDisabled={deletingKeys.has(deleteOpKey(item))}
@@ -1318,7 +1383,7 @@
         onDeleteLocal={lightboxAllowsRunMutations ? onLightboxDeleteLocal : undefined}
         onDeleteRemote={lightboxAllowsRunMutations ? onLightboxDeleteRemote : undefined}
         onDeleteBoth={lightboxAllowsRunMutations ? onLightboxDeleteBoth : undefined}
-        onSendToVault={lightboxAllowsRunMutations ? onLightboxSendToVault : undefined}
+        onSendToVault={$genvaultEnabled && lightboxAllowsRunMutations ? onLightboxSendToVault : undefined}
         isInVault={(item) => !!(item.runId && item.outputIndex != null && outputInVault[`${item.runId}:${item.outputIndex}`])}
         isSendingToVault={(item) => !!(item.runId && item.outputIndex != null && pushingToVaultKeys.has(`${item.runId}:${item.outputIndex}`))}
         ariaTitle="Media browser viewer"

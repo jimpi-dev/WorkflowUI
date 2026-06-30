@@ -5,6 +5,7 @@
 	import { invalidateAll } from '$app/navigation';
 	import SendToAppDialog from '$lib/components/SendToAppDialog.svelte';
 	import { pushRunOutputToGenVault } from '$lib/api/genvault';
+	import { genvaultEnabled } from '$lib/stores/genvaultEnabled';
 	import { toastError, toastSuccess } from '$lib/stores/toast';
 
 	let { data } = $props();
@@ -267,6 +268,7 @@
 								{#if !imageLoadFailed.has(imageKey(i))}
 									<div class="output-actions-row">
 										<button type="button" class="send-to-app-link send-to-app-btn" title="Send to App" onclick={() => sendToAppOutputIndex = i}>Send to App</button>
+										{#if $genvaultEnabled}
 										<button
 											type="button"
 											class="send-to-app-link send-to-app-btn"
@@ -276,6 +278,7 @@
 										>
 											{pushingOutputIndex === i ? 'Sending…' : 'Send to GenVault'}
 										</button>
+										{/if}
 									</div>
 								{/if}
 							</div>

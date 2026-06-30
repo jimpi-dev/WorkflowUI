@@ -5,6 +5,7 @@ export const appConfig: {
 	appName: string;
 	githubRepoUrl: string;
 	presetsEnabled: boolean;
+	genvaultEnabled: boolean;
 } =
 	typeof __APP_CONFIG__ !== 'undefined'
 		? __APP_CONFIG__
@@ -14,7 +15,8 @@ export const appConfig: {
 				version: '1.0',
 				appName: 'WorkflowUI by Jimpi',
 				githubRepoUrl: 'https://github.com/jimpi-dev/WorkflowUI/',
-				presetsEnabled: false
+				presetsEnabled: false,
+				genvaultEnabled: true
 			};
 
 export function getApiBase(): string {

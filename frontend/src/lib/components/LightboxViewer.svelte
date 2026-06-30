@@ -1,6 +1,12 @@
 <script lang="ts">
 	import { browser } from '$app/environment';
 	import { onMount, onDestroy, tick } from 'svelte';
+	import LightboxDeleteChoiceDialog, {
+		type LightboxDeleteChoice
+	} from '$lib/components/LightboxDeleteChoiceDialog.svelte';
+	import ThumbnailDeletingOverlay from '$lib/components/ThumbnailDeletingOverlay.svelte';
+
+export type CarouselDeleteKind = 'remote' | 'local' | 'both';
 
 export type LightboxItem = {
 		id: string;
@@ -52,6 +58,9 @@ let {
 		onDeleteLocal = undefined as ((item: LightboxItem) => void) | undefined,
 		onDeleteRemote = undefined as ((item: LightboxItem) => void) | undefined,
 		onDeleteBoth = undefined as ((item: LightboxItem) => void) | undefined,
+		carouselItemDeletingKind = undefined as ((item: LightboxItem) => CarouselDeleteKind | null) | undefined,
+		carouselItemDeleteStaggerIndex = undefined as ((item: LightboxItem) => number) | undefined,
+		keyboardLocked = false,
 		showCloseLabel = true,
 		ariaTitle = 'Media viewer'
 	}: {
@@ -73,6 +82,9 @@ let {
 		onDeleteLocal?: (item: LightboxItem) => void;
 		onDeleteRemote?: (item: LightboxItem) => void;
 		onDeleteBoth?: (item: LightboxItem) => void;
+		carouselItemDeletingKind?: (item: LightboxItem) => CarouselDeleteKind | null;
+		carouselItemDeleteStaggerIndex?: (item: LightboxItem) => number;
+		keyboardLocked?: boolean;
 		showCloseLabel?: boolean;
 		ariaTitle?: string;
 	} = $props();
@@ -89,6 +101,7 @@ let {
 	let videoEl = $state<HTMLVideoElement | null>(null);
 	let audioEl = $state<HTMLAudioElement | null>(null);
 	let carouselTrackEl = $state<HTMLDivElement | null>(null);
+	let carouselTrackFits = $state(false);
 
 	let loadFailed = $state(false);
 	let loadFailedCarousel = $state<Set<string>>(new Set());
@@ -172,6 +185,9 @@ let {
 	}
 
 	let downloading = $state(false);
+	let deleteChoiceOpen = $state(false);
+	let deleteChoiceItem = $state<LightboxItem | null>(null);
+
 	async function handleDownload(item: LightboxItem) {
 		if (downloading || !onDownload) return;
 		downloading = true;
@@ -186,6 +202,63 @@ let {
 	let isVideo = $derived(currentItem?.mediaType === 'video');
 	let isAudio = $derived(currentItem?.mediaType === 'audio');
 	let isImage = $derived(currentItem?.mediaType === 'image' || (currentItem?.mediaType == null && currentItem));
+
+	function itemHasLocal(item: LightboxItem): boolean {
+		return item.hasLocal ?? true;
+	}
+
+	function itemHasRemote(item: LightboxItem): boolean {
+		return item.hasRemote ?? !item.remote_deleted;
+	}
+
+	function canDeleteItem(item: LightboxItem): boolean {
+		const hasLocal = itemHasLocal(item);
+		const hasRemote = itemHasRemote(item);
+		if (hasLocal && onDeleteLocal) return true;
+		if (hasRemote && onDeleteRemote) return true;
+		if (hasLocal && hasRemote && onDeleteBoth) return true;
+		return false;
+	}
+
+	let showDeleteShortcut = $derived(
+		!!currentItem &&
+			canDeleteItem(currentItem) &&
+			!!(onDeleteLocal || onDeleteRemote || onDeleteBoth)
+	);
+
+	let currentIsFavorite = $derived(
+		!!(currentItem && onToggleFavorite && isFavorite && isFavorite(currentItem))
+	);
+
+	function invokeDeleteChoice(choice: LightboxDeleteChoice, item: LightboxItem) {
+		if (choice === 'both') onDeleteBoth?.(item);
+		else if (choice === 'local') onDeleteLocal?.(item);
+		else onDeleteRemote?.(item);
+	}
+
+	function requestDelete(item: LightboxItem) {
+		if (!canDeleteItem(item)) return;
+		const hasLocal = itemHasLocal(item);
+		const hasRemote = itemHasRemote(item);
+		if (hasLocal && hasRemote) {
+			deleteChoiceItem = item;
+			deleteChoiceOpen = true;
+			return;
+		}
+		if (hasLocal) onDeleteLocal?.(item);
+		else if (hasRemote) onDeleteRemote?.(item);
+	}
+
+	function closeDeleteChoice() {
+		deleteChoiceOpen = false;
+		deleteChoiceItem = null;
+	}
+
+	function handleDeleteChoice(choice: LightboxDeleteChoice) {
+		const item = deleteChoiceItem;
+		closeDeleteChoice();
+		if (item) invokeDeleteChoice(choice, item);
+	}
 
 	function resetScroll() {
 		if (scrollEl) {
@@ -374,6 +447,8 @@ let {
 
 	function handleKey(e: KeyboardEvent) {
 		if (!open || !items.length) return;
+		if (keyboardLocked || deleteChoiceOpen) return;
+		if (browser && document.querySelector('.confirm-delete-overlay, .lightbox-delete-choice-overlay')) return;
 		dismissZoomHint();
 		if (e.key === 'Escape') {
 			const doc = document as Document & { webkitFullscreenElement?: Element | null };
@@ -408,6 +483,15 @@ let {
 			e.preventDefault();
 			slideshowActive = false;
 			stopSlideshowTimer();
+		}
+		if (
+			(e.key === 'Delete' || e.key === 'Backspace') &&
+			currentItem &&
+			canDeleteItem(currentItem) &&
+			fullscreenHotkeyTargetOk(e.target)
+		) {
+			e.preventDefault();
+			requestDelete(currentItem);
 		}
 	}
 
@@ -460,16 +544,52 @@ let {
 		loadedCarouselThumbs = new Set([...loadedCarouselThumbs, id]);
 	}
 
+	function syncCarouselTrackLayout() {
+		if (!carouselTrackEl) return;
+		carouselTrackFits = carouselTrackEl.scrollWidth <= carouselTrackEl.clientWidth + 1;
+	}
+
+	function scrollCarouselToIndex(idx: number, behavior: ScrollBehavior = 'smooth') {
+		if (!carouselTrackEl) return;
+		const active = carouselTrackEl.querySelector(
+			`[data-carousel-index="${idx}"]`
+		) as HTMLElement | null;
+		if (!active) return;
+		const track = carouselTrackEl;
+		const maxScroll = track.scrollWidth - track.clientWidth;
+		if (maxScroll <= 0) return;
+		const thumbCenter = active.offsetLeft + active.offsetWidth / 2;
+		const targetScroll = thumbCenter - track.clientWidth / 2;
+		track.scrollTo({
+			left: Math.max(0, Math.min(targetScroll, maxScroll)),
+			behavior
+		});
+	}
+
 	$effect(() => {
 		if (!open || !items.length || !carouselTrackEl) return;
 		const idx = index;
+		void items.length;
 		tick().then(() => {
-			const active = carouselTrackEl?.querySelector(`[data-carousel-index="${idx}"]`);
-			active?.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
+			syncCarouselTrackLayout();
+			scrollCarouselToIndex(idx);
 			const cur = items[idx];
 			if (cur?.mediaType === 'video' && videoEl) baseWidth = videoEl.videoWidth || 640;
 			else if (imgEl) baseWidth = imgEl.naturalWidth;
 		});
+	});
+
+	$effect(() => {
+		if (!open || !carouselTrackEl || !browser) return;
+		const track = carouselTrackEl;
+		const onResize = () => syncCarouselTrackLayout();
+		window.addEventListener('resize', onResize);
+		const ro = new ResizeObserver(() => syncCarouselTrackLayout());
+		ro.observe(track);
+		return () => {
+			window.removeEventListener('resize', onResize);
+			ro.disconnect();
+		};
 	});
 
 	$effect(() => {
@@ -511,6 +631,12 @@ let {
 		document.removeEventListener('webkitfullscreenchange', syncFullscreenState as EventListener);
 		stopSlideshowTimer();
 		void exitFullscreenIfNeeded();
+	});
+
+	$effect(() => {
+		if (!open) {
+			closeDeleteChoice();
+		}
 	});
 
 	$effect(() => {
@@ -597,7 +723,7 @@ let {
 			<button type="button" class="close" onclick={handleClose} title="Close (Esc)" aria-label="Close viewer">
 				✕ {#if showCloseLabel}Close{/if}
 			</button>
-			{#if currentItem && ((isImage && onToggleSelection && isSelected) || (onToggleFavorite && isFavorite) || onDownload)}
+			{#if currentItem && ((isImage && onToggleSelection && isSelected) || (onToggleFavorite && isFavorite) || onDownload || showDeleteShortcut)}
 				<div class="lightbox-controls-shortcuts" role="note" aria-label="Keyboard shortcuts">
 					{#if isImage && onToggleSelection && isSelected}
 						<span class="lightbox-shortcut-pill"><kbd>Space</kbd> select</span>
@@ -607,6 +733,9 @@ let {
 					{/if}
 					{#if onDownload}
 						<span class="lightbox-shortcut-pill"><kbd>D</kbd> download</span>
+					{/if}
+					{#if showDeleteShortcut}
+						<span class="lightbox-shortcut-pill"><kbd>Del</kbd> delete</span>
 					{/if}
 				</div>
 			{/if}
@@ -681,7 +810,16 @@ let {
 							void handleClose();
 						}}
 					></button>
-					<div class="lightbox-media-slot">
+					<div class="lightbox-media-slot" class:is-favorite={currentIsFavorite}>
+						{#if currentIsFavorite}
+							<div class="lightbox-favorite-frame" aria-hidden="true"></div>
+							<div class="lightbox-favorite-badge" aria-hidden="true">
+								<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+									<path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" />
+								</svg>
+								<span>Favorite</span>
+							</div>
+						{/if}
 						{#if showDeleted}
 							<div class="lightbox-deleted-placeholder">
 								<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M8 6l1 14h6l1-14"/></svg>
@@ -1181,20 +1319,68 @@ let {
 		{/if}
 
 		<div class="lightbox-carousel" role="tablist" aria-label="Media strip" tabindex="0">
-			<div class="lightbox-carousel-track" bind:this={carouselTrackEl}>
+			{#if items.length > 1}
+				<div class="lightbox-carousel-position" aria-live="polite">
+					<span class="lightbox-carousel-position-label">{index + 1} / {items.length}</span>
+				</div>
+			{/if}
+			<div
+				class="lightbox-carousel-track"
+				class:lightbox-carousel-track--fits={carouselTrackFits}
+				bind:this={carouselTrackEl}
+			>
 				{#each items as item, i (item.id)}
 					{@const carouselShowDeleted = item.remote_deleted && loadFailedCarousel.has(item.id)}
+					{@const carouselIsFavorite = !!(onToggleFavorite && isFavorite && isFavorite(item))}
+					{@const carouselDeleteKind = carouselItemDeletingKind?.(item) ?? null}
+					{@const carouselIsDeleting = carouselDeleteKind != null}
 					<button
 						type="button"
 						class="lightbox-carousel-thumb"
 						class:active={i === index}
+						class:favorite={carouselIsFavorite}
 						class:deleted={carouselShowDeleted}
+						class:lightbox-carousel-thumb-deleting={carouselIsDeleting}
+						class:lightbox-carousel-thumb-deleting-remote={carouselDeleteKind === 'remote'}
+						class:lightbox-carousel-thumb-deleting-local={carouselDeleteKind === 'local'}
 						data-carousel-index={i}
-						onclick={() => goTo(i)}
-						aria-label={carouselShowDeleted ? `Deleted ${i + 1}` : item.mediaType === 'video' ? `Video ${i + 1}` : item.mediaType === 'audio' ? `Audio ${i + 1}` : `Image ${i + 1}`}
+						onclick={() => {
+							if (!carouselIsDeleting) goTo(i);
+						}}
+						aria-label={carouselShowDeleted
+							? `Deleted ${i + 1}`
+							: carouselIsFavorite
+								? item.mediaType === 'video'
+									? `Favorite video ${i + 1}`
+									: item.mediaType === 'audio'
+										? `Favorite audio ${i + 1}`
+										: `Favorite image ${i + 1}`
+								: item.mediaType === 'video'
+									? `Video ${i + 1}`
+									: item.mediaType === 'audio'
+										? `Audio ${i + 1}`
+										: `Image ${i + 1}`}
 						aria-selected={i === index}
 						role="tab"
 					>
+						{#if carouselIsDeleting && carouselDeleteKind}
+							<ThumbnailDeletingOverlay
+								variant={carouselDeleteKind === 'remote'
+									? 'remote'
+									: carouselDeleteKind === 'local'
+										? 'local'
+										: 'both'}
+								staggerIndex={carouselItemDeleteStaggerIndex?.(item) ?? 0}
+								compact
+							/>
+						{/if}
+						{#if carouselIsFavorite}
+							<span class="lightbox-carousel-favorite-mark" aria-hidden="true">
+								<svg viewBox="0 0 24 24" fill="currentColor">
+									<path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" />
+								</svg>
+							</span>
+						{/if}
 						{#if carouselShowDeleted}
 							<span class="lightbox-carousel-deleted" aria-hidden="true">Deleted</span>
 						{:else if item.mediaType === 'video'}
@@ -1227,6 +1413,13 @@ let {
 			</div>
 		</div>
 	</div>
+
+	<LightboxDeleteChoiceDialog
+		open={deleteChoiceOpen}
+		filename={deleteChoiceItem?.filename ?? null}
+		onChoose={handleDeleteChoice}
+		onCancel={closeDeleteChoice}
+	/>
 {/if}
 
 <style>

@@ -143,3 +143,23 @@ def get_auth_config() -> AuthConfig:
     if _AUTH_CONFIG is None:
         _AUTH_CONFIG = load_auth_config()
     return _AUTH_CONFIG
+
+
+@dataclass(frozen=True)
+class GenVaultConfig:
+    enabled: bool
+
+
+_GENVAULT_CONFIG: GenVaultConfig | None = None
+
+
+def load_genvault_config() -> GenVaultConfig:
+    enabled = _parse_bool(os.environ.get("GENVAULT_ENABLED"), True)
+    return GenVaultConfig(enabled=enabled)
+
+
+def get_genvault_config() -> GenVaultConfig:
+    global _GENVAULT_CONFIG
+    if _GENVAULT_CONFIG is None:
+        _GENVAULT_CONFIG = load_genvault_config()
+    return _GENVAULT_CONFIG
