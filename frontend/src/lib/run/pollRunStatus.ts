@@ -34,24 +34,131 @@ export function pollRunStatus(
     const { onRunning, onImages, onError, onComplete } = callbacks;
     const { embedWorkflowuiMetadataOnDownload = false, generateId } = options;
 
+    function scheduleNextPoll(ms: number): void {
+        // Hidden tabs can delay/throttle timers heavily; use a slightly larger delay there.
+        const hiddenBoost =
+            typeof document !== 'undefined' && document.hidden ? 1500 : 0;
+        setTimeout(poll, ms + hiddenBoost);
+    }
+
+    function mapImages(
+        data: any,
+        backendId: string,
+        media: Array<{
+            filename: string;
+            subfolder?: string;
+            type?: string;
+            kind?: string;
+        }>
+    ): GalleryImage[] {
+        const executionTimeSec =
+            data.execution_time != null
+                ? Math.round(Number(data.execution_time))
+                : undefined;
+        return media
+            .filter((img) => img && typeof img.filename === 'string')
+            .map(
+                (
+                    img: {
+                        filename: string;
+                        subfolder?: string;
+                        type?: string;
+                        kind?: string;
+                    },
+                    index: number
+                ) => {
+                    const subfolder = img.subfolder ?? '';
+                    const type = img.type ?? img.kind ?? 'output';
+                    const base = getApiBase().replace(/\/$/, '');
+                    let imageUrl = `${base}/image?filename=${encodeURIComponent(img.filename)}&subfolder=${encodeURIComponent(subfolder)}&type=${encodeURIComponent(type)}&run_id=${encodeURIComponent(backendId)}`;
+                    if (embedWorkflowuiMetadataOnDownload)
+                        imageUrl += '&embed_workflowui_metadata=1';
+                    const isVideo = type === 'video';
+                    const isAudio = type === 'audio';
+                    const mediaType = isVideo
+                        ? 'video'
+                        : isAudio
+                          ? 'audio'
+                          : 'image';
+                    return {
+                        id: generateId(),
+                        url: imageUrl,
+                        previewUrl:
+                            isVideo || isAudio
+                                ? undefined
+                                : `${imageUrl}&preview=webp`,
+                        filename: img.filename,
+                        promptId: data.prompt_id ?? backendId,
+                        backendRunId: backendId,
+                        seed: data.seed,
+                        outputIndex: index,
+                        executionTimeSec,
+                        mediaType: mediaType as
+                            | 'image'
+                            | 'video'
+                            | 'audio'
+                    };
+                }
+            );
+    }
+
     async function poll(): Promise<void> {
         let data: any;
         try {
             const res = await api.get(`run/${backendRunId}/status`);
             if (!res.ok) throw new Error(res.statusText || 'Status request failed');
             data = await res.json();
+            runStatusFailures.delete(backendRunId);
         } catch (err) {
             const prev = runStatusFailures.get(backendRunId) ?? 0;
             const next = prev + 1;
             runStatusFailures.set(backendRunId, next);
             if (next >= 3) {
-                const msg =
-                    err instanceof Error ? err.message : 'Status request failed';
-                onError(runId, `Failed to fetch run status (${msg}).`);
-                onComplete();
-                return;
+                // Fallback to run detail endpoint before giving up. This helps after
+                // tab inactivity where status polling can temporarily fail.
+                try {
+                    const detailRes = await api.get(`runs/${backendRunId}`);
+                    if (detailRes.ok) {
+                        const detail = await detailRes.json();
+                        const status = detail?.status;
+                        if (status === 'running' || status === 'queued') {
+                            if (status === 'running') onRunning(runId);
+                            scheduleNextPoll(2500 + next * 500);
+                            return;
+                        }
+                        if (status === 'done') {
+                            const rawImages = Array.isArray(detail.images)
+                                ? detail.images
+                                : Array.isArray(detail.media)
+                                  ? detail.media
+                                  : [];
+                            const images = mapImages(detail, backendRunId, rawImages);
+                            if (images.length) {
+                                onImages(runId, images, backendRunId, {
+                                    local_storage_status: detail.local_storage_status,
+                                    remote_status: detail.remote_status,
+                                    local_path: detail.local_path
+                                });
+                            }
+                            onComplete();
+                            return;
+                        }
+                        if (status === 'error') {
+                            const detailErr =
+                                detail?.error != null
+                                    ? String(detail.error)
+                                    : 'Unknown error';
+                            onError(runId, detailErr);
+                            onComplete();
+                            return;
+                        }
+                    }
+                } catch {
+                    // Ignore and continue polling below.
+                }
             }
-            setTimeout(poll, 1500 + next * 1000);
+            // Do not stop polling after intermittent failures; keep retrying.
+            scheduleNextPoll(1500 + Math.min(next, 10) * 1000);
             return;
         }
 
@@ -60,10 +167,6 @@ export function pollRunStatus(
         }
 
         if (data.status === 'done') {
-            const executionTimeSec =
-                data.execution_time != null
-                    ? Math.round(Number(data.execution_time))
-                    : undefined;
             let rawImages: {
                 filename: string;
                 subfolder?: string;
@@ -89,51 +192,7 @@ export function pollRunStatus(
                 } catch {
                 }
             }
-            const images = rawImages
-                .filter((img) => img && typeof img.filename === 'string')
-                .map(
-                    (
-                        img: {
-                            filename: string;
-                            subfolder?: string;
-                            type?: string;
-                            kind?: string;
-                        },
-                        index: number
-                    ) => {
-                        const subfolder = img.subfolder ?? '';
-                        const type = img.type ?? img.kind ?? 'output';
-                        const base = getApiBase().replace(/\/$/, '');
-                        let imageUrl = `${base}/image?filename=${encodeURIComponent(img.filename)}&subfolder=${encodeURIComponent(subfolder)}&type=${encodeURIComponent(type)}&run_id=${encodeURIComponent(backendRunId)}`;
-                        if (embedWorkflowuiMetadataOnDownload)
-                            imageUrl += '&embed_workflowui_metadata=1';
-                        const isVideo = type === 'video';
-                        const isAudio = type === 'audio';
-                        const mediaType = isVideo
-                            ? 'video'
-                            : isAudio
-                              ? 'audio'
-                              : 'image';
-                        return {
-                            id: generateId(),
-                            url: imageUrl,
-                            previewUrl:
-                                isVideo || isAudio
-                                    ? undefined
-                                    : `${imageUrl}&preview=webp`,
-                            filename: img.filename,
-                            promptId: data.prompt_id ?? backendRunId,
-                            backendRunId,
-                            seed: data.seed,
-                            outputIndex: index,
-                            executionTimeSec,
-                            mediaType: mediaType as
-                                | 'image'
-                                | 'video'
-                                | 'audio'
-                        };
-                    }
-                );
+            const images = mapImages(data, backendRunId, rawImages);
             if (images.length) {
                 onImages(runId, images, backendRunId, {
                     local_storage_status: data.local_storage_status,
@@ -157,7 +216,7 @@ export function pollRunStatus(
             return;
         }
 
-        setTimeout(poll, 1500);
+        scheduleNextPoll(1500);
     }
 
     poll();

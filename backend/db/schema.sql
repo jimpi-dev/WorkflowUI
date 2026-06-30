@@ -141,4 +141,12 @@ CREATE TABLE IF NOT EXISTS saved_queue (
     run_ids TEXT NOT NULL,
     updated_at INTEGER NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS vault_input (
+    filename TEXT PRIMARY KEY,
+    owner_user_id TEXT REFERENCES user_account(id),
+    uploaded_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_vault_input_owner ON vault_input(owner_user_id);
 /* idx_run_project_id is created in migrate.py when run table is recreated */

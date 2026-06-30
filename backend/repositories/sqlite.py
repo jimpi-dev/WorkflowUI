@@ -1272,6 +1272,84 @@ class SqliteRunRepository:
     def _escape_like(s: str) -> str:
         return s.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
+    @staticmethod
+    def _json_each_values_from_snapshot_col(column_expr: str) -> str:
+        """SQL fragment for json_each(): extract `$.values` from a single snapshot column (g or r)."""
+        return (
+            f"CASE WHEN json_valid(COALESCE({column_expr}, '')) "
+            f"THEN COALESCE(json_extract(COALESCE({column_expr}, ''), '$.values'), '{{}}') "
+            f"ELSE '{{}}' END"
+        )
+
+    def count_generations_by_input_filenames_batch(
+        self,
+        filenames: list[str],
+        *,
+        owner_user_id: str | None,
+        auth_enabled: bool,
+    ) -> dict[str, int]:
+        """Count completed generations whose input snapshot `values` include each filename (exact match)."""
+        names = [f.strip() for f in filenames if f and "/" not in f and "\\" not in f and '"' not in f]
+        if not names:
+            return {}
+        unique_names = list(dict.fromkeys(names))
+        conn = self._conn()
+        try:
+            where_parts: list[str] = ["g.deleted_at IS NULL", "g.status = 'done'"]
+            base_params: list[Any] = []
+            if auth_enabled:
+                if owner_user_id:
+                    where_parts.append("r.owner_user_id = ?")
+                    base_params.append(owner_user_id)
+                else:
+                    return {}
+            else:
+                where_parts.append("r.owner_user_id IS NULL")
+            where_sql = " AND ".join(where_parts)
+            vals_g = self._json_each_values_from_snapshot_col("g.input_snapshot_json")
+            vals_r = self._json_each_values_from_snapshot_col("r.input_snapshot_json")
+            # Chunk IN lists (variable limit); avoid CROSS JOIN(names × generations) which hangs large vaults.
+            _in_chunk = 250
+            out: dict[str, int] = {n: 0 for n in unique_names}
+            for start in range(0, len(unique_names), _in_chunk):
+                chunk = unique_names[start : start + _in_chunk]
+                if not chunk:
+                    continue
+                ph = ",".join(["?"] * len(chunk))
+                sql = f"""
+                    SELECT u.iname, COUNT(DISTINCT u.gid) AS cnt
+                    FROM (
+                        SELECT TRIM(CAST(je.value AS TEXT)) AS iname, g.id AS gid
+                        FROM generation g
+                        JOIN run r ON r.id = g.run_id
+                        JOIN json_each({vals_g}) AS je
+                        WHERE {where_sql}
+                          AND TRIM(CAST(je.value AS TEXT)) IN ({ph})
+                        UNION
+                        SELECT TRIM(CAST(je.value AS TEXT)) AS iname, g.id AS gid
+                        FROM generation g
+                        JOIN run r ON r.id = g.run_id
+                        JOIN json_each({vals_r}) AS je
+                        WHERE {where_sql}
+                          AND TRIM(CAST(je.value AS TEXT)) IN ({ph})
+                    ) AS u
+                    GROUP BY u.iname
+                """
+                bind = (*base_params, *chunk, *base_params, *chunk)
+                rows = conn.execute(sql, bind).fetchall()
+                for row in rows:
+                    if row[0] is None or row[1] is None:
+                        continue
+                    key = row[0]
+                    if isinstance(key, bytes):
+                        key = key.decode("utf-8", errors="replace")
+                    else:
+                        key = str(key).strip()
+                    out[key] = int(row[1])
+            return out
+        finally:
+            conn.close()
+
     def list_media_browser_images(
         self,
         *,
@@ -1284,6 +1362,7 @@ class SqliteRunRepository:
         until_ts: int | None = None,
         q: str | None = None,
         favorites_only: bool = False,
+        used_input_filename: str | None = None,
         limit: int = 60,
         offset: int = 0,
     ) -> tuple[list[dict[str, Any]], int]:
@@ -1339,6 +1418,8 @@ class SqliteRunRepository:
                         COALESCE(CAST(json_extract(j.value, '$.remote_deleted') AS INTEGER), 0) AS remote_deleted,
                         COALESCE(r.metadata_snapshot_json, '') AS metadata_snapshot_json,
                         COALESCE(g.input_snapshot_json, r.input_snapshot_json, '') AS input_snapshot_json,
+                        g.input_snapshot_json AS snap_json_g,
+                        r.input_snapshot_json AS snap_json_r,
                         CASE WHEN EXISTS (
                             SELECT 1
                             FROM json_each(
@@ -1382,6 +1463,8 @@ class SqliteRunRepository:
                         0 AS remote_deleted,
                         COALESCE(r.metadata_snapshot_json, '') AS metadata_snapshot_json,
                         COALESCE(g.input_snapshot_json, r.input_snapshot_json, '') AS input_snapshot_json,
+                        g.input_snapshot_json AS snap_json_g,
+                        r.input_snapshot_json AS snap_json_r,
                         CASE WHEN EXISTS (
                             SELECT 1
                             FROM json_each(
@@ -1441,6 +1524,8 @@ class SqliteRunRepository:
                         remote_deleted,
                         metadata_snapshot_json,
                         input_snapshot_json,
+                        snap_json_g,
+                        snap_json_r,
                         is_favorite
                     FROM (
                         SELECT
@@ -1468,6 +1553,8 @@ class SqliteRunRepository:
                       AND (remote_deleted = 0 OR local_storage_status IN ('saved', 'partial'))
                 )
             """
+            snap_g_sql = self._json_each_values_from_snapshot_col("snap_json_g")
+            snap_r_sql = self._json_each_values_from_snapshot_col("snap_json_r")
 
             filter_parts: list[str] = []
             filter_params: list[Any] = []
@@ -1490,6 +1577,18 @@ class SqliteRunRepository:
                     ")"
                 )
                 filter_params.extend([pattern, pattern, pattern, pattern, pattern])
+            used_fn = (used_input_filename or "").strip()
+            if used_fn and "/" not in used_fn and "\\" not in used_fn:
+                filter_parts.append(
+                    "("
+                    "LOWER(COALESCE(media_type, '')) != 'input' "
+                    "AND ("
+                    f"EXISTS (SELECT 1 FROM json_each({snap_g_sql}) je WHERE TRIM(CAST(je.value AS TEXT)) = ?) "
+                    f"OR EXISTS (SELECT 1 FROM json_each({snap_r_sql}) je WHERE TRIM(CAST(je.value AS TEXT)) = ?)"
+                    ")"
+                    ")"
+                )
+                filter_params.extend([used_fn, used_fn])
             extra_filter = ""
             if filter_parts:
                 extra_filter = " AND " + " AND ".join(filter_parts)
@@ -1553,6 +1652,7 @@ class SqliteRunRepository:
         until_ts: int | None = None,
         q: str | None = None,
         favorites_only: bool = False,
+        used_input_filename: str | None = None,
     ) -> list[dict[str, Any]]:
         conn = self._conn()
         try:
@@ -1593,6 +1693,8 @@ class SqliteRunRepository:
                         g.local_storage_status AS local_storage_status,
                         COALESCE(r.metadata_snapshot_json, '') AS metadata_snapshot_json,
                         COALESCE(g.input_snapshot_json, r.input_snapshot_json, '') AS input_snapshot_json,
+                        g.input_snapshot_json AS snap_json_g,
+                        r.input_snapshot_json AS snap_json_r,
                         COALESCE(wa.title, '') AS app_title,
                         CASE WHEN EXISTS (
                             SELECT 1
@@ -1632,6 +1734,8 @@ class SqliteRunRepository:
                         g.local_storage_status AS local_storage_status,
                         COALESCE(r.metadata_snapshot_json, '') AS metadata_snapshot_json,
                         COALESCE(g.input_snapshot_json, r.input_snapshot_json, '') AS input_snapshot_json,
+                        g.input_snapshot_json AS snap_json_g,
+                        r.input_snapshot_json AS snap_json_r,
                         COALESCE(wa.title, '') AS app_title,
                         CASE WHEN EXISTS (
                             SELECT 1
@@ -1689,6 +1793,8 @@ class SqliteRunRepository:
                       AND (remote_deleted = 0 OR local_storage_status IN ('saved', 'partial'))
                 )
             """
+            snap_g_proj = self._json_each_values_from_snapshot_col("snap_json_g")
+            snap_r_proj = self._json_each_values_from_snapshot_col("snap_json_r")
             filter_parts: list[str] = []
             filter_params: list[Any] = []
             source_norm = (source or "all").strip().lower()
@@ -1710,6 +1816,18 @@ class SqliteRunRepository:
                     ")"
                 )
                 filter_params.extend([pattern, pattern, pattern, pattern, pattern])
+            used_fn_proj = (used_input_filename or "").strip()
+            if used_fn_proj and "/" not in used_fn_proj and "\\" not in used_fn_proj:
+                filter_parts.append(
+                    "("
+                    "LOWER(COALESCE(media_type, '')) != 'input' "
+                    "AND ("
+                    f"EXISTS (SELECT 1 FROM json_each({snap_g_proj}) je WHERE TRIM(CAST(je.value AS TEXT)) = ?) "
+                    f"OR EXISTS (SELECT 1 FROM json_each({snap_r_proj}) je WHERE TRIM(CAST(je.value AS TEXT)) = ?)"
+                    ")"
+                    ")"
+                )
+                filter_params.extend([used_fn_proj, used_fn_proj])
             extra_filter = ""
             if filter_parts:
                 extra_filter = " AND " + " AND ".join(filter_parts)
@@ -2172,6 +2290,26 @@ class SqliteRunRepository:
                     run_params,
                 )
             conn.commit()
+        finally:
+            conn.close()
+
+    def user_run_references_input_filename(self, user_id: str, filename: str) -> bool:
+        """True if this user owns a run whose input snapshot JSON mentions the filename (e.g. hashed input image)."""
+        if not filename:
+            return False
+        conn = self._conn()
+        try:
+            row = conn.execute(
+                """
+                SELECT 1 FROM run
+                WHERE owner_user_id = ?
+                  AND input_snapshot_json IS NOT NULL
+                  AND instr(input_snapshot_json, ?) > 0
+                LIMIT 1
+                """,
+                (user_id, filename),
+            ).fetchone()
+            return row is not None
         finally:
             conn.close()
 

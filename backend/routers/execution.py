@@ -18,7 +18,8 @@ from services.png_metadata import inject_workflowui_chunk
 from services.mp3_metadata import inject_workflowui_metadata as inject_workflowui_metadata_mp3
 from services.mp4_metadata import inject_workflowui_metadata as inject_workflowui_metadata_mp4
 
-from dependencies import COMFY_URL, INPUT_DATA_DIR, get_db, get_media_storage_service, get_run_queue_state
+from dependencies import COMFY_URL, INPUT_DATA_DIR, get_db, get_media_storage_service, get_run_queue_state, get_vault_input_repo
+from services.vault_input_access import ensure_can_read_input_file
 from services.media_storage_service import MediaStorageService
 from services.video_thumbnail import get_or_create_video_thumbnail_webp_bytes
 
@@ -250,6 +251,7 @@ def upload_image(
     image: UploadFile = File(..., alias="image"),
     app_id: str | None = None,
     db=Depends(get_db),
+    ctx=Depends(require_user),
 ):
     if app_id:
         _, _, app_repo, _, _, _, _ = db
@@ -283,6 +285,8 @@ def upload_image(
         )
         res.raise_for_status()
         data = res.json()
+        owner_id = ctx.user.id if (ctx.auth_enabled and ctx.user) else None
+        get_vault_input_repo().record_upload(hash_name, owner_id)
         return {
             "name": hash_name,
             "subfolder": data.get("subfolder", ""),
@@ -300,6 +304,7 @@ def upload_media(
     type: str = "image",
     app_id: str | None = None,
     db=Depends(get_db),
+    ctx=Depends(require_user),
 ):
     """Upload image, video, or audio to ComfyUI input folder. Use type=image|video|audio."""
     if app_id:
@@ -347,6 +352,9 @@ def upload_media(
         )
         res.raise_for_status()
         data = res.json()
+        if media_type == "image":
+            owner_id = ctx.user.id if (ctx.auth_enabled and ctx.user) else None
+            get_vault_input_repo().record_upload(hash_name, owner_id)
         return {
             "name": hash_name,
             "subfolder": data.get("subfolder", ""),
@@ -383,6 +391,10 @@ def load_run_output_content_bytes(
         input_path = (INPUT_DATA_DIR / filename).resolve()
         if not str(input_path).startswith(str(base_dir)) or not input_path.is_file():
             raise HTTPException(status_code=404, detail="Input media file not found")
+        if ctx.auth_enabled:
+            run_repo = db[3]
+            if run_repo is not None:
+                ensure_can_read_input_file(ctx, filename.strip(), get_vault_input_repo(), run_repo)
         return input_path.read_bytes(), _media_type_for_path(input_path)
     is_video_thumbnail_preview = (
         (preview or "").strip().lower() == "webp"

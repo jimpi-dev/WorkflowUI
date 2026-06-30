@@ -1,9 +1,12 @@
 <script lang="ts">
     import { getApiBase } from '$lib/config';
     import { getCookie, setCookie } from '$lib/cookie';
-    import FavoriteSash from '$lib/components/FavoriteSash.svelte';
     import LightboxViewer, { type LightboxItem } from '$lib/components/LightboxViewer.svelte';
+    import ThumbnailOverlay from '$lib/components/ThumbnailOverlay.svelte';
+    import InfiniteScrollLoadMore from '$lib/components/InfiniteScrollLoadMore.svelte';
     import type { MediaBrowserItem, MediaBrowserSelection } from '$lib/types/mediaBrowser';
+    import { genVaultExistsByRunOutputs, pushRunOutputToGenVault } from '$lib/api/genvault';
+    import { toastError, toastSuccess } from '$lib/stores/toast';
 
     type ProjectOption = { id: string; name: string; headerColor?: string | null; lastUsedAt?: number | null };
     type AppOption = { id: string; title: string };
@@ -12,15 +15,25 @@
         open = false,
         initialProjectId = null,
         initialAppId = null,
+        /** When set, lists only generation outputs from runs whose input snapshot used this vault input filename. */
+        filterByVaultInputFilename = null as string | null,
         onClose = undefined,
         onSelect = undefined
     }: {
         open?: boolean;
         initialProjectId?: string | null;
         initialAppId?: string | null;
+        filterByVaultInputFilename?: string | null;
         onClose?: (() => void) | undefined;
         onSelect?: ((selection: MediaBrowserSelection) => void) | undefined;
     } = $props();
+
+    const vaultInputLocked = $derived(!!(filterByVaultInputFilename && String(filterByVaultInputFilename).trim()));
+    const vaultInputName = $derived(
+        filterByVaultInputFilename && String(filterByVaultInputFilename).trim()
+            ? String(filterByVaultInputFilename).trim()
+            : ''
+    );
 
     const apiBase = getApiBase() || '';
     const PAGE_SIZE = 60;
@@ -46,8 +59,8 @@
 
     let loadSeq = 0;
     let listAbortController: AbortController | null = null;
-    let sentinelEl: HTMLDivElement | null = null;
-    let dialogEl: HTMLDialogElement | null = null;
+    let sentinelEl = $state.raw<HTMLDivElement | null>(null);
+    let dialogEl = $state.raw<HTMLDialogElement | null>(null);
     let maximized = $state(false);
     let thumbScale = $state(100);
     let thumbScaleInitialized = $state(false);
@@ -56,10 +69,17 @@
     let moreFiltersOpen = $state(false);
     let projectPickerOpen = $state(false);
     let projectPickerSearch = $state('');
-    let previewOpen = $state(false);
-    let previewItem = $state<MediaBrowserItem | null>(null);
+    let lightboxOpen = $state(false);
+    let lightboxItems = $state<LightboxItem[]>([]);
+    let lightboxIndex = $state(0);
     let resolutionByKey = $state<Record<string, { width: number; height: number }>>({});
     let failedThumbUrls = $state<Record<string, true>>({});
+    let projectMetadataCache = $state<Record<string, { metadata: Record<string, unknown>; favorites: string[] }>>({});
+    let favoritesSaving = $state(false);
+    let deletingKeys = $state<Set<string>>(new Set());
+    let pushingToVaultKeys = $state<Set<string>>(new Set());
+    let outputInVault = $state<Record<string, boolean>>({});
+    let genVaultStatusTimer: ReturnType<typeof setTimeout> | null = null;
 
     const hasMore = $derived(items.length < total);
     const displayedItems = $derived.by(() => {
@@ -80,7 +100,8 @@
             filterFromDate.trim(),
             filterToDate.trim(),
             filterQ.trim().toLowerCase(),
-            filterFavoritesOnly ? '1' : '0'
+            filterFavoritesOnly ? '1' : '0',
+            vaultInputName
         ].join('|')
     );
 
@@ -126,6 +147,7 @@
             if (filterToDate.trim()) q.set('until', String(new Date(filterToDate.trim()).setHours(23, 59, 59, 999)));
             if (filterQ.trim()) q.set('q', filterQ.trim());
             if (filterFavoritesOnly) q.set('favorites_only', '1');
+            if (vaultInputName) q.set('used_input_filename', vaultInputName);
             const res = await fetch(`${apiBase}/media-browser/projects?${q.toString()}`);
             if (!res.ok) {
                 projects = [];
@@ -162,6 +184,7 @@
         if (isInitial) {
             if (listAbortController) listAbortController.abort();
             listAbortController = new AbortController();
+            closeLightbox();
             loading = true;
             loadingMore = false;
             loadError = null;
@@ -188,6 +211,7 @@
             }
             if (filterQ.trim()) q.set('q', filterQ.trim());
             if (filterFavoritesOnly) q.set('favorites_only', '1');
+            if (vaultInputName) q.set('used_input_filename', vaultInputName);
             const res = await fetch(`${apiBase}/media-browser/images?${q.toString()}`, { signal: controller.signal });
             if (requestId !== loadSeq) return;
             if (!res.ok) {
@@ -226,6 +250,61 @@
         if (!hasMore || loading || loadingMore) return;
         loadItems(items.length);
     }
+
+    async function pushToGenVault(item: MediaBrowserItem) {
+        if (item.source !== 'generation' || !item.run_id || typeof item.output_index !== 'number') return;
+        const key = `${item.run_id}:${item.output_index}`;
+        if (pushingToVaultKeys.has(key)) return;
+        pushingToVaultKeys = new Set([...pushingToVaultKeys, key]);
+        try {
+            const data = await pushRunOutputToGenVault(item.run_id, item.output_index);
+            toastSuccess(data?.uploaded?.duplicate ? 'Bild ist bereits in GenVault gespeichert.' : 'An GenVault gesendet.');
+            outputInVault = { ...outputInVault, [key]: true };
+        } catch (e) {
+            toastError(e instanceof Error ? e.message : 'Failed to send to GenVault.');
+        } finally {
+            const next = new Set(pushingToVaultKeys);
+            next.delete(key);
+            pushingToVaultKeys = next;
+        }
+    }
+
+    async function refreshGenVaultStatusForBrowserItems() {
+        const requestItems: { clientKey: string; runId: string; outputIndex: number }[] = [];
+        const seen = new Set<string>();
+        for (const item of displayedItems) {
+            if (item.source !== 'generation' || !item.run_id || typeof item.output_index !== 'number') continue;
+            const key = `${item.run_id}:${item.output_index}`;
+            if (seen.has(key)) continue;
+            seen.add(key);
+            requestItems.push({ clientKey: key, runId: item.run_id, outputIndex: item.output_index });
+        }
+        if (!requestItems.length) return;
+        try {
+            const rows = await genVaultExistsByRunOutputs(requestItems);
+            const next = { ...outputInVault };
+            for (const row of rows) {
+                if (row?.client_key) next[row.client_key] = !!row.in_vault;
+            }
+            outputInVault = next;
+        } catch {
+            // ignore: visual hint only
+        }
+    }
+
+    $effect(() => {
+        displayedItems;
+        if (genVaultStatusTimer) clearTimeout(genVaultStatusTimer);
+        genVaultStatusTimer = setTimeout(() => {
+            void refreshGenVaultStatusForBrowserItems();
+        }, 180);
+        return () => {
+            if (genVaultStatusTimer) {
+                clearTimeout(genVaultStatusTimer);
+                genVaultStatusTimer = null;
+            }
+        };
+    });
 
     function imageUrlFor(item: MediaBrowserItem): string {
         const params = new URLSearchParams();
@@ -276,15 +355,326 @@
         return `${item.run_id}:${item.source}:${item.output_index}:${item.filename}:${idx}`;
     }
 
-    function openPreview(item: MediaBrowserItem) {
-        previewItem = item;
-        previewOpen = true;
+    function outputFavoriteKey(runId: string, outputIndex: number): string {
+        return `${runId}:${outputIndex}`;
     }
 
-    function closePreview() {
-        previewOpen = false;
-        previewItem = null;
+    function deleteOpKey(item: MediaBrowserItem): string {
+        return `${item.run_id}:${item.output_index}`;
     }
+
+    async function ensureProjectMetadata(projectId: string): Promise<{ metadata: Record<string, unknown>; favorites: string[] }> {
+        const cached = projectMetadataCache[projectId];
+        if (cached) return cached;
+        const res = await fetch(`${apiBase}/projects/${encodeURIComponent(projectId)}`);
+        const data = await res.json().catch(() => ({}));
+        const metadata =
+            data?.metadata && typeof data.metadata === 'object' ? (data.metadata as Record<string, unknown>) : {};
+        const fav = Array.isArray(metadata.favorites) ? metadata.favorites.map((x: unknown) => String(x)) : [];
+        const entry = { metadata, favorites: fav };
+        projectMetadataCache = { ...projectMetadataCache, [projectId]: entry };
+        return entry;
+    }
+
+    function displayableOutputIndicesFromImages(
+        images: { remote_deleted?: boolean }[],
+        localStorageStatus: string | undefined
+    ): number[] {
+        const out: number[] = [];
+        if (!Array.isArray(images)) return out;
+        for (let i = 0; i < images.length; i++) {
+            const img = images[i];
+            const rd = !!(img as { remote_deleted?: boolean }).remote_deleted;
+            if (!rd) out.push(i);
+            else if (localStorageStatus === 'saved' || localStorageStatus === 'partial') out.push(i);
+        }
+        return out;
+    }
+
+    async function saveProjectFavorites(projectId: string, nextFavorites: string[]) {
+        favoritesSaving = true;
+        try {
+            const entry = await ensureProjectMetadata(projectId);
+            const nextMeta = { ...entry.metadata, favorites: nextFavorites };
+            const res = await fetch(`${apiBase}/projects/${encodeURIComponent(projectId)}`, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ metadata: nextMeta })
+            });
+            if (!res.ok) throw new Error('Failed to save favorites');
+            projectMetadataCache = { ...projectMetadataCache, [projectId]: { metadata: nextMeta, favorites: nextFavorites } };
+            const favSet = new Set(nextFavorites);
+            items = items.map((it) =>
+                it.project_id === projectId && it.source === 'generation'
+                    ? {
+                          ...it,
+                          is_favorite:
+                              favSet.has(outputFavoriteKey(it.run_id, it.output_index)) || favSet.has(it.run_id)
+                      }
+                    : it
+            );
+        } finally {
+            favoritesSaving = false;
+        }
+    }
+
+    function isMediaItemFavorite(item: MediaBrowserItem): boolean {
+        if (item.source !== 'generation') return false;
+        const entry = projectMetadataCache[item.project_id];
+        if (!entry) return item.is_favorite === true;
+        const s = new Set(entry.favorites);
+        return s.has(outputFavoriteKey(item.run_id, item.output_index)) || s.has(item.run_id);
+    }
+
+    async function toggleItemFavorite(item: MediaBrowserItem) {
+        if (item.source !== 'generation' || !item.project_id || favoritesSaving) return;
+        const projectId = item.project_id;
+        const runId = item.run_id;
+        const outputIndex = item.output_index;
+        const entry = await ensureProjectMetadata(projectId);
+        const next = new Set(entry.favorites);
+        const key = outputFavoriteKey(runId, outputIndex);
+        const isFav = next.has(key) || next.has(runId);
+        if (isFav) {
+            if (next.has(key)) next.delete(key);
+            else if (next.has(runId)) {
+                next.delete(runId);
+                const runRes = await fetch(`${apiBase}/runs/${encodeURIComponent(runId)}`);
+                if (runRes.ok) {
+                    const run = await runRes.json();
+                    const runData = run as {
+                        media?: { remote_deleted?: boolean }[];
+                        images?: { remote_deleted?: boolean }[];
+                        local_storage_status?: string;
+                    };
+                    const imgs =
+                        Array.isArray(runData.media) && runData.media.length
+                            ? runData.media
+                            : (runData.images ?? []);
+                    const localSt = runData.local_storage_status;
+                    for (const i of displayableOutputIndicesFromImages(imgs, localSt)) {
+                        if (i !== outputIndex) next.add(outputFavoriteKey(runId, i));
+                    }
+                }
+            }
+        } else {
+            next.add(key);
+        }
+        await saveProjectFavorites(projectId, [...next]);
+    }
+
+    async function downloadMediaItem(item: MediaBrowserItem) {
+        const res = await fetch(imageUrlFor(item));
+        if (!res.ok) return;
+        const blob = await res.blob();
+        const blobUrl = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = blobUrl;
+        a.download = item.filename || 'download';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(blobUrl);
+    }
+
+    function removeItemFromList(item: MediaBrowserItem) {
+        items = items.filter(
+            (it) =>
+                !(
+                    it.run_id === item.run_id &&
+                    it.output_index === item.output_index &&
+                    it.filename === item.filename &&
+                    it.source === item.source
+                )
+        );
+        total = Math.max(0, total - 1);
+        if (lightboxOpen) {
+            const curId = lightboxItems[lightboxIndex]?.id;
+            const nextLb = lightboxItems.filter(
+                (li) =>
+                    (li.backendRunId ?? li.runId) !== item.run_id ||
+                    li.outputIndex !== item.output_index
+            );
+            if (!nextLb.length) closeLightbox();
+            else {
+                lightboxItems = nextLb;
+                const ni = curId ? nextLb.findIndex((x) => x.id === curId) : -1;
+                lightboxIndex =
+                    ni >= 0 ? ni : Math.min(lightboxIndex, nextLb.length - 1);
+            }
+        }
+    }
+
+    async function deleteItemFromRun(item: MediaBrowserItem) {
+        if (item.source !== 'generation') return;
+        const k = deleteOpKey(item);
+        if (deletingKeys.has(k)) return;
+        if (
+            !window.confirm(
+                `Remove "${item.filename}" from this run (local and remote)? This cannot be undone.`
+            )
+        )
+            return;
+        deletingKeys = new Set([...deletingKeys, k]);
+        try {
+            const res = await fetch(
+                `${apiBase}/runs/${encodeURIComponent(item.run_id)}/delete-both-image/${item.output_index}`,
+                { method: 'POST' }
+            );
+            if (!res.ok) {
+                const d = await res.json().catch(() => ({}));
+                toastError((d as { detail?: string }).detail || 'Delete failed');
+                return;
+            }
+            removeItemFromList(item);
+        } finally {
+            const next = new Set(deletingKeys);
+            next.delete(k);
+            deletingKeys = next;
+        }
+    }
+
+    function mediaItemToLightboxItem(item: MediaBrowserItem): LightboxItem {
+        const mt = mediaKind(item);
+        return {
+            id: `${item.run_id}:${item.output_index}:${item.filename}`,
+            url: imageUrlFor(item),
+            thumbnailUrl: mt === 'video' ? thumbnailUrlFor(item) : undefined,
+            filename: item.filename,
+            mediaType: mt === 'video' ? 'video' : mt === 'audio' ? 'audio' : 'image',
+            runId: item.run_id,
+            backendRunId: item.run_id,
+            outputIndex: item.output_index,
+            remote_deleted: false,
+            hasLocal: true,
+            hasRemote: true
+        };
+    }
+
+    function generationItemsForLightbox(): MediaBrowserItem[] {
+        return displayedItems.filter((i) => i.source === 'generation');
+    }
+
+    function openLightboxFromItem(item: MediaBrowserItem) {
+        if (item.source === 'generation') {
+            const list = generationItemsForLightbox();
+            const mapped = list.map(mediaItemToLightboxItem);
+            const idx = list.findIndex(
+                (x) => x.run_id === item.run_id && x.output_index === item.output_index
+            );
+            lightboxItems = mapped;
+            lightboxIndex = Math.max(0, idx);
+        } else {
+            lightboxItems = [mediaItemToLightboxItem(item)];
+            lightboxIndex = 0;
+        }
+        lightboxOpen = true;
+    }
+
+    function closeLightbox() {
+        lightboxOpen = false;
+        lightboxItems = [];
+        lightboxIndex = 0;
+    }
+
+    function findMediaItemForLightbox(li: LightboxItem): MediaBrowserItem | null {
+        const rid = li.backendRunId ?? li.runId;
+        const oi = li.outputIndex;
+        if (!rid || oi == null) return null;
+        const fn = li.filename;
+        return (
+            items.find(
+                (i) => i.run_id === rid && i.output_index === oi && (!fn || i.filename === fn)
+            ) ?? null
+        );
+    }
+
+    async function downloadLightboxItem(li: LightboxItem) {
+        const it = findMediaItemForLightbox(li);
+        if (it) await downloadMediaItem(it);
+        else if (li.url) {
+            const res = await fetch(li.url);
+            if (!res.ok) return;
+            const blob = await res.blob();
+            const blobUrl = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = blobUrl;
+            a.download = li.filename || 'download';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(blobUrl);
+        }
+    }
+
+    function isLightboxFavorite(li: LightboxItem): boolean {
+        const it = findMediaItemForLightbox(li);
+        return it ? isMediaItemFavorite(it) : false;
+    }
+
+    function onLightboxToggleFavorite(li: LightboxItem) {
+        const it = findMediaItemForLightbox(li);
+        if (it) void toggleItemFavorite(it);
+    }
+
+    async function postDeleteLightbox(li: LightboxItem, mode: 'local' | 'remote' | 'both') {
+        const rid = li.backendRunId ?? li.runId;
+        const oi = li.outputIndex;
+        if (!rid || oi == null) return;
+        const path =
+            mode === 'local'
+                ? `delete-local-image/${oi}`
+                : mode === 'remote'
+                  ? `delete-remote-image/${oi}`
+                  : `delete-both-image/${oi}`;
+        const res = await fetch(`${apiBase}/runs/${encodeURIComponent(rid)}/${path}`, { method: 'POST' });
+        if (!res.ok) {
+            const d = await res.json().catch(() => ({}));
+            toastError((d as { detail?: string }).detail || 'Delete failed');
+            return;
+        }
+        const it = findMediaItemForLightbox(li);
+        if (it && mode === 'both') removeItemFromList(it);
+        else if (mode === 'remote') {
+            const idx = lightboxItems.findIndex((x) => x.id === li.id);
+            if (idx !== -1) {
+                const next = [...lightboxItems];
+                next[idx] = { ...next[idx], hasRemote: false, remote_deleted: true };
+                lightboxItems = next;
+            }
+        } else if (mode === 'local') {
+            const idx = lightboxItems.findIndex((x) => x.id === li.id);
+            if (idx !== -1) {
+                const next = [...lightboxItems];
+                next[idx] = { ...next[idx], hasLocal: false };
+                lightboxItems = next;
+            }
+        }
+    }
+
+    function onLightboxDeleteLocal(li: LightboxItem) {
+        void postDeleteLightbox(li, 'local');
+    }
+    function onLightboxDeleteRemote(li: LightboxItem) {
+        void postDeleteLightbox(li, 'remote');
+    }
+    function onLightboxDeleteBoth(li: LightboxItem) {
+        void postDeleteLightbox(li, 'both');
+    }
+
+    function onLightboxSendToVault(li: LightboxItem) {
+        const it = findMediaItemForLightbox(li);
+        if (!it || it.source !== 'generation') return;
+        void pushToGenVault(it);
+    }
+
+    const lightboxAllowsRunMutations = $derived.by(() => {
+        if (!lightboxItems.length) return false;
+        return lightboxItems.every((li) => {
+            const it = findMediaItemForLightbox(li);
+            return !!(it && it.source === 'generation');
+        });
+    });
 
     function onThumbLoad(item: MediaBrowserItem, idx: number, event: Event) {
         const img = event.currentTarget as HTMLImageElement | null;
@@ -307,27 +697,19 @@
         };
     }
 
-    const previewItems = $derived.by(() => {
-        if (!previewItem) return [] as LightboxItem[];
-        return [
-            {
-                id: `${previewItem.run_id}:${previewItem.output_index}:${previewItem.filename}`,
-                url: imageUrlFor(previewItem),
-                filename: previewItem.filename,
-                mediaType: 'image',
-                runId: previewItem.run_id,
-                backendRunId: previewItem.run_id,
-                outputIndex: previewItem.output_index
-            }
-        ] as LightboxItem[];
-    });
-
     function handleBackdropClick(e: MouseEvent) {
         if ((e.target as HTMLElement).classList.contains('media-browser-backdrop')) onClose?.();
     }
 
     function handleKeydown(e: KeyboardEvent) {
-        if (e.key === 'Escape') onClose?.();
+        if (e.key === 'Escape') {
+            if (lightboxOpen) {
+                e.stopPropagation();
+                closeLightbox();
+                return;
+            }
+            onClose?.();
+        }
     }
 
     function handleDialogClick(e: MouseEvent) {
@@ -354,7 +736,8 @@
     const activeFilterLabels = $derived.by(() => {
         const labels: string[] = [];
         if (selectedProject) labels.push(selectedProject.name);
-        if (filterSource !== 'all') labels.push(filterSource === 'generation' ? 'Generated' : 'Input');
+        if (vaultInputLocked) labels.push('Input-linked outputs');
+        else if (filterSource !== 'all') labels.push(filterSource === 'generation' ? 'Generated' : 'Input');
         if (filterFavoritesOnly) labels.push('Favorites');
         if (filterAppId) {
             const app = apps.find((candidate) => candidate.id === filterAppId);
@@ -395,6 +778,11 @@
     $effect(() => {
         if (open && !wasOpen) {
             resetFilters();
+            if (vaultInputLocked) {
+                filterSource = 'generation';
+            }
+            closeLightbox();
+            projectMetadataCache = {};
             loading = true;
             loadError = null;
             items = [];
@@ -437,6 +825,7 @@
     });
     $effect(() => {
         if (!open) {
+            closeLightbox();
             previousSig = null;
             projectsFilterSigPrev = null;
             projectPickerOpen = false;
@@ -497,7 +886,8 @@
             filterFromDate.trim(),
             filterToDate.trim(),
             filterQ.trim().toLowerCase(),
-            filterFavoritesOnly ? '1' : '0'
+            filterFavoritesOnly ? '1' : '0',
+            vaultInputName
         ].join('|')
     );
     $effect(() => {
@@ -530,8 +920,16 @@
     >
             <div class="media-browser-header">
                 <div class="title-wrap">
-                    <h2>Browse media</h2>
-                    <div class="subtitle">Search by filename, project, app, or metadata phrases</div>
+                    {#if vaultInputLocked}
+                        <h2>Outputs using this input</h2>
+                        <div class="subtitle">
+                            Showing generation results for runs whose inputs included
+                            <code class="vault-input-code">{vaultInputName}</code>. Other filters still apply.
+                        </div>
+                    {:else}
+                        <h2>Browse media</h2>
+                        <div class="subtitle">Search by filename, project, app, or metadata phrases</div>
+                    {/if}
                 </div>
                 <div class="header-actions">
                     {#if !isMobile}
@@ -607,7 +1005,7 @@
                             </span>
                         </button>
                     </label>
-                    {#if isMobile}
+                    {#if isMobile && !vaultInputLocked}
                         <select bind:value={filterSource} aria-label="Filter by source" class="mobile-source">
                             <option value="all">All</option>
                             <option value="generation">Generated</option>
@@ -690,7 +1088,7 @@
                         </div>
                     {/if}
                 </div>
-                {#if !isMobile}
+                {#if !isMobile && !vaultInputLocked}
                     <select bind:value={filterSource} aria-label="Filter by source">
                         <option value="all">All sources</option>
                         <option value="generation">Generated outputs</option>
@@ -737,77 +1135,193 @@
                 {:else}
                     <div class="media-grid">
                         {#each displayedItems as item, idx (itemKey(item, idx))}
-                            <div
-                                class="media-card"
-                                role="button"
-                                tabindex="0"
-                                onclick={() => choose(item)}
-                                onkeydown={(e) => {
-                                    if (e.key === 'Enter' || e.key === ' ') {
-                                        e.preventDefault();
-                                        choose(item);
-                                    }
-                                }}
-                                title={item.filename}
-                            >
-                                <FavoriteSash visible={item.is_favorite === true} />
-                                <button
-                                    type="button"
-                                    class="thumb-preview-btn"
-                                    aria-label="Preview full image"
-                                    title="Preview full image"
-                                    onclick={(e) => {
-                                        e.stopPropagation();
-                                        openPreview(item);
-                                    }}
+                            <div class="media-card-wrap">
+                                <div
+                                    class="media-card output-thumb"
+                                    class:media-card--input={item.source === 'input'}
+                                    title={item.filename}
                                 >
-                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                                        <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8S1 12 1 12z"></path>
-                                        <circle cx="12" cy="12" r="3"></circle>
-                                    </svg>
-                                </button>
-                                {#if resolutionByKey[itemKey(item, idx)]}
-                                    {@const dim = resolutionByKey[itemKey(item, idx)]}
-                                    <div class="thumb-resolution-badge">{dim.width}×{dim.height}</div>
-                                {/if}
-                                {#if mediaKind(item) === 'audio'}
-                                    <div class="media-thumb-audio-placeholder" aria-hidden="true">AUDIO</div>
-                                {:else}
-                                    <img
-                                        src={thumbnailUrlFor(item)}
-                                        alt=""
-                                        loading="lazy"
-                                        referrerpolicy="no-referrer"
-                                        onload={(e) => onThumbLoad(item, idx, e)}
-                                        onerror={() => onThumbError(item)}
-                                    />
-                                {/if}
+                                    {#if item.source === 'generation'}
+                                        <ThumbnailOverlay
+                                            mediaType={mediaKind(item) === 'video'
+                                                ? 'video'
+                                                : mediaKind(item) === 'audio'
+                                                  ? 'audio'
+                                                  : 'image'}
+                                            resolution={resolutionByKey[itemKey(item, idx)]
+                                                ? `${resolutionByKey[itemKey(item, idx)].width}×${resolutionByKey[itemKey(item, idx)].height}`
+                                                : undefined}
+                                            fileName={item.filename}
+                                            showFilenameAlways={false}
+                                            isFavorite={isMediaItemFavorite(item)}
+                                            showMetadata={false}
+                                            showFavorite={true}
+                                            showSelection={false}
+                                            showSeed={false}
+                                            showDownload={true}
+                                            showSendToApp={false}
+                                            showSendToVault={true}
+                                            isInVault={!!(item.run_id && typeof item.output_index === 'number' && outputInVault[`${item.run_id}:${item.output_index}`])}
+                                            showDelete={true}
+                                            deleteDisabled={deletingKeys.has(deleteOpKey(item))}
+                                            onToggleFavorite={() => void toggleItemFavorite(item)}
+                                            onDownload={() => void downloadMediaItem(item)}
+                                            onSendToVault={() => void pushToGenVault(item)}
+                                            onDelete={() => void deleteItemFromRun(item)}
+                                        >
+                                            <div
+                                                class="media-browser-thumb-hit"
+                                                role="button"
+                                                tabindex="0"
+                                                aria-label="Open viewer — browse loaded items"
+                                                title="Open viewer"
+                                                onclick={(e) => {
+                                                    e.stopPropagation();
+                                                    openLightboxFromItem(item);
+                                                }}
+                                                onkeydown={(e) => {
+                                                    if (e.key === 'Enter' || e.key === ' ') {
+                                                        e.preventDefault();
+                                                        e.stopPropagation();
+                                                        openLightboxFromItem(item);
+                                                    }
+                                                }}
+                                            >
+                                                {#if mediaKind(item) === 'audio'}
+                                                    <div class="media-thumb-audio-placeholder" aria-hidden="true">AUDIO</div>
+                                                {:else}
+                                                    <img
+                                                        src={thumbnailUrlFor(item)}
+                                                        alt=""
+                                                        loading="lazy"
+                                                        referrerpolicy="no-referrer"
+                                                        onload={(e) => onThumbLoad(item, idx, e)}
+                                                        onerror={() => onThumbError(item)}
+                                                    />
+                                                {/if}
+                                            </div>
+                                        </ThumbnailOverlay>
+                                    {:else}
+                                        <ThumbnailOverlay
+                                            mediaType="image"
+                                            fileName={item.filename}
+                                            showFilenameAlways={false}
+                                            showMetadata={false}
+                                            showFavorite={false}
+                                            showSelection={false}
+                                            showSeed={false}
+                                            showDownload={true}
+                                            showSendToApp={false}
+                                            showDelete={false}
+                                            onDownload={() => void downloadMediaItem(item)}
+                                        >
+                                            <div
+                                                class="media-browser-thumb-hit"
+                                                role="button"
+                                                tabindex="0"
+                                                aria-label="Open viewer"
+                                                title="Open viewer"
+                                                onclick={(e) => {
+                                                    e.stopPropagation();
+                                                    openLightboxFromItem(item);
+                                                }}
+                                                onkeydown={(e) => {
+                                                    if (e.key === 'Enter' || e.key === ' ') {
+                                                        e.preventDefault();
+                                                        e.stopPropagation();
+                                                        openLightboxFromItem(item);
+                                                    }
+                                                }}
+                                            >
+                                                <img
+                                                    src={thumbnailUrlFor(item)}
+                                                    alt=""
+                                                    loading="lazy"
+                                                    referrerpolicy="no-referrer"
+                                                    onload={(e) => onThumbLoad(item, idx, e)}
+                                                    onerror={() => onThumbError(item)}
+                                                />
+                                            </div>
+                                        </ThumbnailOverlay>
+                                    {/if}
+                                </div>
                                 <div class="meta">
                                     <div class="name">{item.filename}</div>
                                     <div class="sub">
                                         {item.project_name} · {item.source === 'input' ? 'Input' : 'Output'}
                                     </div>
+                                    {#if item.source === 'generation' && item.run_id && typeof item.output_index === 'number'}
+                                        <button
+                                            type="button"
+                                            class="media-use-btn media-genvault-btn"
+                                            disabled={pushingToVaultKeys.has(`${item.run_id}:${item.output_index}`)}
+                                            onclick={(e) => {
+                                                e.stopPropagation();
+                                                void pushToGenVault(item);
+                                            }}
+                                        >
+                                            {pushingToVaultKeys.has(`${item.run_id}:${item.output_index}`)
+                                                ? 'Sending…'
+                                                : 'Send to GenVault'}
+                                        </button>
+                                    {/if}
+                                    {#if onSelect}
+                                        <button
+                                            type="button"
+                                            class="media-use-btn"
+                                            onclick={(e) => {
+                                                e.stopPropagation();
+                                                choose(item);
+                                            }}
+                                        >
+                                            Use this media
+                                        </button>
+                                    {/if}
                                 </div>
                             </div>
                         {/each}
                     </div>
-                    <div bind:this={sentinelEl} use:observeSentinel class="sentinel"></div>
-                    {#if loadingMore}
-                        <div class="state loading-state">
-                            <span class="loading-spinner" aria-hidden="true"></span>
-                            <span>Loading more…</span>
-                        </div>
+                    {#if hasMore}
+                        <InfiniteScrollLoadMore
+                            loading={loadingMore}
+                            loadedCount={items.length}
+                            totalCount={total}
+                            thumbScalePercent={thumbScale}
+                            stickyWhileLoading={false}
+                            skeletonLayout="media"
+                            buttonDisabled={loading}
+                            onLoadMore={loadMore}
+                            loadMoreLabel="Load more"
+                            statusTitle="Loading more media"
+                            countNoun="items"
+                            statusAriaLabel="Loading more media items"
+                        >
+                            {#snippet sentinel()}
+                                <div bind:this={sentinelEl} use:observeSentinel class="sentinel"></div>
+                            {/snippet}
+                        </InfiniteScrollLoadMore>
                     {/if}
                 {/if}
             </div>
     </div>
     <LightboxViewer
-        open={previewOpen}
-        items={previewItems}
-        index={0}
-        onClose={closePreview}
-        onIndexChange={() => {}}
-        ariaTitle="Media preview"
+        open={lightboxOpen}
+        items={lightboxItems}
+        index={lightboxIndex}
+        onIndexChange={(i) => {
+            lightboxIndex = i;
+        }}
+        onClose={closeLightbox}
+        onDownload={downloadLightboxItem}
+        onToggleFavorite={lightboxAllowsRunMutations ? onLightboxToggleFavorite : undefined}
+        isFavorite={lightboxAllowsRunMutations ? isLightboxFavorite : undefined}
+        onDeleteLocal={lightboxAllowsRunMutations ? onLightboxDeleteLocal : undefined}
+        onDeleteRemote={lightboxAllowsRunMutations ? onLightboxDeleteRemote : undefined}
+        onDeleteBoth={lightboxAllowsRunMutations ? onLightboxDeleteBoth : undefined}
+        onSendToVault={lightboxAllowsRunMutations ? onLightboxSendToVault : undefined}
+        isInVault={(item) => !!(item.runId && item.outputIndex != null && outputInVault[`${item.runId}:${item.outputIndex}`])}
+        isSendingToVault={(item) => !!(item.runId && item.outputIndex != null && pushingToVaultKeys.has(`${item.runId}:${item.outputIndex}`))}
+        ariaTitle="Media browser viewer"
     />
 </dialog>
 
@@ -879,6 +1393,20 @@
         white-space: nowrap;
         overflow: hidden;
         text-overflow: ellipsis;
+    }
+    .title-wrap:has(.vault-input-code) .subtitle {
+        white-space: normal;
+        overflow: visible;
+        text-overflow: unset;
+    }
+    .vault-input-code {
+        font-family: ui-monospace, monospace;
+        font-size: 0.85em;
+        padding: 0.05rem 0.3rem;
+        border-radius: 4px;
+        background: color-mix(in srgb, var(--accent) 14%, transparent);
+        color: var(--text);
+        word-break: break-all;
     }
     .header-actions {
         display: inline-flex;
@@ -1159,6 +1687,12 @@
         justify-content: start;
         gap: 0.75rem;
     }
+    .media-card-wrap {
+        display: flex;
+        flex-direction: column;
+        gap: 0.35rem;
+        min-width: 0;
+    }
     .media-card {
         position: relative;
         border: 1px solid var(--border);
@@ -1167,12 +1701,45 @@
         padding: 0.4rem;
         color: inherit;
         text-align: left;
-        cursor: pointer;
+        cursor: default;
         overflow: hidden;
+        flex: 0 0 auto;
+    }
+    /* ThumbnailOverlay is position:absolute (out of flow); without aspect-ratio the card height collapses. */
+    .media-card.output-thumb {
+        aspect-ratio: 1 / 1;
     }
     .media-card:hover {
         border-color: var(--accent);
         background: rgba(255, 255, 255, 0.06);
+    }
+    .media-browser-thumb-hit {
+        width: 100%;
+        height: 100%;
+        min-height: 0;
+        position: relative;
+        border-radius: 6px;
+        overflow: hidden;
+        cursor: zoom-in;
+        display: block;
+    }
+    .media-use-btn {
+        margin-top: 0.35rem;
+        align-self: flex-start;
+        font-size: 0.72rem;
+        padding: 0.22rem 0.5rem;
+        border-radius: 6px;
+        border: 1px solid var(--border);
+        background: var(--surface, rgba(255, 255, 255, 0.06));
+        color: var(--text);
+        cursor: pointer;
+    }
+    .media-genvault-btn {
+        margin-top: 0.25rem;
+    }
+    .media-use-btn:hover {
+        border-color: var(--accent);
+        color: var(--accent);
     }
     .media-card img {
         width: 100%;
@@ -1194,56 +1761,14 @@
         letter-spacing: 0.08em;
         color: var(--muted, #888);
     }
-    .thumb-preview-btn {
-        position: absolute;
-        top: 0.65rem;
-        right: 0.65rem;
-        width: 26px;
-        height: 26px;
-        border-radius: 999px;
-        border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
-        background: rgba(0, 0, 0, 0.58);
-        color: #f6f8ff;
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        z-index: 2;
-        cursor: pointer;
-        padding: 0;
-        opacity: 0.9;
-    }
-    .thumb-preview-btn svg {
-        width: 14px;
-        height: 14px;
-        display: block;
-    }
-    .thumb-preview-btn:hover {
-        border-color: var(--accent);
-        color: white;
-        background: color-mix(in srgb, var(--accent) 42%, rgba(0, 0, 0, 0.5));
-        opacity: 1;
-    }
-    .thumb-resolution-badge {
-        position: absolute;
-        top: 0.65rem;
-        left: 0.65rem;
-        z-index: 2;
-        font-size: 0.68rem;
-        line-height: 1;
-        padding: 0.22rem 0.38rem;
-        border-radius: 999px;
-        border: 1px solid color-mix(in srgb, var(--border) 75%, transparent);
-        background: rgba(0, 0, 0, 0.62);
-        color: #f2f5ff;
-        font-variant-numeric: tabular-nums;
-        pointer-events: none;
-    }
     .meta {
-        margin-top: 0.4rem;
         display: flex;
         flex-direction: column;
         gap: 0.2rem;
         min-width: 0;
+    }
+    .media-card-wrap > .meta {
+        margin-top: 0;
     }
     .name,
     .sub {
@@ -1390,23 +1915,8 @@
             grid-template-columns: repeat(2, minmax(0, 1fr));
             gap: 0.55rem;
         }
-        .media-card {
+        .media-card-wrap .media-card {
             padding: 0.32rem;
-        }
-        .thumb-preview-btn {
-            width: 34px;
-            height: 34px;
-            top: 0.45rem;
-            right: 0.45rem;
-        }
-        .thumb-preview-btn svg {
-            width: 17px;
-            height: 17px;
-        }
-        .thumb-resolution-badge {
-            top: 0.45rem;
-            left: 0.45rem;
-            font-size: 0.64rem;
         }
         .name {
             font-size: 0.74rem;

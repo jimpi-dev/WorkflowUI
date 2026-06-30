@@ -825,6 +825,19 @@ def get_run_output_workflowui_embedded(
     }
 
 
+def _input_snapshot_filenames(values: dict) -> set[str]:
+    """Filenames referenced in input snapshot values (strings or string lists)."""
+    names: set[str] = set()
+    for v in values.values():
+        if isinstance(v, str) and v.strip():
+            names.add(v.strip())
+        elif isinstance(v, list):
+            for item in v:
+                if isinstance(item, str) and item.strip():
+                    names.add(item.strip())
+    return names
+
+
 @router.get("/runs/{run_id}/input-media")
 def get_run_input_media(run_id: str, filename: str, db=Depends(get_db), ctx=Depends(require_user)):
     """Serve input media used by a run, guarded by run access checks."""
@@ -838,7 +851,7 @@ def get_run_input_media(run_id: str, filename: str, db=Depends(get_db), ctx=Depe
             snap = json.loads(run_entity.input_snapshot_json)
             values = snap.get("values") if isinstance(snap, dict) else {}
             if isinstance(values, dict):
-                allowed = filename in {str(v) for v in values.values() if isinstance(v, str)}
+                allowed = filename.strip() in _input_snapshot_filenames(values)
         except Exception:
             allowed = False
     if not allowed:

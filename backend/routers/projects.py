@@ -439,6 +439,7 @@ def list_media_browser_images(
     until: int | None = None,
     q: str | None = None,
     favorites_only: bool = False,
+    used_input_filename: str | None = None,
     limit: int = 60,
     offset: int = 0,
     db=Depends(get_db),
@@ -451,6 +452,11 @@ def list_media_browser_images(
     safe_limit = max(1, min(int(limit), 200))
     safe_offset = max(0, int(offset))
     query_text = q.strip() if isinstance(q, str) and q.strip() else None
+    used_in = (used_input_filename or "").strip() if isinstance(used_input_filename, str) else ""
+    if used_in and ("/" in used_in or "\\" in used_in or len(used_in) > 512):
+        raise HTTPException(status_code=400, detail="Invalid used_input_filename")
+    if used_in:
+        source_norm = "generation"
     items, total = run_repo.list_media_browser_images(
         owner_user_id=ctx.user.id if (ctx.auth_enabled and ctx.user) else None,
         auth_enabled=bool(ctx.auth_enabled),
@@ -461,6 +467,7 @@ def list_media_browser_images(
         until_ts=until,
         q=query_text,
         favorites_only=bool(favorites_only),
+        used_input_filename=used_in or None,
         limit=safe_limit,
         offset=safe_offset,
     )
@@ -477,6 +484,7 @@ def list_media_browser_projects(
     until: int | None = None,
     q: str | None = None,
     favorites_only: bool = False,
+    used_input_filename: str | None = None,
     db=Depends(get_db),
     ctx=Depends(require_user),
 ):
@@ -485,6 +493,11 @@ def list_media_browser_projects(
     if source_norm not in {"all", "generation", "input"}:
         raise HTTPException(status_code=400, detail="source must be one of: all, generation, input")
     query_text = q.strip() if isinstance(q, str) and q.strip() else None
+    used_in = (used_input_filename or "").strip() if isinstance(used_input_filename, str) else ""
+    if used_in and ("/" in used_in or "\\" in used_in or len(used_in) > 512):
+        raise HTTPException(status_code=400, detail="Invalid used_input_filename")
+    if used_in:
+        source_norm = "generation"
     items = run_repo.list_media_browser_projects(
         owner_user_id=ctx.user.id if (ctx.auth_enabled and ctx.user) else None,
         auth_enabled=bool(ctx.auth_enabled),
@@ -494,6 +507,7 @@ def list_media_browser_projects(
         until_ts=until,
         q=query_text,
         favorites_only=bool(favorites_only),
+        used_input_filename=used_in or None,
     )
     return {"items": items}
 

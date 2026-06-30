@@ -4,12 +4,15 @@
 	import { browser } from '$app/environment';
 	import { invalidateAll } from '$app/navigation';
 	import SendToAppDialog from '$lib/components/SendToAppDialog.svelte';
+	import { pushRunOutputToGenVault } from '$lib/api/genvault';
+	import { toastError, toastSuccess } from '$lib/stores/toast';
 
 	let { data } = $props();
 
 	let sendToAppOutputIndex = $state<number | null>(null);
 	let isMobile = $state(false);
 	let removingOutputIndex = $state<number | null>(null);
+	let pushingOutputIndex = $state<number | null>(null);
 
 	const apiBase = getApiBase() || '';
 
@@ -51,6 +54,19 @@
 			}
 		} finally {
 			removingOutputIndex = null;
+		}
+	}
+
+	async function sendOutputToGenVault(imageIndex: number) {
+		if (!data.run) return;
+		pushingOutputIndex = imageIndex;
+		try {
+			const res = await pushRunOutputToGenVault(data.run.id, imageIndex);
+			toastSuccess(res?.uploaded?.duplicate ? 'Bild ist bereits in GenVault gespeichert.' : 'An GenVault gesendet.');
+		} catch (e) {
+			toastError(e instanceof Error ? e.message : 'Send to GenVault failed.');
+		} finally {
+			pushingOutputIndex = null;
 		}
 	}
 
@@ -242,8 +258,25 @@
 								{:else}
 									<img src={imageUrl(img, data.run.id)} alt="Output {i + 1}" onerror={() => markImageLoadFailed(i)} />
 								{/if}
+								{#if pushingOutputIndex === i}
+									<div class="genvault-transfer-overlay" aria-hidden="true">
+										<span class="genvault-transfer-label">Sending to GenVault…</span>
+										<span class="genvault-transfer-bar"><span class="genvault-transfer-bar-fill"></span></span>
+									</div>
+								{/if}
 								{#if !imageLoadFailed.has(imageKey(i))}
-									<button type="button" class="send-to-app-link send-to-app-btn" title="Send to App" onclick={() => sendToAppOutputIndex = i}>Send to App</button>
+									<div class="output-actions-row">
+										<button type="button" class="send-to-app-link send-to-app-btn" title="Send to App" onclick={() => sendToAppOutputIndex = i}>Send to App</button>
+										<button
+											type="button"
+											class="send-to-app-link send-to-app-btn"
+											title="Send to GenVault"
+											disabled={pushingOutputIndex === i}
+											onclick={() => void sendOutputToGenVault(i)}
+										>
+											{pushingOutputIndex === i ? 'Sending…' : 'Send to GenVault'}
+										</button>
+									</div>
 								{/if}
 							</div>
 						{/each}
@@ -324,6 +357,11 @@
 	}
 	.send-to-app-btn:hover {
 		text-decoration: underline;
+	}
+	.output-actions-row {
+		display: flex;
+		gap: 0.6rem;
+		align-items: center;
 	}
 	.output-deleted-placeholder {
 		display: flex;
@@ -474,12 +512,59 @@
 		border-radius: 8px;
 		overflow: hidden;
 		background: var(--input-bg);
+		position: relative;
 	}
 	.output-img-wrap img,
 	.output-img-wrap video {
 		width: 100%;
 		height: 100%;
 		object-fit: contain;
+	}
+	.genvault-transfer-overlay {
+		position: absolute;
+		inset: 0;
+		z-index: 3;
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		justify-content: center;
+		gap: 0.5rem;
+		background: color-mix(in srgb, rgba(10, 12, 20, 0.72) 85%, transparent);
+		backdrop-filter: blur(1.5px);
+		pointer-events: none;
+	}
+	.genvault-transfer-label {
+		font-size: 0.74rem;
+		font-weight: 600;
+		letter-spacing: 0.02em;
+		color: rgba(255, 255, 255, 0.96);
+		text-shadow: 0 1px 2px rgba(0, 0, 0, 0.7);
+	}
+	.genvault-transfer-bar {
+		width: min(84%, 170px);
+		height: 5px;
+		border-radius: 999px;
+		overflow: hidden;
+		background: rgba(255, 255, 255, 0.22);
+		border: 1px solid rgba(255, 255, 255, 0.25);
+	}
+	.genvault-transfer-bar-fill {
+		display: block;
+		height: 100%;
+		width: 42%;
+		border-radius: 999px;
+		background: linear-gradient(
+			90deg,
+			rgba(255, 255, 255, 0.25) 0%,
+			color-mix(in srgb, var(--accent) 80%, #9fb4ff) 38%,
+			color-mix(in srgb, var(--accent) 65%, #dbe5ff) 62%,
+			rgba(255, 255, 255, 0.2) 100%
+		);
+		animation: genvault-transfer-slide 1.15s ease-in-out infinite;
+	}
+	@keyframes genvault-transfer-slide {
+		0% { transform: translateX(-110%); }
+		100% { transform: translateX(250%); }
 	}
 	.error, .muted {
 		color: var(--text-muted);

@@ -42,6 +42,9 @@ let {
 		onDownload = undefined as ((item: LightboxItem) => void | Promise<void>) | undefined,
 		onMetadata = undefined as ((item: LightboxItem) => void) | undefined,
 		onSendToApp = undefined as ((item: LightboxItem) => void) | undefined,
+		onSendToVault = undefined as ((item: LightboxItem) => void) | undefined,
+		isInVault = undefined as ((item: LightboxItem) => boolean) | undefined,
+		isSendingToVault = undefined as ((item: LightboxItem) => boolean) | undefined,
 		onToggleFavorite = undefined as ((item: LightboxItem) => void) | undefined,
 		isFavorite = undefined as ((item: LightboxItem) => boolean) | undefined,
 		onToggleSelection = undefined as ((item: LightboxItem) => void) | undefined,
@@ -60,6 +63,9 @@ let {
 		onDownload?: (item: LightboxItem) => void | Promise<void>;
 		onMetadata?: (item: LightboxItem) => void;
 		onSendToApp?: (item: LightboxItem) => void;
+		onSendToVault?: (item: LightboxItem) => void;
+		isInVault?: (item: LightboxItem) => boolean;
+		isSendingToVault?: (item: LightboxItem) => boolean;
 		onToggleFavorite?: (item: LightboxItem) => void;
 		isFavorite?: (item: LightboxItem) => boolean;
 		onToggleSelection?: (item: LightboxItem) => void;
@@ -288,7 +294,16 @@ let {
 		zoom = 1;
 	}
 
+	function wheelShouldIgnore(e: WheelEvent): boolean {
+		const t = e.target as HTMLElement | null;
+		if (!t?.closest) return false;
+		return !!t.closest(
+			'.lightbox-carousel, .lightbox-playback-bar, .lightbox-media-actions, .lightbox-controls'
+		);
+	}
+
 	function onWheel(e: WheelEvent) {
+		if (wheelShouldIgnore(e)) return;
 		dismissZoomHint();
 		e.preventDefault();
 		if (zoomMode) {
@@ -547,12 +562,13 @@ let {
 </script>
 
 {#if open}
-	<div class="lightbox" bind:this={lightboxRootEl} role="dialog" aria-modal="true" aria-label={ariaTitle}>
+	<div class="lightbox" bind:this={lightboxRootEl} role="dialog" aria-modal="true" aria-label={ariaTitle} use:wheelAction>
 		<div
 			class="lightbox-backdrop"
 			role="button"
 			tabindex="-1"
 			aria-label="Close viewer"
+			title="Click outside the media to close · Esc"
 			onclick={handleClose}
 			onkeydown={(e) => e.key === 'Enter' && handleClose()}
 		></div>
@@ -601,7 +617,6 @@ let {
 			class:zoom-mode={zoomMode}
 			class:panning={isPanning}
 			bind:this={scrollEl}
-			use:wheelAction
 			role="presentation"
 			ondblclick={(e) => {
 				const t = e.target as HTMLElement;
@@ -655,52 +670,82 @@ let {
 						<path d="M19 12H5M12 19l-7-7 7-7" />
 					</svg>
 				</button>
-				{#if showDeleted}
-					<div class="lightbox-deleted-placeholder">
-						<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M8 6l1 14h6l1-14"/></svg>
-						<span>Deleted</span>
-					</div>
-				{:else if isVideo && currentItem}
-					<video
-						bind:this={videoEl}
-						class="lightbox-media"
-						src={currentItem.url}
-						controls
-						autoplay
-						playsinline
-						loop={videoLoopMode === 'single'}
-						style={videoStyle}
-						onended={onVideoEnded}
-						onerror={() => {
-							loadFailed = true;
+				<div class="lightbox-media-center">
+					<button
+						type="button"
+						class="lightbox-dismiss-sash"
+						aria-label="Close viewer"
+						title="Close · Esc"
+						onclick={(e) => {
+							e.stopPropagation();
+							void handleClose();
 						}}
-					><track kind="captions" /></video>
-				{:else if isAudio && currentItem}
-					<div class="lightbox-audio-wrap">
-						<audio
-							bind:this={audioEl}
-							class="lightbox-media lightbox-audio"
-							src={currentItem.url}
-							controls
-							autoplay
-							onended={onAudioEnded}
-							onerror={() => {
-								loadFailed = true;
-							}}
-						></audio>
+					></button>
+					<div class="lightbox-media-slot">
+						{#if showDeleted}
+							<div class="lightbox-deleted-placeholder">
+								<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M8 6l1 14h6l1-14"/></svg>
+								<span>Deleted</span>
+							</div>
+						{:else if isVideo && currentItem}
+							<video
+								bind:this={videoEl}
+								class="lightbox-media"
+								src={currentItem.url}
+								controls
+								autoplay
+								playsinline
+								loop={videoLoopMode === 'single'}
+								style={videoStyle}
+								onended={onVideoEnded}
+								onerror={() => {
+									loadFailed = true;
+								}}
+							><track kind="captions" /></video>
+						{:else if isAudio && currentItem}
+							<div class="lightbox-audio-wrap">
+								<audio
+									bind:this={audioEl}
+									class="lightbox-media lightbox-audio"
+									src={currentItem.url}
+									controls
+									autoplay
+									onended={onAudioEnded}
+									onerror={() => {
+										loadFailed = true;
+									}}
+								></audio>
+							</div>
+						{:else if currentItem}
+							<img
+								bind:this={imgEl}
+								src={currentItem.url}
+								alt=""
+								draggable="false"
+								style={mediaStyle}
+								onerror={() => {
+									loadFailed = true;
+								}}
+							/>
+						{/if}
+						{#if currentItem && isSendingToVault?.(currentItem)}
+							<div class="lightbox-transfer-overlay" aria-hidden="true">
+								<span class="lightbox-transfer-label">Sending to GenVault…</span>
+								<span class="lightbox-transfer-bar"><span class="lightbox-transfer-bar-fill"></span></span>
+							</div>
+						{/if}
 					</div>
-				{:else if currentItem}
-					<img
-						bind:this={imgEl}
-						src={currentItem.url}
-						alt=""
-						draggable="false"
-						style={mediaStyle}
-						onerror={() => {
-							loadFailed = true;
+					<button
+						type="button"
+						class="lightbox-dismiss-sash"
+						aria-label="Close viewer"
+						title="Close · Esc"
+						onclick={(e) => {
+							e.stopPropagation();
+							void handleClose();
 						}}
-					/>
-				{/if}
+					></button>
+				</div>
 				<button
 					type="button"
 					class="lightbox-nav lightbox-next"
@@ -732,6 +777,9 @@ let {
 			{@const hasRemote = img.hasRemote ?? !img.remote_deleted}
 			{@const hasLocal = img.hasLocal ?? true}
 			{@const showSend = !!onSendToApp && !img.remote_deleted}
+			{@const showSendVault = !!onSendToVault && !img.remote_deleted}
+			{@const inVault = !!isInVault?.(img)}
+			{@const sendingToVault = !!isSendingToVault?.(img)}
 			{@const showDeleteLocal = !!onDeleteLocal && hasLocal}
 			{@const showDeleteRemote = !!onDeleteRemote && hasRemote}
 			{@const showDeleteBoth = !!onDeleteBoth && hasLocal && hasRemote}
@@ -929,6 +977,45 @@ let {
 							</svg>
 						</button>
 					{/if}
+					{#if showSendVault}
+						<button
+							type="button"
+							class="lightbox-media-btn"
+							class:lightbox-media-btn-active={inVault}
+							disabled={sendingToVault}
+							title="Save to GenVault"
+							aria-label="Save to GenVault"
+							onclick={(e) => {
+								e.stopPropagation();
+								onSendToVault?.(img);
+							}}
+						>
+							{#if sendingToVault}
+								<span class="lightbox-send-spinner" aria-hidden="true"></span>
+							{:else}
+								<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+									<rect x="3" y="3" width="18" height="18" rx="2" />
+									<path d="M8 12h8" />
+									<path d="M12 8v8" />
+								</svg>
+							{/if}
+						</button>
+					{/if}
+					<span class="lightbox-media-toolbar-sep" aria-hidden="true"></span>
+					<button
+						type="button"
+						class="lightbox-media-btn lightbox-media-close"
+						title="Close viewer (Esc)"
+						aria-label="Close viewer"
+						onclick={(e) => {
+							e.stopPropagation();
+							void handleClose();
+						}}
+					>
+						<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+							<path d="M18 6L6 18M6 6l12 12" />
+						</svg>
+					</button>
 				</div>
 			</div>
 		{/if}
@@ -1162,6 +1249,65 @@ let {
 	}
 	.lightbox-media-delete-both {
 		color: var(--error, #b91c1c);
+	}
+	.lightbox-media-btn-active {
+		border-color: color-mix(in srgb, var(--accent) 70%, var(--border));
+		background: color-mix(in srgb, var(--accent) 28%, rgba(0, 0, 0, 0.55));
+		color: var(--accent);
+	}
+	.lightbox-send-spinner {
+		width: 14px;
+		height: 14px;
+		border-radius: 50%;
+		border: 2px solid rgba(255, 255, 255, 0.3);
+		border-top-color: rgba(255, 255, 255, 0.95);
+		animation: workflowui-lightbox-spin 0.8s linear infinite;
+	}
+	.lightbox-transfer-overlay {
+		position: absolute;
+		inset: 0;
+		z-index: 8;
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		justify-content: center;
+		gap: 0.45rem;
+		padding: 1rem;
+		background: rgba(10, 12, 20, 0.5);
+		backdrop-filter: blur(5px);
+		pointer-events: none;
+	}
+	.lightbox-transfer-label {
+		font-size: 0.9rem;
+		font-weight: 600;
+		color: rgba(255, 255, 255, 0.96);
+		text-shadow: 0 1px 3px rgba(0, 0, 0, 0.7);
+	}
+	.lightbox-transfer-bar {
+		width: min(68%, 320px);
+		height: 5px;
+		border-radius: 999px;
+		overflow: hidden;
+		background: rgba(255, 255, 255, 0.22);
+		border: 1px solid rgba(255, 255, 255, 0.2);
+	}
+	.lightbox-transfer-bar-fill {
+		display: block;
+		height: 100%;
+		width: 42%;
+		border-radius: 999px;
+		background: linear-gradient(
+			90deg,
+			rgba(255, 255, 255, 0.25) 0%,
+			color-mix(in srgb, var(--accent) 80%, #9fb4ff) 38%,
+			color-mix(in srgb, var(--accent) 65%, #dbe5ff) 62%,
+			rgba(255, 255, 255, 0.2) 100%
+		);
+		animation: lightbox-transfer-slide 1.15s ease-in-out infinite;
+	}
+	@keyframes lightbox-transfer-slide {
+		0% { transform: translateX(-110%); }
+		100% { transform: translateX(250%); }
 	}
 	.lightbox-media-filename {
 		margin-top: 0.15rem;
