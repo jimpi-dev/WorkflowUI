@@ -7,6 +7,7 @@ import { EmptySD3LatentImageSpec } from './EmptySD3LatentImage';
 import { EmptyLatentImageSpec } from './EmptyLatentImage';
 import { SDXLEmptyLatentSizePickerSpec } from './SDXLEmptyLatentSizePicker';
 import { LoadImageSpec } from './LoadImage';
+import { LoadImageMaskSpec } from './LoadImageMask';
 import { CheckpointLoaderSimpleSpec } from './CheckpointLoaderSimple';
 import { CheckpointLoaderSpec } from './CheckpointLoader';
 import { DiffusionModelLoaderSpec } from './DiffusionModelLoader';
@@ -82,6 +83,7 @@ export const NODE_SPECS = {
     EmptyLatentImage: EmptyLatentImageSpec,
     'SDXLEmptyLatentSizePicker+': SDXLEmptyLatentSizePickerSpec,
     LoadImage: LoadImageSpec,
+    LoadImageMask: LoadImageMaskSpec,
     CheckpointLoaderSimple: CheckpointLoaderSimpleSpec,
     CheckpointLoader: CheckpointLoaderSpec,
     DiffusionModelLoader: DiffusionModelLoaderSpec,

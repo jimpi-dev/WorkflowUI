@@ -2,6 +2,7 @@
     import { onDestroy } from 'svelte';
     import { getApiBase } from '$lib/config';
     import MediaBrowserDialog from '$lib/components/MediaBrowserDialog.svelte';
+    import ImageMaskEditorDialog from '$lib/components/ImageMaskEditorDialog.svelte';
     import type { MediaBrowserSelection } from '$lib/types/mediaBrowser';
 
     onDestroy(() => {
@@ -56,12 +57,17 @@
     }
     const displayValue = $derived((overrideDisplayValue != null && overrideDisplayValue !== '') ? overrideDisplayValue : imageValueToString(value));
 
+    const field = $derived(input as { label: string; classType?: string });
+    const classType = $derived(String(field.classType ?? ''));
+    const maskEditorEnabled = $derived(classType === 'LoadImage');
+
     let uploading = $state(false);
     let error = $state<string | null>(null);
     let fileInput: HTMLInputElement;
     let previewUrl = $state('');
     let browserOpen = $state(false);
     let browserSelection = $state<MediaBrowserSelection | null>(null);
+    let maskDialogOpen = $state(false);
     $effect(() => {
         if (!browserSelection) return;
         if (displayValue !== browserSelection.filename) {
@@ -90,6 +96,40 @@
         }
         return `${base}/image?${params.toString()}`;
     });
+
+    const maskSourceHref = $derived(previewUrl || prefilledImageUrl || '');
+
+    async function uploadImageBlob(blob: Blob, filenameHint = 'masked.png') {
+        const apiBase = getApiBase() || '';
+        const form = new FormData();
+        form.append('image', blob, filenameHint);
+        const url = appId ? `${apiBase}/upload_image?app_id=${encodeURIComponent(appId)}` : `${apiBase}/upload_image`;
+        const res = await fetch(url, { method: 'POST', body: form });
+        if (!res.ok) {
+            const text = await res.text();
+            throw new Error(text || `Upload failed (${res.status})`);
+        }
+        const data = await res.json();
+        return (data.name ?? data.filename ?? filenameHint) as string;
+    }
+
+    async function onMaskApply(blob: Blob) {
+        uploading = true;
+        error = null;
+        try {
+            if (previewUrl) URL.revokeObjectURL(previewUrl);
+            previewUrl = URL.createObjectURL(blob);
+            const name = await uploadImageBlob(blob, 'masked.png');
+            value = name;
+            browserSelection = null;
+            onMediaSelection?.(null);
+        } catch (err) {
+            error = err instanceof Error ? err.message : 'Upload failed';
+            throw err;
+        } finally {
+            uploading = false;
+        }
+    }
 
     async function onFileChange(e: Event) {
         const target = e.target as HTMLInputElement;
@@ -162,7 +202,7 @@
 </script>
 
 <label class="image-field">
-    <div class="label">{input.label}</div>
+    <div class="label">{field.label}</div>
     <div class="image-row">
         <div class="file-row">
             <input
@@ -172,7 +212,7 @@
                 onchange={onFileChange}
                 disabled={uploading}
                 class="file-input"
-                aria-label={input.label}
+                aria-label={field.label}
             />
             <button
                 type="button"
@@ -188,6 +228,16 @@
                 disabled={uploading}
                 aria-label="Browse generated media"
             >Browse media</button>
+            {#if maskEditorEnabled}
+                <button
+                    type="button"
+                    class="choose-file-btn"
+                    onclick={() => (maskDialogOpen = true)}
+                    disabled={uploading || !maskSourceHref}
+                    title={!maskSourceHref ? 'Choose or load an image first' : 'Paint inpaint mask (alpha channel)'}
+                    aria-label="Edit alpha mask for ComfyUI Load Image"
+                >Edit mask</button>
+            {/if}
             {#if displayValue}
                 <span class="filename" title={displayValue}>{displayValue}</span>
                 <button type="button" class="clear-btn" onclick={clearImage} title="Clear image">×</button>
@@ -219,6 +269,13 @@
     initialAppId={appId}
     onClose={() => (browserOpen = false)}
     onSelect={chooseFromBrowser}
+/>
+
+<ImageMaskEditorDialog
+    bind:open={maskDialogOpen}
+    imageHref={maskSourceHref}
+    onApply={onMaskApply}
+    onClose={() => (maskDialogOpen = false)}
 />
 
 <style>

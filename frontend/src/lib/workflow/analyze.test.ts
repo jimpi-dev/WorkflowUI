@@ -482,6 +482,24 @@ describe('analyzeWorkflow', () => {
 		expect(imageInputs[1].label).toMatch(/Image 2$/);
 	});
 
+	it('exposes LoadImageMask image and channel inputs', () => {
+		const workflow = {
+			'42': {
+				class_type: 'LoadImageMask',
+				inputs: { image: 'm.png', channel: 'red' },
+				_meta: { title: 'Mask file' }
+			}
+		};
+		const result = analyzeWorkflow(workflow);
+		const img = result.inputs.find((i) => i.field === 'image');
+		const ch = result.inputs.find((i) => i.field === 'channel');
+		expect(img?.type).toBe('image');
+		expect(ch?.type).toBe('select');
+		expect(ch?.options).toEqual(['alpha', 'red', 'green', 'blue']);
+		expect(result.bindings.some((b) => b.key === '42.image' && b.field === 'image')).toBe(true);
+		expect(result.bindings.some((b) => b.key === '42.channel' && b.field === 'channel')).toBe(true);
+	});
+
 	it('detects VAEDecode as internal node (no input or output fields)', () => {
 		const workflow = {
 			'17': {

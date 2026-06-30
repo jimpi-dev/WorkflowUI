@@ -188,6 +188,16 @@ NODE_SPECS: dict[str, dict[str, Any]] = {
             "image": {"type": "image", "label": "Image"},
         }
     },
+    "LoadImageMask": {
+        "fixedInputs": {
+            "image": {"type": "image", "label": "Image"},
+            "channel": {
+                "type": "select",
+                "label": "Channel",
+                "options": ["alpha", "red", "green", "blue"],
+            },
+        }
+    },
     "CheckpointLoaderSimple": {
         "fixedInputs": {
             "ckpt_name": {"type": "select", "label": "Checkpoint", "optionSource": "checkpoints"},
