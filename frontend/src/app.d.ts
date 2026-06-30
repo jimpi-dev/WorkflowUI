@@ -9,6 +9,7 @@ declare global {
 		appName: string;
 		githubRepoUrl: string;
 		presetsEnabled: boolean;
+		genvaultEnabled: boolean;
 	};
 }
 

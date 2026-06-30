@@ -26,6 +26,7 @@ function loadAppConfig(): {
 	appName: string;
 	githubRepoUrl: string;
 	presetsEnabled: boolean;
+	genvaultEnabled: boolean;
 } {
 	const packageVersion = loadPackageVersion();
 	const defaultConfig = {
@@ -34,7 +35,8 @@ function loadAppConfig(): {
 		version: packageVersion,
 		appName: 'WorkflowUI by Jimpi',
 		githubRepoUrl: 'https://github.com/jimpi-dev/WorkflowUI/',
-		presetsEnabled: false
+		presetsEnabled: false,
+		genvaultEnabled: true
 	};
 	try {
 		const configPath = path.resolve(__dirname, '../app.config.json');
@@ -46,6 +48,7 @@ function loadAppConfig(): {
 			appName: string;
 			githubRepoUrl: string;
 			presetsEnabled: boolean;
+			genvaultEnabled: boolean;
 		}>;
 		return {
 			ssr: parsed.ssr ?? defaultConfig.ssr,
@@ -58,7 +61,8 @@ function loadAppConfig(): {
 			version: packageVersion,
 			appName: typeof parsed.appName === 'string' ? parsed.appName : defaultConfig.appName,
 			githubRepoUrl: typeof parsed.githubRepoUrl === 'string' ? parsed.githubRepoUrl : defaultConfig.githubRepoUrl,
-			presetsEnabled: parsed.presetsEnabled ?? defaultConfig.presetsEnabled
+			presetsEnabled: parsed.presetsEnabled ?? defaultConfig.presetsEnabled,
+			genvaultEnabled: parsed.genvaultEnabled ?? defaultConfig.genvaultEnabled
 		};
 	} catch {
 		return defaultConfig;

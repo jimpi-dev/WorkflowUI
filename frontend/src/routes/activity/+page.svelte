@@ -2,20 +2,39 @@
 	import { browser } from '$app/environment';
 	import { goto } from '$app/navigation';
 	import { onDestroy } from 'svelte';
+	import { get } from 'svelte/store';
 	import { getApiBase } from '$lib/config';
-	import { THUMB_SCALE_MAX, THUMB_SCALE_MIN, getThumbFitModeCookie, getThumbSizeCookie, setThumbFitModeCookie, setThumbSizeCookie, getThumbShowFilenameCookie, setThumbShowFilenameCookie, getSkipDeleteConfirmCookie, setSkipDeleteConfirmCookie, type ThumbFitMode } from '$lib/cookie';
+	import { THUMB_SCALE_MAX, THUMB_SCALE_MIN, getThumbFitModeCookie, getThumbSizeCookie, setThumbFitModeCookie, setThumbSizeCookie, getThumbShowFilenameCookie, setThumbShowFilenameCookie, getSkipDeleteConfirmCookie, setSkipDeleteConfirmCookie, type ThumbFitMode, type DeleteConfirmKey } from '$lib/cookie';
 	import { appBooting } from '$lib/stores/appBooting';
-	import { cancelRun, getQueue, getRecentRuns, type QueueItem, type RecentRunItem } from '$lib/queueApi';
+	import { cancelRun, getRecentRuns, type QueueItem, type RecentRunItem } from '$lib/queueApi';
+	import { notifyQueueChanged } from '$lib/queueNotify';
+	import { queueState, queueItemCount } from '$lib/stores/queueState';
 	import RunAppBadge from '$lib/components/RunAppBadge.svelte';
 	import RunHeaderActions from '$lib/components/RunHeaderActions.svelte';
 	import ThumbnailOverlay from '$lib/components/ThumbnailOverlay.svelte';
+	import ThumbnailDeletingOverlay from '$lib/components/ThumbnailDeletingOverlay.svelte';
+	import { collectRunOutputKeys, deleteStaggerIndex, type ThumbDeleteKind } from '$lib/thumbDeleting';
 	import RunMetadataPanel from '$lib/components/RunMetadataPanel.svelte';
 	import SendToAppDialog from '$lib/components/SendToAppDialog.svelte';
 	import LightboxViewer, { type LightboxItem } from '$lib/components/LightboxViewer.svelte';
 	import ConfirmDeleteDialog from '$lib/components/ConfirmDeleteDialog.svelte';
 	import InfiniteScrollLoadMore from '$lib/components/InfiniteScrollLoadMore.svelte';
 	import { genVaultExistsByRunOutputs, pushRunOutputToGenVault } from '$lib/api/genvault';
+	import { createGenVaultExistsPoller, type GenVaultExistsPoller } from '$lib/genvault/existsPoller';
+	import { genvaultEnabled } from '$lib/stores/genvaultEnabled';
 	import { toastError, toastSuccess } from '$lib/stores/toast';
+	import {
+		favoritesListChanged,
+		filterFavoritesForDeletedRuns,
+		isOutputFavorite as isOutputFavoriteLib,
+		migrateFavoritesToStable,
+		parseFavoriteEntry,
+		pruneStaleProjectFavorites,
+		remapFavoritesAfterOutputDelete,
+		runHasFavoritedOutput as runHasFavoritedOutputLib,
+		toggleOutputFavoriteEntries,
+		type RunWithImages,
+	} from '$lib/favorites';
 
 	type ProjectOption = { id: string; name: string; headerColor?: string | null };
 
@@ -63,12 +82,11 @@
 
 	const apiBase = getApiBase() || '';
 	const PAGE_SIZE = 30;
-	const QUEUE_POLL_MS = 3000;
 	const RECENT_POLL_MS = 8000;
 
-	let queue = $state<{ running: QueueItem | null; queued: QueueItem[]; processing_halted: boolean } | null>(null);
-	let queueLoading = $state(true);
-	let queueError = $state<string | null>(null);
+	const queue = $derived($queueState.queue);
+	const queueLoading = $derived($queueState.loading);
+	const queueError = $derived($queueState.error);
 
 	let recentRuns = $state<ActivityRun[]>([]);
 	let totalRecent = $state(0);
@@ -104,6 +122,15 @@
 	let lightboxImages = $state<LightboxItem[]>([]);
 	let lightboxIndex = $state(0);
 	let lightboxGroupId = $state<string | null>(null);
+	let lightboxDeletePending = $state<
+		| null
+		| {
+				item: LightboxItem;
+				message: string;
+				confirmLabel: string;
+				action: DeleteConfirmKey;
+		  }
+	>(null);
 	let playingVideoThumbKey = $state<string | null>(null);
 	let playingVideoThumbReady = $state(false);
 	let selectedInGroup = $state<Record<string, string[]>>({});
@@ -115,15 +142,13 @@
 	let deleteRunGroupPending = $state<ActivityGroup | null>(null);
 	let pushingGenVaultKeys = $state<Set<string>>(new Set());
 	let outputInVault = $state<Record<string, boolean>>({});
-	let genVaultStatusTimer: ReturnType<typeof setTimeout> | null = null;
+	let genVaultExistsPoller = $state<GenVaultExistsPoller | null>(null);
 
-	let queuePollId: ReturnType<typeof setInterval> | null = null;
 	let recentPollId: ReturnType<typeof setInterval> | null = null;
-	let queueAbort: AbortController | null = null;
 	let recentAbort: AbortController | null = null;
 	let projectsAbort: AbortController | null = null;
 
-	const activeCount = $derived((queue?.running ? 1 : 0) + (queue?.queued?.length ?? 0));
+	const activeCount = $derived(queueItemCount(queue));
 	const hasMoreRecent = $derived(recentRuns.length < totalRecent);
 	const filteredProjectOptions = $derived.by(() => {
 		const q = projectPickerSearch.trim().toLowerCase();
@@ -189,18 +214,35 @@
 	}
 
 	$effect(() => {
-		nowGroups;
-		recentGroups;
-		if (genVaultStatusTimer) clearTimeout(genVaultStatusTimer);
-		genVaultStatusTimer = setTimeout(() => {
-			void refreshGenVaultStatusForActivity();
-		}, 180);
-		return () => {
-			if (genVaultStatusTimer) {
-				clearTimeout(genVaultStatusTimer);
-				genVaultStatusTimer = null;
+		if (!$genvaultEnabled) {
+			genVaultExistsPoller?.destroy();
+			genVaultExistsPoller = null;
+			return;
+		}
+		if (!genVaultExistsPoller) {
+			genVaultExistsPoller = createGenVaultExistsPoller(
+				refreshGenVaultStatusForActivity,
+				() => get(genvaultEnabled)
+			);
+		}
+		const keys: string[] = [];
+		const seen = new Set<string>();
+		for (const group of [...nowGroups, ...recentGroups]) {
+			for (const run of group.runs ?? []) {
+				for (const [origI] of (run.images ?? []).entries()) {
+					const key = `${run.id}:${origI}`;
+					if (seen.has(key)) continue;
+					seen.add(key);
+					keys.push(key);
+				}
 			}
-		};
+		}
+		genVaultExistsPoller.notifyKeys(keys);
+	});
+
+	onDestroy(() => {
+		genVaultExistsPoller?.destroy();
+		genVaultExistsPoller = null;
 	});
 
 	function normalizeRecent(r: RecentRunItem): ActivityRun {
@@ -373,6 +415,11 @@
 		};
 	}
 
+	function projectPillTitle(projectId: string | null, projectTitle: string | null): string {
+		const { name } = getProjectInfo(projectId, projectTitle);
+		return projectId ? `Open project "${name}" in new tab` : `Project: ${name}`;
+	}
+
 	function imageKey(runId: string, index: number) {
 		return `${runId}_${index}`;
 	}
@@ -414,18 +461,6 @@
 		return undefined;
 	}
 
-	function outputFavoriteKey(runId: string, outputIndex: number): string {
-		return `${runId}:${outputIndex}`;
-	}
-
-	function parseFavoriteEntry(entry: string): { runId: string; outputIndex: number | null } {
-		const lastColon = entry.lastIndexOf(':');
-		if (lastColon === -1) return { runId: entry, outputIndex: null };
-		const suffix = entry.slice(lastColon + 1);
-		if (!/^\d+$/.test(suffix)) return { runId: entry, outputIndex: null };
-		return { runId: entry.slice(0, lastColon), outputIndex: parseInt(suffix, 10) };
-	}
-
 	function runHasDisplayableOutputs(run: ActivityRun): boolean {
 		const imgs = run.images ?? [];
 		return imgs.some((item) => {
@@ -443,52 +478,50 @@
 		return run.local_storage_status === 'saved' || run.local_storage_status === 'partial';
 	}
 
+	function favOutputDisplayable(run: RunWithImages, index: number): boolean {
+		return outputIndexIsDisplayable(run as ActivityRun, index);
+	}
+
+	function displayableOutputIndices(run: ActivityRun): number[] {
+		const imgs = run.images ?? [];
+		const out: number[] = [];
+		for (let i = 0; i < imgs.length; i++) {
+			if (outputIndexIsDisplayable(run, i)) out.push(i);
+		}
+		return out;
+	}
+
 	function isOutputFavorite(runId: string, outputIndex: number): boolean {
-		if (favorites.has(outputFavoriteKey(runId, outputIndex))) return true;
-		if (favorites.has(runId)) return true;
-		return false;
+		const run = findRunById(runId);
+		if (!run) return false;
+		return isOutputFavoriteLib(favorites, runId, outputIndex, run);
 	}
 
 	function runHasFavoritedOutput(run: ActivityRun): boolean {
-		if (!runHasDisplayableOutputs(run)) return false;
-		if (favorites.has(run.id)) return true;
-		const n = run.images?.length ?? 0;
-		for (let i = 0; i < n; i++) {
-			if (!outputIndexIsDisplayable(run, i)) continue;
-			if (favorites.has(outputFavoriteKey(run.id, i))) return true;
-		}
-		return false;
+		return runHasFavoritedOutputLib(favorites, run, favOutputDisplayable);
+	}
+
+	function nonFavoriteOutputIndices(run: ActivityRun): number[] {
+		return displayableOutputIndices(run).filter((i) => !isOutputFavorite(run.id, i));
+	}
+
+	function groupHasDeletableNonFavorites(group: ActivityGroup): boolean {
+		return group.runs.some((r) => {
+			if (!runHasDisplayableOutputs(r)) return false;
+			if (!runHasFavoritedOutput(r)) return true;
+			return nonFavoriteOutputIndices(r).length > 0;
+		});
 	}
 
 	function pruneStaleRunFavoritesForGroup(runsToCheck: ActivityRun[]) {
-		const toRemove = new Set<string>();
-		const idSet = new Set(runsToCheck.map((r) => r.id));
-		for (const r of runsToCheck) {
-			if (favorites.has(r.id) && !runHasDisplayableOutputs(r)) toRemove.add(r.id);
-			const n = r.images?.length ?? 0;
-			for (let i = 0; i < n; i++) {
-				const k = outputFavoriteKey(r.id, i);
-				if (favorites.has(k) && !outputIndexIsDisplayable(r, i)) toRemove.add(k);
-			}
-		}
-		for (const ent of favorites) {
-			const p = parseFavoriteEntry(ent);
-			if (p.outputIndex == null) continue;
-			if (!idSet.has(p.runId)) continue;
-			const r = runsToCheck.find((x) => x.id === p.runId);
-			if (!r) continue;
-			const n = r.images?.length ?? 0;
-			if (p.outputIndex < 0 || p.outputIndex >= n || !outputIndexIsDisplayable(r, p.outputIndex)) {
-				toRemove.add(ent);
-			}
-		}
-		if (!toRemove.size) return;
-		favorites = new Set([...favorites].filter((e) => !toRemove.has(e)));
+		const next = pruneStaleProjectFavorites([...favorites], runsToCheck, favOutputDisplayable);
+		if (!favoritesListChanged([...favorites], next)) return;
+		favorites = new Set(next);
 	}
 
 	async function persistFavoritesAfterDeletedRuns(deletedIds: Set<string>, affectedRuns: ActivityRun[]) {
 		if (!deletedIds.size) return;
-		favorites = new Set([...favorites].filter((ent) => !deletedIds.has(parseFavoriteEntry(ent).runId)));
+		favorites = new Set(filterFavoritesForDeletedRuns([...favorites], deletedIds));
 
 		const projectIds = new Set<string>();
 		for (const r of affectedRuns) {
@@ -497,7 +530,7 @@
 		for (const projectId of projectIds) {
 			try {
 				const entry = await ensureProjectMetadata(projectId);
-				const nextFav = entry.favorites.filter((ent) => !deletedIds.has(parseFavoriteEntry(ent).runId));
+				const nextFav = filterFavoritesForDeletedRuns(entry.favorites, deletedIds);
 				if (nextFav.length === entry.favorites.length) continue;
 				const nextMeta = { ...entry.metadata, favorites: nextFav };
 				const res = await fetch(`${apiBase}/projects/${projectId}`, {
@@ -525,6 +558,103 @@
 		return [...next];
 	}
 
+	function outputKeysForRun(run: ActivityRun, indices?: number[]): string[] {
+		const idx = indices ?? displayableOutputIndices(run);
+		return idx.map((i) => imageKey(run.id, i));
+	}
+
+	function markThumbOutputsDeleting(
+		runs: ActivityRun[],
+		runIds: string[],
+		kind: ThumbDeleteKind,
+		indicesByRun?: (runId: string) => number[] | undefined
+	): string[] {
+		const keys = collectRunOutputKeys(runs, runIds, (runId) => {
+			const custom = indicesByRun?.(runId);
+			if (custom) return custom;
+			const run = runs.find((r) => r.id === runId);
+			return run ? displayableOutputIndices(run) : [];
+		});
+		if (kind === 'remote') deletingImageKeys = markDeleting(deletingImageKeys, keys);
+		else if (kind === 'local') deletingLocalImageKeys = markDeleting(deletingLocalImageKeys, keys);
+		else deletingBothImageKeys = markDeleting(deletingBothImageKeys, keys);
+		return keys;
+	}
+
+	function unmarkThumbOutputsDeleting(keys: string[], kind: ThumbDeleteKind) {
+		if (!keys.length) return;
+		if (kind === 'remote') deletingImageKeys = unmarkDeleting(deletingImageKeys, keys);
+		else if (kind === 'local') deletingLocalImageKeys = unmarkDeleting(deletingLocalImageKeys, keys);
+		else deletingBothImageKeys = unmarkDeleting(deletingBothImageKeys, keys);
+	}
+
+	function thumbDeletingKindForOutput(
+		runId: string,
+		key: string
+	): ThumbDeleteKind | 'run' | null {
+		if (deletingBothImageKeys.includes(key)) return 'both';
+		if (deletingLocalImageKeys.includes(key)) return 'local';
+		if (deletingImageKeys.includes(key)) return 'remote';
+		if (deletingRunIds.includes(runId)) return 'run';
+		return null;
+	}
+
+	function lightboxCarouselDeletingKind(item: LightboxItem): ThumbDeleteKind | null {
+		if (!item.runId) return null;
+		const kind = thumbDeletingKindForOutput(item.runId, item.id);
+		return kind === 'run' ? 'both' : kind;
+	}
+
+	function lightboxCarouselDeleteStagger(item: LightboxItem): number {
+		if (!lightboxGroupId || !item.runId || item.outputIndex == null) return 0;
+		const group = findLightboxGroup(lightboxGroupId);
+		if (!group) return 0;
+		return deleteStaggerIndex(group.runs, item.runId, item.outputIndex, favOutputDisplayable);
+	}
+
+	async function persistFavoritesRemapAfterOutputDelete(
+		runId: string,
+		deletedIndices: number[],
+		runBefore: ActivityRun
+	) {
+		const migratedGlobal = remapFavoritesAfterOutputDelete(
+			[...favorites],
+			runId,
+			deletedIndices,
+			runBefore.images ?? [],
+			findRunById
+		);
+		if (!favoritesListChanged([...favorites], migratedGlobal)) return;
+		favorites = new Set(migratedGlobal);
+
+		const projectId = runBefore.project_id;
+		if (!projectId) return;
+		try {
+			const entry = await ensureProjectMetadata(projectId);
+			const nextFav = remapFavoritesAfterOutputDelete(
+				entry.favorites,
+				runId,
+				deletedIndices,
+				runBefore.images ?? [],
+				findRunById
+			);
+			if (!favoritesListChanged(entry.favorites, nextFav)) return;
+			const nextMeta = { ...entry.metadata, favorites: nextFav };
+			const res = await fetch(`${apiBase}/projects/${projectId}`, {
+				method: 'PATCH',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ metadata: nextMeta })
+			});
+			if (!res.ok) return;
+			projectMetadataCache = {
+				...projectMetadataCache,
+				[projectId]: { metadata: nextMeta, favorites: nextFav }
+			};
+		} catch {
+			/* ignore */
+		}
+	}
+
 	async function ensureProjectMetadata(projectId: string): Promise<{ metadata: Record<string, unknown>; favorites: string[] }> {
 		const cached = projectMetadataCache[projectId];
 		if (cached) return cached;
@@ -532,28 +662,58 @@
 		const data = await res.json().catch(() => ({}));
 		const metadata = data?.metadata && typeof data.metadata === 'object' ? (data.metadata as Record<string, unknown>) : {};
 		const fav = Array.isArray(metadata.favorites) ? metadata.favorites.map((x) => String(x)) : [];
-		const entry = { metadata, favorites: fav };
+		const migrated = migrateFavoritesToStable(fav, findRunById);
+		let favoritesOut = migrated;
+		let metaOut: Record<string, unknown> = metadata;
+		if (favoritesListChanged(fav, migrated)) {
+			metaOut = { ...metadata, favorites: migrated };
+			try {
+				const res = await fetch(`${apiBase}/projects/${projectId}`, {
+					method: 'PATCH',
+					headers: { 'Content-Type': 'application/json' },
+					body: JSON.stringify({ metadata: metaOut })
+				});
+				if (!res.ok) {
+					favoritesOut = fav;
+					metaOut = metadata;
+				}
+			} catch {
+				favoritesOut = fav;
+				metaOut = metadata;
+			}
+		}
+		const entry = { metadata: metaOut, favorites: favoritesOut };
 		projectMetadataCache = { ...projectMetadataCache, [projectId]: entry };
-		if (fav.length) favorites = new Set([...favorites, ...fav]);
+		if (favoritesOut.length) favorites = new Set([...favorites, ...favoritesOut]);
 		return entry;
 	}
 
-	async function toggleFavorite(run: ActivityRun) {
-		if (!run.project_id) return;
-		const projectId = run.project_id;
-		const runId = run.id;
+	async function toggleOutputFavorite(runId: string, outputIndex: number, run?: ActivityRun) {
+		const r = run ?? findRunById(runId);
+		if (!r?.project_id) return;
+		const projectId = r.project_id;
 		const before = new Set(favorites);
-		const next = new Set(before);
-		if (next.has(runId)) next.delete(runId);
-		else next.add(runId);
-		favorites = next;
+		const toggled = toggleOutputFavoriteEntries(
+			[...favorites].filter((ent) => parseFavoriteEntry(ent).runId === runId),
+			runId,
+			outputIndex,
+			r,
+			displayableOutputIndices(r)
+		);
+		const next = [
+			...[...favorites].filter((ent) => parseFavoriteEntry(ent).runId !== runId),
+			...toggled
+		];
+		const migrated = migrateFavoritesToStable(next, findRunById);
+		favorites = new Set(migrated);
 		try {
 			const entry = await ensureProjectMetadata(projectId);
-			const nextFav = Array.from(
-				new Set([
-					...entry.favorites.filter((id) => id !== runId),
-					...(next.has(runId) ? [runId] : [])
-				])
+			const nextFav = migrateFavoritesToStable(
+				[
+					...entry.favorites.filter((ent) => parseFavoriteEntry(ent).runId !== runId),
+					...migrated.filter((ent) => parseFavoriteEntry(ent).runId === runId)
+				],
+				findRunById
 			);
 			const nextMeta = { ...entry.metadata, favorites: nextFav };
 			const res = await fetch(`${apiBase}/projects/${projectId}`, {
@@ -613,6 +773,53 @@
 		lightboxOpen = true;
 	}
 
+	function findLightboxGroup(groupId: string | null): ActivityGroup | undefined {
+		if (!groupId) return undefined;
+		return nowGroups.find((g) => g.groupId === groupId) ?? recentGroups.find((g) => g.groupId === groupId);
+	}
+
+	function findLightboxItemIndex(items: LightboxItem[], anchor: LightboxItem | null | undefined): number {
+		if (!anchor?.runId) return -1;
+		if (anchor.filename) {
+			const byFilename = items.findIndex(
+				(x) => x.runId === anchor.runId && x.filename === anchor.filename
+			);
+			if (byFilename >= 0) return byFilename;
+		}
+		return items.findIndex((x) => x.id === anchor.id);
+	}
+
+	function refreshLightboxImagesFromGroup() {
+		if (!lightboxOpen || lightboxGroupId == null) return;
+		const group = findLightboxGroup(lightboxGroupId);
+		if (!group) return;
+		const anchor = lightboxImages[lightboxIndex] ?? lightboxImages[0] ?? null;
+		const selected = new Set(selectedInGroup[group.groupId] ?? []);
+		const full = buildGroupImageList(group);
+		const fresh = selected.size ? full.filter((img) => selected.has(img.id)) : full;
+		const list = fresh.length ? fresh : full;
+		if (!list.length) {
+			lightboxImages = [];
+			lightboxIndex = 0;
+			closeLightbox();
+			return;
+		}
+		let nextIndex = findLightboxItemIndex(list, anchor);
+		if (nextIndex < 0) nextIndex = Math.min(lightboxIndex, list.length - 1);
+		lightboxImages = list;
+		lightboxIndex = Math.max(0, nextIndex);
+	}
+
+	function advanceLightboxPastRemovingItem(item: LightboxItem) {
+		const currentIdx = lightboxImages.findIndex((x) => x.id === item.id);
+		if (currentIdx < 0 || lightboxIndex !== currentIdx) return;
+		if (lightboxImages.length <= 1) {
+			closeLightbox();
+			return;
+		}
+		lightboxIndex = currentIdx >= lightboxImages.length - 1 ? currentIdx - 1 : currentIdx + 1;
+	}
+
 	function closeLightbox() {
 		lightboxOpen = false;
 		lightboxGroupId = null;
@@ -632,18 +839,23 @@
 	}
 
 	async function deleteRemoteImage(runId: string, imageIndex: number) {
+		const runBefore = findRunById(runId);
 		const key = imageKey(runId, imageIndex);
 		deletingImageKeys = markDeleting(deletingImageKeys, [key]);
 		try {
 			const res = await fetch(`${apiBase}/runs/${runId}/delete-remote-image/${imageIndex}`, { method: 'POST' });
 			const data = await res.json().catch(() => ({}));
-			if (res.ok) mergeUpdatedRuns(data.updated_runs);
+			if (res.ok) {
+				mergeUpdatedRuns(data.updated_runs);
+				if (runBefore) await persistFavoritesRemapAfterOutputDelete(runId, [imageIndex], runBefore);
+			}
 		} finally {
 			deletingImageKeys = unmarkDeleting(deletingImageKeys, [key]);
 		}
 	}
 
 	async function deleteLocalImage(runId: string, imageIndex: number) {
+		const runBefore = findRunById(runId);
 		const key = imageKey(runId, imageIndex);
 		deletingLocalImageKeys = markDeleting(deletingLocalImageKeys, [key]);
 		try {
@@ -651,6 +863,7 @@
 			const data = await res.json().catch(() => ({}));
 			if (res.ok) {
 				if (data.updated_runs?.length) mergeUpdatedRuns(data.updated_runs);
+				if (runBefore) await persistFavoritesRemapAfterOutputDelete(runId, [imageIndex], runBefore);
 				updateRunStorage(runId, {
 					local_storage_status: data.local_storage_status ?? null,
 					local_path: data.local_path ?? null
@@ -691,6 +904,10 @@
 			if (!u) return r;
 			return { ...r, ...u, run_group_id: u.run_group_id ?? r.run_group_id };
 		});
+		if (lightboxOpen) {
+			const deletingOpen = lightboxImages.some((img) => lightboxCarouselDeletingKind(img) != null);
+			if (!deletingOpen) refreshLightboxImagesFromGroup();
+		}
 	}
 
 	function getGroupStorageSummary(group: ActivityGroup): { label: string; tone: string } | null {
@@ -836,6 +1053,7 @@
 		}
 		selectedInGroup = { ...selectedInGroup, [group.groupId]: [] };
 		for (const runId of runIds) {
+			const runBefore = findRunById(runId);
 			const indices = byRun[runId];
 			const keys = indices.map((i) => imageKey(runId, i));
 			deletingImageKeys = markDeleting(deletingImageKeys, keys);
@@ -846,7 +1064,10 @@
 					body: JSON.stringify({ indices })
 				});
 				const data = await res.json().catch(() => ({}));
-				if (res.ok) mergeUpdatedRuns(data.updated_runs);
+				if (res.ok) {
+					mergeUpdatedRuns(data.updated_runs);
+					if (runBefore) await persistFavoritesRemapAfterOutputDelete(runId, indices, runBefore);
+				}
 			} finally {
 				deletingImageKeys = unmarkDeleting(deletingImageKeys, keys);
 			}
@@ -862,6 +1083,7 @@
 		}
 		selectedInGroup = { ...selectedInGroup, [group.groupId]: [] };
 		for (const runId of runIds) {
+			const runBefore = findRunById(runId);
 			const indices = byRun[runId];
 			const keys = indices.map((i) => imageKey(runId, i));
 			deletingLocalImageKeys = markDeleting(deletingLocalImageKeys, keys);
@@ -874,6 +1096,7 @@
 				const data = await res.json().catch(() => ({}));
 				if (res.ok) {
 					if (data.updated_runs?.length) mergeUpdatedRuns(data.updated_runs);
+					if (runBefore) await persistFavoritesRemapAfterOutputDelete(runId, indices, runBefore);
 					updateRunStorage(runId, {
 						local_storage_status: data.local_storage_status ?? null,
 						local_path: data.local_path ?? null
@@ -894,6 +1117,7 @@
 		}
 		selectedInGroup = { ...selectedInGroup, [group.groupId]: [] };
 		for (const runId of runIds) {
+			const runBefore = findRunById(runId);
 			const indices = byRun[runId];
 			const keys = indices.map((i) => imageKey(runId, i));
 			deletingBothImageKeys = markDeleting(deletingBothImageKeys, keys);
@@ -904,7 +1128,10 @@
 					body: JSON.stringify({ indices })
 				});
 				const data = await res.json().catch(() => ({}));
-				if (res.ok) mergeUpdatedRuns(data.updated_runs);
+				if (res.ok) {
+					mergeUpdatedRuns(data.updated_runs);
+					if (runBefore) await persistFavoritesRemapAfterOutputDelete(runId, indices, runBefore);
+				}
 			} finally {
 				deletingBothImageKeys = unmarkDeleting(deletingBothImageKeys, keys);
 			}
@@ -916,7 +1143,8 @@
 		if (runIds.length === 0) return;
 		const runIdsSet = new Set(runIds);
 		const affectedRuns = group.runs.filter((r) => runIdsSet.has(r.id));
-		for (const id of runIds) deletingRunIds = [...deletingRunIds, id];
+		const markedKeys = markThumbOutputsDeleting(group.runs, runIds, 'both');
+		deletingRunIds = markDeleting(deletingRunIds, runIds);
 		const deletedIds = new Set<string>();
 		try {
 			for (const runId of runIds) {
@@ -926,12 +1154,12 @@
 					recentRuns = recentRuns.filter((r) => r.id !== data.deleted_run_id);
 					deletedIds.add(data.deleted_run_id);
 				}
-				deletingRunIds = deletingRunIds.filter((id) => id !== runId);
 			}
 			if (deletedIds.size > 0) await persistFavoritesAfterDeletedRuns(deletedIds, affectedRuns);
 		} finally {
-			deletingRunIds = deletingRunIds.filter((id) => !runIds.includes(id));
-			await loadQueue();
+			deletingRunIds = unmarkDeleting(deletingRunIds, runIds);
+			unmarkThumbOutputsDeleting(markedKeys, 'both');
+			notifyQueueChanged();
 			await refreshRecentInPlace(true);
 		}
 	}
@@ -946,14 +1174,51 @@
 		deleteRunGroupPending = group;
 	}
 
+	async function deleteRunGroupNonFavoritesOnly(group: ActivityGroup) {
+		const runsToDeleteFully = group.runs.filter(
+			(r) => runHasDisplayableOutputs(r) && !runHasFavoritedOutput(r)
+		);
+		const runsWithPartialFav = group.runs.filter(
+			(r) => runHasFavoritedOutput(r) && nonFavoriteOutputIndices(r).length > 0
+		);
+		if (runsToDeleteFully.length === 0 && runsWithPartialFav.length === 0) return;
+
+		if (runsToDeleteFully.length > 0) {
+			await deleteRunGroup(
+				group,
+				runsToDeleteFully.map((r) => r.id)
+			);
+		}
+
+		for (const run of runsWithPartialFav) {
+			const indices = nonFavoriteOutputIndices(run);
+			const keys = indices.map((i) => imageKey(run.id, i));
+			deletingBothImageKeys = markDeleting(deletingBothImageKeys, keys);
+			try {
+				const res = await fetch(`${apiBase}/runs/${run.id}/delete-both-images`, {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/json' },
+					body: JSON.stringify({ indices }),
+				});
+				const data = await res.json().catch(() => ({}));
+				if (res.ok) {
+					mergeUpdatedRuns(data.updated_runs);
+					await persistFavoritesRemapAfterOutputDelete(run.id, indices, run);
+				}
+			} finally {
+				deletingBothImageKeys = unmarkDeleting(deletingBothImageKeys, keys);
+			}
+		}
+		notifyQueueChanged();
+		await refreshRecentInPlace(true);
+	}
+
 	async function confirmDeleteRunGroup(mode: 'all' | 'non_favorites') {
 		const group = deleteRunGroupPending;
 		if (!group) return;
 		deleteRunGroupPending = null;
 		if (mode === 'non_favorites') {
-			const runIdsToDelete = group.runs.filter((r) => !runHasFavoritedOutput(r)).map((r) => r.id);
-			if (runIdsToDelete.length === 0) return;
-			await deleteRunGroup(group, runIdsToDelete);
+			await deleteRunGroupNonFavoritesOnly(group);
 		} else {
 			await deleteRunGroup(group);
 		}
@@ -968,7 +1233,7 @@
 				const res = await fetch(`${apiBase}/runs/${run.id}/cancel`, { method: 'POST' });
 				if (res.ok) updateRunStorage(run.id, { status: 'cancelled', error: 'Cancelled' });
 			}
-			await loadQueue();
+			notifyQueueChanged();
 			await refreshRecentInPlace(true);
 		} finally {
 			cancellingGroupIds = cancellingGroupIds.filter((id) => id !== group.groupId);
@@ -981,7 +1246,7 @@
 		retryingGroupIds = [...retryingGroupIds, group.groupId];
 		try {
 			for (const run of toRetry) await fetch(`${apiBase}/runs/${run.id}/retry`, { method: 'POST' });
-			await loadQueue();
+			notifyQueueChanged();
 			await refreshRecentInPlace(true);
 		} finally {
 			retryingGroupIds = retryingGroupIds.filter((id) => id !== group.groupId);
@@ -993,16 +1258,21 @@
 		cancellingRunIds = [...cancellingRunIds, runId];
 		try {
 			await cancelRun(runId);
-			await loadQueue();
+			notifyQueueChanged();
 			await refreshRecentInPlace(true);
 		} finally {
 			cancellingRunIds = cancellingRunIds.filter((id) => id !== runId);
 		}
 	}
 
-	function applyLightboxDeletion(item: LightboxItem) {
-		const currentIdx = lightboxImages.findIndex((x) => x.id === item.id);
-		const nextImages = lightboxImages.filter((x) => x.id !== item.id);
+	function applyLightboxDeletion(_item: LightboxItem) {
+		if (!lightboxOpen) return;
+		if (lightboxGroupId) {
+			refreshLightboxImagesFromGroup();
+			return;
+		}
+		const currentIdx = lightboxImages.findIndex((x) => x.id === _item.id);
+		const nextImages = lightboxImages.filter((x) => x.id !== _item.id);
 		if (!nextImages.length) {
 			lightboxImages = [];
 			lightboxIndex = 0;
@@ -1016,6 +1286,7 @@
 	async function deleteLightboxLocal(item: LightboxItem) {
 		if (!item.runId || item.outputIndex == null) return;
 		const hadRemote = item.hasRemote ?? !item.remote_deleted;
+		if (!hadRemote) advanceLightboxPastRemovingItem(item);
 		await deleteLocalImage(item.runId, item.outputIndex);
 		if (!hadRemote) {
 			applyLightboxDeletion(item);
@@ -1027,11 +1298,13 @@
 			next[idx] = { ...next[idx], hasLocal: false };
 			lightboxImages = next;
 		}
+		refreshLightboxImagesFromGroup();
 	}
 
 	async function deleteLightboxRemote(item: LightboxItem) {
 		if (!item.runId || item.outputIndex == null) return;
 		const hadLocal = item.hasLocal ?? true;
+		if (!hadLocal) advanceLightboxPastRemovingItem(item);
 		await deleteRemoteImage(item.runId, item.outputIndex);
 		if (!hadLocal) {
 			applyLightboxDeletion(item);
@@ -1043,12 +1316,72 @@
 			next[idx] = { ...next[idx], hasRemote: false, remote_deleted: true };
 			lightboxImages = next;
 		}
+		refreshLightboxImagesFromGroup();
 	}
 
 	async function deleteLightboxBoth(item: LightboxItem) {
 		if (!item.runId || item.outputIndex == null) return;
+		advanceLightboxPastRemovingItem(item);
 		const ok = await deleteBothImage(item.runId, item.outputIndex);
 		if (ok) applyLightboxDeletion(item);
+	}
+
+	function proceedLightboxDeletePrompt(item: LightboxItem, kind: 'local' | 'remote' | 'both') {
+		const name = item.filename && item.filename.trim().length ? item.filename : null;
+		if (kind === 'local') {
+			if (getSkipDeleteConfirmCookie('delete_local')) {
+				void deleteLightboxLocal(item);
+				return;
+			}
+			lightboxDeletePending = {
+				item,
+				message: name
+					? `Delete this local file?\n\n'${name}' will be removed from local storage.`
+					: 'Delete this local file from local storage?',
+				confirmLabel: 'Delete local file',
+				action: 'delete_local'
+			};
+			return;
+		}
+		if (kind === 'remote') {
+			if (getSkipDeleteConfirmCookie('delete_remote')) {
+				void deleteLightboxRemote(item);
+				return;
+			}
+			lightboxDeletePending = {
+				item,
+				message: name
+					? `Delete this remote file?\n\n'${name}' will be removed from the ComfyUI server.`
+					: 'Delete this remote file from the ComfyUI server?',
+				confirmLabel: 'Delete remote file',
+				action: 'delete_remote'
+			};
+			return;
+		}
+		if (getSkipDeleteConfirmCookie('delete_all')) {
+			void deleteLightboxBoth(item);
+			return;
+		}
+		lightboxDeletePending = {
+			item,
+			message: name
+				? `Delete this file from local and remote storage?\n\n'${name}' will be removed from local storage and the ComfyUI server.`
+				: 'Delete this file from local storage and the ComfyUI server?',
+			confirmLabel: 'Delete local and remote',
+			action: 'delete_all'
+		};
+	}
+
+	function requestDeleteLightboxLocal(item: LightboxItem) {
+		proceedLightboxDeletePrompt(item, 'local');
+	}
+
+	function requestDeleteLightboxRemote(item: LightboxItem) {
+		proceedLightboxDeletePrompt(item, 'remote');
+	}
+
+	function requestDeleteLightboxBoth(item: LightboxItem) {
+		proceedLightboxDeletePrompt(item, 'both');
 	}
 
 	async function thumbDownloadImage(item: { filename: string; subfolder?: string; type?: string }, runId: string) {
@@ -1095,27 +1428,26 @@
 				if (!projectId) continue;
 				const metadata = p?.metadata && typeof p.metadata === 'object' ? (p.metadata as Record<string, unknown>) : {};
 				const fav = Array.isArray(metadata.favorites) ? metadata.favorites.map((x) => String(x)) : [];
-				if (fav.length) {
-					favorites = new Set([...favorites, ...fav]);
-					projectMetadataCache = { ...projectMetadataCache, [projectId]: { metadata, favorites: fav } };
+				if (!fav.length) continue;
+				const migrated = migrateFavoritesToStable(fav, findRunById);
+				const favoritesOut = migrated;
+				let metaOut = metadata;
+				if (favoritesListChanged(fav, migrated)) {
+					metaOut = { ...metadata, favorites: migrated };
+					void fetch(`${apiBase}/projects/${projectId}`, {
+						method: 'PATCH',
+						headers: { 'Content-Type': 'application/json' },
+						body: JSON.stringify({ metadata: metaOut })
+					}).catch(() => {});
 				}
+				favorites = new Set([...favorites, ...favoritesOut]);
+				projectMetadataCache = {
+					...projectMetadataCache,
+					[projectId]: { metadata: metaOut, favorites: favoritesOut }
+				};
 			}
 		} catch {
 			return;
-		}
-	}
-
-	async function loadQueue() {
-		queueAbort?.abort();
-		queueAbort = new AbortController();
-		queueLoading = queue === null;
-		queueError = null;
-		try {
-			queue = await getQueue();
-		} catch (e) {
-			queueError = e instanceof Error ? e.message : 'Failed to load queue';
-		} finally {
-			queueLoading = false;
 		}
 	}
 
@@ -1192,14 +1524,11 @@
 
 	function startPolling() {
 		if (!browser) return;
-		if (!queuePollId) queuePollId = setInterval(loadQueue, QUEUE_POLL_MS);
 		if (!recentPollId) recentPollId = setInterval(refreshRecentInPlace, RECENT_POLL_MS);
 	}
 
 	function stopPolling() {
-		if (queuePollId) clearInterval(queuePollId);
 		if (recentPollId) clearInterval(recentPollId);
-		queuePollId = null;
 		recentPollId = null;
 	}
 
@@ -1258,13 +1587,11 @@
 	if (browser) {
 		readProjectParam();
 		loadProjects();
-		loadQueue();
 		startPolling();
 	}
 
 	onDestroy(() => {
 		stopPolling();
-		queueAbort?.abort();
 		recentAbort?.abort();
 		projectsAbort?.abort();
 	});
@@ -1344,15 +1671,29 @@
 			<p class="muted">No queued or running generations.</p>
 		{:else}
 			{#each nowGroups as group (group.groupId)}
+				{@const projectInfo = getProjectInfo(group.project_id, group.project_title)}
 				<section class="run-section">
 					<header class="run-header">
 						<div class="run-title">
 							<span class="run-dot"></span>
 							<RunAppBadge appHeaderColor={group.app_header_color ?? undefined} label={group.app_title ?? group.app_slug ?? 'App'} />
-							<span class="group-project-pill" title={`Project: ${getProjectInfo(group.project_id, group.project_title).name}`}>
-								<span class="group-project-dot" style={`background:${getProjectInfo(group.project_id, group.project_title).color ?? 'var(--muted)'}`}></span>
-								{getProjectInfo(group.project_id, group.project_title).name}
-							</span>
+							{#if group.project_id}
+								<a
+									href="/projects/{group.project_id}"
+									class="group-project-pill"
+									title={projectPillTitle(group.project_id, group.project_title)}
+									target="_blank"
+									rel="noopener noreferrer"
+								>
+									<span class="group-project-dot" style={`background:${projectInfo.color ?? 'var(--muted)'}`}></span>
+									{projectInfo.name}
+								</a>
+							{:else}
+								<span class="group-project-pill" title={projectPillTitle(group.project_id, group.project_title)}>
+									<span class="group-project-dot" style={`background:${projectInfo.color ?? 'var(--muted)'}`}></span>
+									{projectInfo.name}
+								</span>
+							{/if}
 							{#if group.status === 'error'}
 								<span class="run-status error">✗ Error</span>
 							{:else if group.status === 'running'}
@@ -1430,15 +1771,22 @@
 								{#each (run.images ?? []) as item, origI (run.id + '_' + origI)}
 									{@const isVideo = mediaType(item) === 'video'}
 									{@const thumbKey = `${group.groupId}-${run.id}-${origI}`}
+									{@const outputKey = imageKey(run.id, origI)}
+									{@const deleteKind = thumbDeletingKindForOutput(run.id, outputKey)}
+									{@const isDeleting = deleteKind != null}
+									{@const deleteStagger = isDeleting ? deleteStaggerIndex(group.runs, run.id, origI, favOutputDisplayable) : 0}
 									{#if !item.remote_deleted}
 									<div
 										class="output-thumb thumb-media"
-										class:thumb-selected={isImageSelected(group.groupId, imageKey(run.id, origI))}
+										class:thumb-selected={isImageSelected(group.groupId, outputKey)}
+										class:output-thumb-deleting={isDeleting}
+										class:output-thumb-deleting-remote={deleteKind === 'remote'}
+										class:output-thumb-deleting-local={deleteKind === 'local'}
 										role="button"
 										tabindex="0"
 										aria-label={`Open output ${origI + 1} in viewer`}
 										onmouseenter={() => {
-											if (!isVideo) return;
+											if (!isVideo || isDeleting) return;
 											playingVideoThumbReady = false;
 											playingVideoThumbKey = thumbKey;
 										}}
@@ -1446,14 +1794,21 @@
 											if (!isVideo || playingVideoThumbKey !== thumbKey) return;
 											playingVideoThumbKey = null;
 										}}
-										onclick={() => openLightboxFromImage(group, run.id, origI)}
+										onclick={() => { if (!isDeleting) openLightboxFromImage(group, run.id, origI); }}
 										onkeydown={(e) => {
+											if (isDeleting) return;
 											if (e.key === 'Enter' || e.key === ' ') {
 												e.preventDefault();
 												openLightboxFromImage(group, run.id, origI);
 											}
 										}}
 									>
+										{#if isDeleting && deleteKind}
+											<ThumbnailDeletingOverlay
+												variant={deleteKind === 'remote' ? 'remote' : deleteKind === 'local' ? 'local' : 'run'}
+												staggerIndex={deleteStagger}
+											/>
+										{/if}
 										<ThumbnailOverlay
 											mediaType={mediaType(item)}
 											seed={run.seed ?? undefined}
@@ -1462,17 +1817,17 @@
 											showFilenameAlways={showThumbFilename}
 											showMetadata={true}
 											isFavorite={isOutputFavorite(run.id, origI)}
-											isSelected={isImageSelected(group.groupId, imageKey(run.id, origI))}
+											isSelected={isImageSelected(group.groupId, outputKey)}
 											showFavorite={true}
 											showSelection={true}
 											showSeed={true}
 											showDownload={true}
 											showSendToApp={true}
-											showSendToVault={true}
+											showSendToVault={$genvaultEnabled}
 											isInVault={!!outputInVault[`${run.id}:${origI}`]}
 											sendingToVault={pushingGenVaultKeys.has(`${run.id}:${origI}`)}
 											onMetadataClick={() => { metadataPanelRunId = run.id; metadataPanelMode = 'output'; }}
-											onToggleFavorite={() => { void toggleFavorite(run); }}
+											onToggleFavorite={() => { void toggleOutputFavorite(run.id, origI, run); }}
 											onToggleSelection={() => toggleImageSelection(group.groupId, imageKey(run.id, origI))}
 											onDownload={() => thumbDownloadImage(item, run.id)}
 											onSendToApp={() => { sendToAppRunId = run.id; sendToAppOutputIndex = origI; sendToAppProjectId = run.project_id; }}
@@ -1586,15 +1941,29 @@
 			<p class="muted">No recent generations match your filters.</p>
 		{:else}
 			{#each recentGroups as group (group.groupId)}
+				{@const projectInfo = getProjectInfo(group.project_id, group.project_title)}
 				<section class="run-section">
 					<header class="run-header">
 						<div class="run-title">
 							<span class="run-dot"></span>
 							<RunAppBadge appHeaderColor={group.app_header_color ?? undefined} label={group.app_title ?? group.app_slug ?? 'App'} />
-							<span class="group-project-pill" title={`Project: ${getProjectInfo(group.project_id, group.project_title).name}`}>
-								<span class="group-project-dot" style={`background:${getProjectInfo(group.project_id, group.project_title).color ?? 'var(--muted)'}`}></span>
-								{getProjectInfo(group.project_id, group.project_title).name}
-							</span>
+							{#if group.project_id}
+								<a
+									href="/projects/{group.project_id}"
+									class="group-project-pill"
+									title={projectPillTitle(group.project_id, group.project_title)}
+									target="_blank"
+									rel="noopener noreferrer"
+								>
+									<span class="group-project-dot" style={`background:${projectInfo.color ?? 'var(--muted)'}`}></span>
+									{projectInfo.name}
+								</a>
+							{:else}
+								<span class="group-project-pill" title={projectPillTitle(group.project_id, group.project_title)}>
+									<span class="group-project-dot" style={`background:${projectInfo.color ?? 'var(--muted)'}`}></span>
+									{projectInfo.name}
+								</span>
+							{/if}
 							{#if group.status === 'error'}
 								<span class="run-status error">✗ Error</span>
 							{:else if group.status === 'running'}
@@ -1646,15 +2015,22 @@
 								{#each (run.images ?? []) as item, origI (run.id + '_' + origI)}
 									{@const isVideo = mediaType(item) === 'video'}
 									{@const thumbKey = `${group.groupId}-${run.id}-${origI}`}
+									{@const outputKey = imageKey(run.id, origI)}
+									{@const deleteKind = thumbDeletingKindForOutput(run.id, outputKey)}
+									{@const isDeleting = deleteKind != null}
+									{@const deleteStagger = isDeleting ? deleteStaggerIndex(group.runs, run.id, origI, favOutputDisplayable) : 0}
 									{#if !item.remote_deleted}
 									<div
 										class="output-thumb thumb-media"
-										class:thumb-selected={isImageSelected(group.groupId, imageKey(run.id, origI))}
+										class:thumb-selected={isImageSelected(group.groupId, outputKey)}
+										class:output-thumb-deleting={isDeleting}
+										class:output-thumb-deleting-remote={deleteKind === 'remote'}
+										class:output-thumb-deleting-local={deleteKind === 'local'}
 										role="button"
 										tabindex="0"
 										aria-label={`Open output ${origI + 1} in viewer`}
 										onmouseenter={() => {
-											if (!isVideo) return;
+											if (!isVideo || isDeleting) return;
 											playingVideoThumbReady = false;
 											playingVideoThumbKey = thumbKey;
 										}}
@@ -1662,14 +2038,21 @@
 											if (!isVideo || playingVideoThumbKey !== thumbKey) return;
 											playingVideoThumbKey = null;
 										}}
-										onclick={() => openLightboxFromImage(group, run.id, origI)}
+										onclick={() => { if (!isDeleting) openLightboxFromImage(group, run.id, origI); }}
 										onkeydown={(e) => {
+											if (isDeleting) return;
 											if (e.key === 'Enter' || e.key === ' ') {
 												e.preventDefault();
 												openLightboxFromImage(group, run.id, origI);
 											}
 										}}
 									>
+										{#if isDeleting && deleteKind}
+											<ThumbnailDeletingOverlay
+												variant={deleteKind === 'remote' ? 'remote' : deleteKind === 'local' ? 'local' : 'run'}
+												staggerIndex={deleteStagger}
+											/>
+										{/if}
 										<ThumbnailOverlay
 											mediaType={mediaType(item)}
 											seed={run.seed ?? undefined}
@@ -1678,17 +2061,17 @@
 											showFilenameAlways={showThumbFilename}
 											showMetadata={true}
 											isFavorite={isOutputFavorite(run.id, origI)}
-											isSelected={isImageSelected(group.groupId, imageKey(run.id, origI))}
+											isSelected={isImageSelected(group.groupId, outputKey)}
 											showFavorite={true}
 											showSelection={true}
 											showSeed={true}
 											showDownload={true}
 											showSendToApp={true}
-											showSendToVault={true}
+											showSendToVault={$genvaultEnabled}
 											isInVault={!!outputInVault[`${run.id}:${origI}`]}
 											sendingToVault={pushingGenVaultKeys.has(`${run.id}:${origI}`)}
 											onMetadataClick={() => { metadataPanelRunId = run.id; metadataPanelMode = 'output'; }}
-											onToggleFavorite={() => { void toggleFavorite(run); }}
+											onToggleFavorite={() => { void toggleOutputFavorite(run.id, origI, run); }}
 											onToggleSelection={() => toggleImageSelection(group.groupId, imageKey(run.id, origI))}
 											onDownload={() => thumbDownloadImage(item, run.id)}
 											onSendToApp={() => { sendToAppRunId = run.id; sendToAppOutputIndex = origI; sendToAppProjectId = run.project_id; }}
@@ -1763,6 +2146,7 @@
 	{@const runIds = group.runs.map((r) => r.id)}
 	{@const n = runIds.length}
 	{@const hasFav = group.runs.some((r) => runHasFavoritedOutput(r))}
+	{@const hasNonFav = groupHasDeletableNonFavorites(group)}
 	{@const mainMsg = n > 1
 		? `Delete ${n} generations permanently? This cannot be undone.`
 		: 'Delete this prompt (and all its files) permanently? This cannot be undone.'}
@@ -1783,6 +2167,8 @@
 					<button
 						type="button"
 						class="confirm-delete-btn danger"
+						disabled={!hasNonFav}
+						title={!hasNonFav ? 'All media in this group is favorited.' : undefined}
 						onclick={async () => { await confirmDeleteRunGroup('non_favorites'); }}
 					>Delete non-favorites only</button>
 					<button
@@ -1842,15 +2228,17 @@
 	onDownload={downloadLightboxItem}
 	onMetadata={(item) => { closeLightbox(); metadataPanelRunId = item.runId ?? null; metadataPanelMode = 'output'; }}
 	onToggleFavorite={(item) => {
-		if (!item.runId) return;
-		const run = findRunById(item.runId);
-		if (!run) return;
-		void toggleFavorite(run);
+		if (!item.runId || item.outputIndex == null) return;
+		void toggleOutputFavorite(item.runId, item.outputIndex, findRunById(item.runId));
 	}}
 	isFavorite={(item) =>
 		!!item.runId && item.outputIndex != null && isOutputFavorite(item.runId, item.outputIndex)}
-	onToggleSelection={lightboxGroupId ? (item) => toggleImageSelection(lightboxGroupId, item.id) : undefined}
-	isSelected={lightboxGroupId ? (item) => isImageSelected(lightboxGroupId, item.id) : undefined}
+	onToggleSelection={lightboxGroupId != null
+		? ((groupId) => (item) => toggleImageSelection(groupId, item.id))(lightboxGroupId)
+		: undefined}
+	isSelected={lightboxGroupId != null
+		? ((groupId) => (item) => isImageSelected(groupId, item.id))(lightboxGroupId)
+		: undefined}
 	onSendToApp={(item) => {
 		if (!item.runId || item.outputIndex == null) return;
 		const run = findRunById(item.runId);
@@ -1859,24 +2247,48 @@
 		sendToAppProjectId = run?.project_id ?? null;
 		closeLightbox();
 	}}
-	onSendToVault={(item) => {
-		if (!item.runId || item.outputIndex == null) return;
-		void sendOutputToGenVault(item.runId, item.outputIndex);
-	}}
+	onSendToVault={$genvaultEnabled
+		? (item) => {
+				if (!item.runId || item.outputIndex == null) return;
+				void sendOutputToGenVault(item.runId, item.outputIndex);
+			}
+		: undefined}
 	isInVault={(item) => !!(item.runId && item.outputIndex != null && outputInVault[`${item.runId}:${item.outputIndex}`])}
 	isSendingToVault={(item) => !!(item.runId && item.outputIndex != null && pushingGenVaultKeys.has(`${item.runId}:${item.outputIndex}`))}
-	onDeleteLocal={(item) => {
-		if (window.confirm('Delete local file?')) void deleteLightboxLocal(item);
-	}}
-	onDeleteRemote={(item) => {
-		if (window.confirm('Delete remote file?')) void deleteLightboxRemote(item);
-	}}
-	onDeleteBoth={(item) => {
-		if (window.confirm('Delete local and remote file?')) void deleteLightboxBoth(item);
-	}}
+	onDeleteLocal={requestDeleteLightboxLocal}
+	onDeleteRemote={requestDeleteLightboxRemote}
+	onDeleteBoth={requestDeleteLightboxBoth}
+	carouselItemDeletingKind={lightboxCarouselDeletingKind}
+	carouselItemDeleteStaggerIndex={lightboxCarouselDeleteStagger}
+	keyboardLocked={!!lightboxDeletePending}
 	showCloseLabel={false}
 	ariaTitle="Activity media viewer"
 />
+
+{#if lightboxDeletePending}
+	{@const p = lightboxDeletePending}
+	<ConfirmDeleteDialog
+		open={true}
+		title="Delete file"
+		message={p.message}
+		confirmLabel={p.confirmLabel}
+		onConfirm={async (dontShowAgain) => {
+			if (dontShowAgain) setSkipDeleteConfirmCookie(p.action, true);
+			const item = p.item;
+			const action = p.action;
+			try {
+				if (action === 'delete_local') await deleteLightboxLocal(item);
+				else if (action === 'delete_remote') await deleteLightboxRemote(item);
+				else if (action === 'delete_all') await deleteLightboxBoth(item);
+			} finally {
+				lightboxDeletePending = null;
+			}
+		}}
+		onCancel={() => {
+			lightboxDeletePending = null;
+		}}
+	/>
+{/if}
 
 <style>
 	.activity-page { padding: 1rem; display: flex; flex-direction: column; gap: 1rem; }
@@ -2025,7 +2437,9 @@
 	.run-header { display: flex; justify-content: space-between; gap: 0.6rem; padding: 0.5rem 0.6rem; border-bottom: 1px solid var(--border); }
 	.run-title { display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; min-width: 0; }
 	.run-dot { width: 0.5rem; height: 0.5rem; border-radius: 50%; background: var(--accent); }
-	.group-project-pill { display: inline-flex; align-items: center; gap: 0.35rem; font-size: 0.76rem; color: var(--muted); border: 1px solid var(--border); border-radius: 999px; padding: 0.08rem 0.42rem; }
+	.group-project-pill { display: inline-flex; align-items: center; gap: 0.35rem; font-size: 0.76rem; color: var(--muted); border: 1px solid var(--border); border-radius: 999px; padding: 0.08rem 0.42rem; text-decoration: none; }
+	a.group-project-pill { cursor: pointer; }
+	a.group-project-pill:hover { color: var(--text); border-color: color-mix(in srgb, var(--accent) 50%, var(--border)); background: color-mix(in srgb, var(--accent) 10%, transparent); }
 	.group-project-dot { width: 0.5rem; height: 0.5rem; border-radius: 50%; flex: 0 0 auto; }
 	.run-status { font-size: 0.75rem; }
 	.run-status.error { color: var(--error, #ef4444); }

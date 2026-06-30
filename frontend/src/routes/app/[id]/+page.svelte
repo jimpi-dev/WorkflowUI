@@ -1,5 +1,6 @@
 <script lang="ts">
-    import { onMount, tick } from 'svelte';
+    import { onMount, onDestroy, tick } from 'svelte';
+    import { get } from 'svelte/store';
     import AutoForm from '$lib/components/AutoForm.svelte';
     import Gallery from '$lib/components/Gallery.svelte';
     import RunParamGroup from '$lib/components/RunParamGroup.svelte';
@@ -18,6 +19,8 @@
     import { appConfig, getApiBase } from '$lib/config';
     import { startQueue } from '$lib/queueApi';
     import { genVaultExistsByRunOutputs, pushRunOutputToGenVault } from '$lib/api/genvault';
+    import { createGenVaultExistsPoller, type GenVaultExistsPoller } from '$lib/genvault/existsPoller';
+    import { genvaultEnabled } from '$lib/stores/genvaultEnabled';
     import { toastError, toastSuccess } from '$lib/stores/toast';
 
     let { data } = $props();
@@ -515,7 +518,7 @@
     let sendToAppOutputIndex = $state<number | null>(null);
     let pushingGenVaultKeys = $state<Set<string>>(new Set());
     let outputInVault = $state<Record<string, boolean>>({});
-    let genVaultStatusTimer: ReturnType<typeof setTimeout> | null = null;
+    let genVaultExistsPoller = $state<GenVaultExistsPoller | null>(null);
 
     let metadataPanelRunId = $state<string | null>(null);
 
@@ -1177,17 +1180,36 @@
     }
 
     $effect(() => {
-        runs;
-        if (genVaultStatusTimer) clearTimeout(genVaultStatusTimer);
-        genVaultStatusTimer = setTimeout(() => {
-            void refreshGenVaultStatusForRuns();
-        }, 120);
-        return () => {
-            if (genVaultStatusTimer) {
-                clearTimeout(genVaultStatusTimer);
-                genVaultStatusTimer = null;
+        if (!$genvaultEnabled) {
+            genVaultExistsPoller?.destroy();
+            genVaultExistsPoller = null;
+            return;
+        }
+        if (!genVaultExistsPoller) {
+            genVaultExistsPoller = createGenVaultExistsPoller(
+                refreshGenVaultStatusForRuns,
+                () => get(genvaultEnabled)
+            );
+        }
+        const keys: string[] = [];
+        const seen = new Set<string>();
+        for (const run of runs) {
+            for (const img of run.images ?? []) {
+                const runId = img.backendRunId;
+                const outputIndex = img.outputIndex ?? 0;
+                if (!runId) continue;
+                const key = outputVaultKey(runId, outputIndex);
+                if (seen.has(key)) continue;
+                seen.add(key);
+                keys.push(key);
             }
-        };
+        }
+        genVaultExistsPoller.notifyKeys(keys);
+    });
+
+    onDestroy(() => {
+        genVaultExistsPoller?.destroy();
+        genVaultExistsPoller = null;
     });
 
     function onAddLora(nodeId: string, groupKey: string) {
@@ -1420,9 +1442,15 @@
                     onDeleteLocalImage={deleteLocalImage}
                     onDeleteBothImage={deleteBothImage}
                     onSendToApp={currentProject ? (backendRunId, outputIndex) => { sendToAppRunId = backendRunId; sendToAppOutputIndex = outputIndex; } : undefined}
-                    onSendToVault={(backendRunId, outputIndex) => { void sendOutputToGenVault(backendRunId, outputIndex); }}
-                    isOutputInVault={(backendRunId, outputIndex) => !!outputInVault[outputVaultKey(backendRunId, outputIndex)]}
-                    isOutputSendingToVault={(backendRunId, outputIndex) => pushingGenVaultKeys.has(outputVaultKey(backendRunId, outputIndex))}
+                    onSendToVault={$genvaultEnabled
+                        ? (backendRunId, outputIndex) => { void sendOutputToGenVault(backendRunId, outputIndex); }
+                        : undefined}
+                    isOutputInVault={$genvaultEnabled
+                        ? (backendRunId, outputIndex) => !!outputInVault[outputVaultKey(backendRunId, outputIndex)]
+                        : undefined}
+                    isOutputSendingToVault={$genvaultEnabled
+                        ? (backendRunId, outputIndex) => pushingGenVaultKeys.has(outputVaultKey(backendRunId, outputIndex))
+                        : undefined}
                     onMetadataClick={(_run, image) => { metadataPanelRunId = image.backendRunId; }}
                     onDeleteRemoteSelected={deleteRemoteSelected}
                     onDeleteLocalSelected={deleteLocalSelected}

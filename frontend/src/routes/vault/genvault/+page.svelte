@@ -1,6 +1,8 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import { goto } from '$app/navigation';
 	import { getApiBase } from '$lib/config';
+	import { genvaultEnabled } from '$lib/stores/genvaultEnabled';
 
 	const apiBase = getApiBase();
 	let loading = $state(true);
@@ -8,6 +10,10 @@
 	let genvaultUrl = $state('http://localhost:8090');
 
 	async function loadUrl() {
+		if (!$genvaultEnabled) {
+			loading = false;
+			return;
+		}
 		loading = true;
 		loadError = null;
 		try {
@@ -25,6 +31,10 @@
 	}
 
 	onMount(() => {
+		if (!$genvaultEnabled) {
+			void goto('/vault');
+			return;
+		}
 		void loadUrl();
 	});
 </script>

@@ -16,6 +16,26 @@ from domain.user import User
 
 _UNSET = object()
 
+def _favorite_media_key_sql() -> str:
+    """Stable per-output favorite key (must match frontend FAVORITE_MEDIA_SEP / stableMediaFavoriteKey)."""
+    return (
+        "g.id || char(31) || COALESCE(json_extract(j.value, '$.filename'), '') "
+        "|| char(31) || COALESCE(json_extract(j.value, '$.subfolder'), '') "
+        "|| char(31) || LOWER(CASE "
+        "WHEN COALESCE(json_extract(j.value, '$.type'), json_extract(j.value, '$.kind'), '') IN ('', 'image') "
+        "THEN 'output' "
+        "ELSE COALESCE(json_extract(j.value, '$.type'), json_extract(j.value, '$.kind'), 'output') END)"
+    )
+
+
+def _favorite_match_sql() -> str:
+    return (
+        f"CAST(fav.value AS TEXT) = g.id "
+        f"OR CAST(fav.value AS TEXT) = (g.id || ':' || CAST(CAST(j.key AS INTEGER) AS TEXT)) "
+        f"OR CAST(fav.value AS TEXT) = ({_favorite_media_key_sql()})"
+    )
+
+
 def _row_to_workflow_definition(row: tuple) -> WorkflowDefinition:
     return WorkflowDefinition(
         id=row[0], name=row[1], created_at=row[2],
@@ -1428,8 +1448,7 @@ class SqliteRunRepository:
                                     ELSE '[]'
                                 END
                             ) fav
-                            WHERE CAST(fav.value AS TEXT) = g.id
-                               OR CAST(fav.value AS TEXT) = (g.id || ':' || CAST(CAST(j.key AS INTEGER) AS TEXT))
+                            WHERE {_favorite_match_sql()}
                         ) THEN 1 ELSE 0 END AS is_favorite
                     FROM generation g
                     JOIN run r ON r.id = g.run_id
@@ -1704,8 +1723,7 @@ class SqliteRunRepository:
                                     ELSE '[]'
                                 END
                             ) fav
-                            WHERE CAST(fav.value AS TEXT) = g.id
-                               OR CAST(fav.value AS TEXT) = (g.id || ':' || CAST(CAST(j.key AS INTEGER) AS TEXT))
+                            WHERE {_favorite_match_sql()}
                         ) THEN 1 ELSE 0 END AS is_favorite
                     FROM generation g
                     JOIN run r ON r.id = g.run_id
