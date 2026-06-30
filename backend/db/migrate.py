@@ -411,6 +411,14 @@ def migrate(db_path: Path | str) -> None:
                     updated_at INTEGER NOT NULL
                 )
             """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS vault_input (
+                filename TEXT PRIMARY KEY,
+                owner_user_id TEXT REFERENCES user_account(id),
+                uploaded_at INTEGER NOT NULL
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_vault_input_owner ON vault_input(owner_user_id)")
         try:
             mode = conn.execute("PRAGMA auto_vacuum").fetchone()
             if mode and mode[0] == 0:

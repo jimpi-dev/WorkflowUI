@@ -13,6 +13,9 @@
 	import SendToAppDialog from '$lib/components/SendToAppDialog.svelte';
 	import LightboxViewer, { type LightboxItem } from '$lib/components/LightboxViewer.svelte';
 	import ConfirmDeleteDialog from '$lib/components/ConfirmDeleteDialog.svelte';
+	import InfiniteScrollLoadMore from '$lib/components/InfiniteScrollLoadMore.svelte';
+	import { genVaultExistsByRunOutputs, pushRunOutputToGenVault } from '$lib/api/genvault';
+	import { toastError, toastSuccess } from '$lib/stores/toast';
 
 	type ProjectOption = { id: string; name: string; headerColor?: string | null };
 
@@ -110,6 +113,9 @@
 	let favorites = $state<Set<string>>(new Set());
 	let projectMetadataCache = $state<Record<string, { metadata: Record<string, unknown>; favorites: string[] }>>({});
 	let deleteRunGroupPending = $state<ActivityGroup | null>(null);
+	let pushingGenVaultKeys = $state<Set<string>>(new Set());
+	let outputInVault = $state<Record<string, boolean>>({});
+	let genVaultStatusTimer: ReturnType<typeof setTimeout> | null = null;
 
 	let queuePollId: ReturnType<typeof setInterval> | null = null;
 	let recentPollId: ReturnType<typeof setInterval> | null = null;
@@ -138,6 +144,64 @@
 		if (filterStatus === 'in_flight') return ['queued', 'running'];
 		return [filterStatus];
 	}
+
+	async function sendOutputToGenVault(runId: string, outputIndex: number) {
+		const key = `${runId}:${outputIndex}`;
+		if (pushingGenVaultKeys.has(key)) return;
+		pushingGenVaultKeys = new Set([...pushingGenVaultKeys, key]);
+		try {
+			const res = await pushRunOutputToGenVault(runId, outputIndex);
+			toastSuccess(res?.uploaded?.duplicate ? 'Bild ist bereits in GenVault gespeichert.' : 'An GenVault gesendet.');
+			outputInVault = { ...outputInVault, [key]: true };
+		} catch (e) {
+			toastError(e instanceof Error ? e.message : 'Send to GenVault failed.');
+		} finally {
+			const next = new Set(pushingGenVaultKeys);
+			next.delete(key);
+			pushingGenVaultKeys = next;
+		}
+	}
+
+	async function refreshGenVaultStatusForActivity() {
+		const requestItems: { clientKey: string; runId: string; outputIndex: number }[] = [];
+		const seen = new Set<string>();
+		for (const group of [...nowGroups, ...recentGroups]) {
+			for (const run of group.runs ?? []) {
+				for (const [origI] of (run.images ?? []).entries()) {
+					const key = `${run.id}:${origI}`;
+					if (seen.has(key)) continue;
+					seen.add(key);
+					requestItems.push({ clientKey: key, runId: run.id, outputIndex: origI });
+				}
+			}
+		}
+		if (!requestItems.length) return;
+		try {
+			const rows = await genVaultExistsByRunOutputs(requestItems);
+			const next = { ...outputInVault };
+			for (const row of rows) {
+				if (row?.client_key) next[row.client_key] = !!row.in_vault;
+			}
+			outputInVault = next;
+		} catch {
+			// ignore: non-critical badge enhancement
+		}
+	}
+
+	$effect(() => {
+		nowGroups;
+		recentGroups;
+		if (genVaultStatusTimer) clearTimeout(genVaultStatusTimer);
+		genVaultStatusTimer = setTimeout(() => {
+			void refreshGenVaultStatusForActivity();
+		}, 180);
+		return () => {
+			if (genVaultStatusTimer) {
+				clearTimeout(genVaultStatusTimer);
+				genVaultStatusTimer = null;
+			}
+		};
+	});
 
 	function normalizeRecent(r: RecentRunItem): ActivityRun {
 		return {
@@ -535,8 +599,13 @@
 		const selected = new Set(selectedInGroup[group.groupId] ?? []);
 		const full = buildGroupImageList(group);
 		const filtered = selected.size ? full.filter((img) => selected.has(img.id)) : full;
-		const list = filtered.length ? filtered : full;
-		const idx = list.findIndex((img) => img.id === key);
+		let list = filtered.length ? filtered : full;
+		let idx = list.findIndex((img) => img.id === key);
+		// Subset selection limits the lightbox to selected items; clicking another thumb should still open it.
+		if (idx === -1 && selected.size) {
+			list = full;
+			idx = list.findIndex((img) => img.id === key);
+		}
 		if (idx === -1) return;
 		lightboxImages = list;
 		lightboxIndex = idx;
@@ -1050,9 +1119,21 @@
 		}
 	}
 
+	function dedupeRecentRunsById(runs: ActivityRun[]): ActivityRun[] {
+		const seen = new Set<string>();
+		const out: ActivityRun[] = [];
+		for (const r of runs) {
+			if (seen.has(r.id)) continue;
+			seen.add(r.id);
+			out.push(r);
+		}
+		return out;
+	}
+
 	async function loadRecent(offset = 0) {
 		recentAbort?.abort();
 		recentAbort = new AbortController();
+		const { signal } = recentAbort;
 		if (offset === 0) {
 			recentLoading = true;
 			recentError = null;
@@ -1065,14 +1146,16 @@
 				status: currentStatusFilter(),
 				q: filterQuery || undefined,
 				limit: PAGE_SIZE,
-				offset
+				offset,
+				signal
 			});
 			const mapped = (data.runs ?? []).map(normalizeRecent);
-			if (offset === 0) recentRuns = mapped;
-			else recentRuns = [...recentRuns, ...mapped];
+			if (offset === 0) recentRuns = dedupeRecentRunsById(mapped);
+			else recentRuns = dedupeRecentRunsById([...recentRuns, ...mapped]);
 			totalRecent = typeof data.total === 'number' ? data.total : recentRuns.length;
 			void refetchStorageSizesForActivityRuns(mapped);
 		} catch (e) {
+			if (e instanceof DOMException && e.name === 'AbortError') return;
 			recentError = e instanceof Error ? e.message : 'Failed to load recent generations';
 			if (offset === 0) {
 				recentRuns = [];
@@ -1096,10 +1179,10 @@
 				limit: PAGE_SIZE,
 				offset: 0
 			});
-			const top = (data.runs ?? []).map(normalizeRecent);
+			const top = dedupeRecentRunsById((data.runs ?? []).map(normalizeRecent));
 			const topIds = new Set(top.map((r) => r.id));
 			const rest = recentRuns.filter((r) => !topIds.has(r.id));
-			recentRuns = [...top, ...rest];
+			recentRuns = dedupeRecentRunsById([...top, ...rest]);
 			totalRecent = typeof data.total === 'number' ? data.total : totalRecent;
 			void refetchStorageSizesForActivityRuns(top);
 		} catch {
@@ -1385,11 +1468,15 @@
 											showSeed={true}
 											showDownload={true}
 											showSendToApp={true}
+											showSendToVault={true}
+											isInVault={!!outputInVault[`${run.id}:${origI}`]}
+											sendingToVault={pushingGenVaultKeys.has(`${run.id}:${origI}`)}
 											onMetadataClick={() => { metadataPanelRunId = run.id; metadataPanelMode = 'output'; }}
 											onToggleFavorite={() => { void toggleFavorite(run); }}
 											onToggleSelection={() => toggleImageSelection(group.groupId, imageKey(run.id, origI))}
 											onDownload={() => thumbDownloadImage(item, run.id)}
 											onSendToApp={() => { sendToAppRunId = run.id; sendToAppOutputIndex = origI; sendToAppProjectId = run.project_id; }}
+											onSendToVault={() => { void sendOutputToGenVault(run.id, origI); }}
 										>
 											{#if isVideo}
 												{#if playingVideoThumbKey === thumbKey}
@@ -1597,11 +1684,15 @@
 											showSeed={true}
 											showDownload={true}
 											showSendToApp={true}
+											showSendToVault={true}
+											isInVault={!!outputInVault[`${run.id}:${origI}`]}
+											sendingToVault={pushingGenVaultKeys.has(`${run.id}:${origI}`)}
 											onMetadataClick={() => { metadataPanelRunId = run.id; metadataPanelMode = 'output'; }}
 											onToggleFavorite={() => { void toggleFavorite(run); }}
 											onToggleSelection={() => toggleImageSelection(group.groupId, imageKey(run.id, origI))}
 											onDownload={() => thumbDownloadImage(item, run.id)}
 											onSendToApp={() => { sendToAppRunId = run.id; sendToAppOutputIndex = origI; sendToAppProjectId = run.project_id; }}
+											onSendToVault={() => { void sendOutputToGenVault(run.id, origI); }}
 										>
 											{#if isVideo}
 												{#if playingVideoThumbKey === thumbKey}
@@ -1646,12 +1737,22 @@
 				</section>
 			{/each}
 			{#if hasMoreRecent}
-				<div class="load-more">
-					<button type="button" disabled={recentLoadingMore} onclick={() => loadRecent(recentRuns.length)}>
-						{recentLoadingMore ? 'Loading…' : 'Load more'}
-					</button>
-				</div>
-				<div class="load-more-sentinel" use:useLoadMoreSentinel aria-hidden="true"></div>
+				<InfiniteScrollLoadMore
+					loading={recentLoadingMore}
+					loadedCount={recentRuns.length}
+					totalCount={totalRecent}
+					thumbScalePercent={thumbnailScale}
+					buttonDisabled={recentLoading}
+					onLoadMore={() => loadRecent(recentRuns.length)}
+					loadMoreLabel="Load more"
+					statusTitle="Loading more generations"
+					countNoun="generations"
+					statusAriaLabel="Loading more generations from history"
+				>
+					{#snippet sentinel()}
+						<div class="load-more-sentinel" use:useLoadMoreSentinel aria-hidden="true"></div>
+					{/snippet}
+				</InfiniteScrollLoadMore>
 			{/if}
 		{/if}
 	</section>
@@ -1758,6 +1859,12 @@
 		sendToAppProjectId = run?.project_id ?? null;
 		closeLightbox();
 	}}
+	onSendToVault={(item) => {
+		if (!item.runId || item.outputIndex == null) return;
+		void sendOutputToGenVault(item.runId, item.outputIndex);
+	}}
+	isInVault={(item) => !!(item.runId && item.outputIndex != null && outputInVault[`${item.runId}:${item.outputIndex}`])}
+	isSendingToVault={(item) => !!(item.runId && item.outputIndex != null && pushingGenVaultKeys.has(`${item.runId}:${item.outputIndex}`))}
 	onDeleteLocal={(item) => {
 		if (window.confirm('Delete local file?')) void deleteLightboxLocal(item);
 	}}
@@ -1947,9 +2054,9 @@
 	.output-thumb-play { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; background: rgba(0, 0, 0, 0.2); pointer-events: none; transition: background 0.15s ease; }
 	.output-thumb:hover .output-thumb-play { background: rgba(0, 0, 0, 0.4); }
 	.output-thumb-play svg { width: 48px; height: 48px; color: #fff; filter: drop-shadow(0 1px 3px rgba(0,0,0,0.8)); }
-	.load-more-sentinel { width: 100%; height: 1px; }
+	.load-more-sentinel { width: 100%; height: 1px; flex-shrink: 0; }
 	.run-group-no-images { color: var(--muted); font-size: 0.84rem; padding-top: 0.45rem; }
-	.load-more { margin-top: 0.75rem; }
+
 	.muted { color: var(--muted); }
 	.error { color: var(--error, #ef4444); }
 

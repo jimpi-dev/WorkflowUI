@@ -99,6 +99,7 @@ export async function getRecentRuns(params?: {
 	q?: string;
 	limit?: number;
 	offset?: number;
+	signal?: AbortSignal;
 }): Promise<RecentRunsResponse> {
 	const qs = new URLSearchParams();
 	if (params?.projectId) qs.set('project_id', params.projectId);
@@ -108,7 +109,7 @@ export async function getRecentRuns(params?: {
 	if (typeof params?.limit === 'number') qs.set('limit', String(params.limit));
 	if (typeof params?.offset === 'number') qs.set('offset', String(params.offset));
 	const path = qs.size ? `runs/recent?${qs.toString()}` : 'runs/recent';
-	const res = await api.get(path);
+	const res = await api.get(path, params?.signal ? { signal: params.signal } : undefined);
 	if (!res.ok) throw new Error(res.statusText || 'Failed to fetch recent runs');
 	return res.json();
 }

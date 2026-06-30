@@ -79,6 +79,9 @@
         onDeleteLocalImage,
         onDeleteBothImage,
         onSendToApp = undefined as ((backendRunId: string, outputIndex: number) => void) | undefined,
+        onSendToVault = undefined as ((backendRunId: string, outputIndex: number) => void) | undefined,
+        isOutputInVault = undefined as ((backendRunId: string, outputIndex: number) => boolean) | undefined,
+        isOutputSendingToVault = undefined as ((backendRunId: string, outputIndex: number) => boolean) | undefined,
         appHeaderColor = undefined as string | null | undefined,
         onMetadataClick = undefined as ((run: RunGroup, image: GalleryImage) => void) | undefined,
         onDeleteRemoteSelected = undefined as ((runId: string, images: GalleryImage[]) => void) | undefined,
@@ -118,6 +121,9 @@
         onDeleteLocalImage?: (runId: string, image: GalleryImage) => void;
         onDeleteBothImage?: (runId: string, image: GalleryImage) => void;
         onSendToApp?: (backendRunId: string, outputIndex: number) => void;
+        onSendToVault?: (backendRunId: string, outputIndex: number) => void;
+        isOutputInVault?: (backendRunId: string, outputIndex: number) => boolean;
+        isOutputSendingToVault?: (backendRunId: string, outputIndex: number) => boolean;
         onMetadataClick?: (run: RunGroup, image: GalleryImage) => void;
         onDeleteRemoteSelected?: (runId: string, images: GalleryImage[]) => void;
         onDeleteLocalSelected?: (runId: string, images: GalleryImage[]) => void;
@@ -528,7 +534,7 @@
     {@const deletingRun = run.backendRunIds?.some((id) => deletingRunIds.has(id))}
     {@const deletingLocalRun = run.backendRunIds?.some((id) => deletingLocalRunIds.has(id))}
     {@const deletingBothRun = run.backendRunIds?.some((id) => deletingBothRunIds.has(id))}
-    {@const hasVisibleContent = displayImages.length > 0 || run.status === 'queued' || run.status === 'running'}
+    {@const hasVisibleContent = displayImages.length > 0 || run.status !== 'done'}
     {#if hasVisibleContent}
     <section class="run-section" use:observeRunSection={run.id}>
         <header
@@ -643,6 +649,10 @@
                 {:else if run.status === 'queued' && run.images.length === 0}
                     <div class="queued-placeholder">
                         Waiting in queue #{run.queue_position ?? '?'}…
+                    </div>
+                {:else if run.status === 'done' && run.images.length === 0}
+                    <div class="queued-placeholder">
+                        Run finished, but no output media is available yet.
                     </div>
                 {:else}
                     {#if runSelected}
@@ -784,11 +794,15 @@
                                                     showSeed={true}
                                                     showDownload={!isRemoteDeleted}
                                                     showSendToApp={!!onSendToApp && !isRemoteDeleted}
+                                                    showSendToVault={!!onSendToVault && !isRemoteDeleted}
+                                                    isInVault={!!isOutputInVault?.(img.backendRunId, img.outputIndex ?? 0)}
+                                                    sendingToVault={!!isOutputSendingToVault?.(img.backendRunId, img.outputIndex ?? 0)}
                                                     onMetadataClick={() => !isRemoteDeleted && (onMetadataClick ? onMetadataClick(run, img) : openLightboxFromRun(run, img))}
                                                     onToggleFavorite={() => onToggleFavorite?.(img.backendRunId)}
                                                     onToggleSelection={() => toggleSelection(run.id, img.id)}
                                                     onDownload={() => downloadImage(img)}
                                                     onSendToApp={() => onSendToApp?.(img.backendRunId, img.outputIndex ?? 0)}
+                                                    onSendToVault={() => onSendToVault?.(img.backendRunId, img.outputIndex ?? 0)}
                                                 >
                                                     {#if isRemoteDeleted}
                                                         <div class="output-thumb-deleted-placeholder" aria-hidden="true">
@@ -896,6 +910,9 @@
     onToggleSelection={lightboxRunId ? (item) => toggleSelection(lightboxRunId, item.id) : undefined}
     isSelected={lightboxRunId ? (item) => isImageSelected(lightboxRunId, item.id) : undefined}
     onSendToApp={onSendToApp ? (item) => { const backendRunId = item.backendRunId!; const outputIndex = item.outputIndex ?? 0; closeLightbox(); onSendToApp(backendRunId, outputIndex); } : undefined}
+    onSendToVault={onSendToVault ? (item) => { const backendRunId = item.backendRunId!; const outputIndex = item.outputIndex ?? 0; onSendToVault(backendRunId, outputIndex); } : undefined}
+    isInVault={isOutputInVault ? (item) => !!isOutputInVault(item.backendRunId ?? item.runId ?? '', item.outputIndex ?? 0) : undefined}
+    isSendingToVault={isOutputSendingToVault ? (item) => !!isOutputSendingToVault(item.backendRunId ?? item.runId ?? '', item.outputIndex ?? 0) : undefined}
     showCloseLabel={true}
     ariaTitle="Media viewer"
 />

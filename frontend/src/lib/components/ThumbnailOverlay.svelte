@@ -14,6 +14,11 @@
         showSeed = true,
         showDownload = true,
         showSendToApp = true,
+        showSendToVault = false,
+        isInVault = false,
+        sendingToVault = false,
+        showDelete = false,
+        deleteDisabled = false,
         fileName = undefined as string | undefined,
         showFilenameAlways = false,
         onMetadataClick = undefined as (() => void) | undefined,
@@ -21,6 +26,8 @@
         onToggleSelection = undefined as (() => void) | undefined,
         onDownload = undefined as (() => void) | undefined,
         onSendToApp = undefined as (() => void) | undefined,
+        onSendToVault = undefined as (() => void) | undefined,
+        onDelete = undefined as (() => void) | undefined,
         children
     }: {
         mediaType?: 'image' | 'video' | 'audio';
@@ -35,6 +42,11 @@
         showSeed?: boolean;
         showDownload?: boolean;
         showSendToApp?: boolean;
+        showSendToVault?: boolean;
+        isInVault?: boolean;
+        sendingToVault?: boolean;
+        showDelete?: boolean;
+        deleteDisabled?: boolean;
         fileName?: string;
         showFilenameAlways?: boolean;
         onMetadataClick?: () => void;
@@ -42,10 +54,12 @@
         onToggleSelection?: () => void;
         onDownload?: () => void;
         onSendToApp?: () => void;
+        onSendToVault?: () => void;
+        onDelete?: () => void;
         children?: Snippet;
     } = $props();
 
-    const showFilenameChip = $derived(!!(showFilenameAlways && fileName != null && String(fileName).trim() !== ''));
+    const showFilenameChip = $derived(!!(fileName != null && String(fileName).trim() !== ''));
     const showSeedChip = $derived(
         (!!(mediaType !== 'audio' && resolution)) ||
             (showSeed && seed !== undefined && seed !== null && String(seed).trim() !== '') ||
@@ -155,12 +169,16 @@
                 </span>
             {/if}
             {#if showFilenameChip}
-                <span class="thumb-overlay-filename" title={fileName}>{fileName}</span>
+                <span
+                    class="thumb-overlay-filename"
+                    class:thumb-overlay-filename--always={showFilenameAlways}
+                    title={fileName}
+                >{fileName}</span>
             {/if}
         </div>
     {/if}
 
-    {#if showDownload || showSendToApp}
+    {#if showDownload || showSendToApp || showSendToVault || (showDelete && onDelete)}
         <div class="thumb-overlay-br">
             {#if showDownload && onDownload}
                 <button
@@ -190,6 +208,49 @@
                     </svg>
                 </button>
             {/if}
+            {#if showSendToVault && onSendToVault}
+                <button
+                    type="button"
+                    class="thumb-overlay-btn"
+                    class:thumb-overlay-btn-active={isInVault}
+                    title="Save to GenVault"
+                    aria-label="Save to GenVault"
+                    onclick={(e) => { stop(e); onSendToVault(); }}
+                >
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                        <rect x="3" y="3" width="18" height="18" rx="2" />
+                        <path d="M8 12h8" />
+                        <path d="M12 8v8" />
+                    </svg>
+                </button>
+            {/if}
+            {#if showDelete && onDelete}
+                <button
+                    type="button"
+                    class="thumb-overlay-btn thumb-overlay-delete"
+                    disabled={deleteDisabled}
+                    title="Remove from Vault"
+                    aria-label="Remove from Vault"
+                    onclick={(e) => { stop(e); if (!deleteDisabled) onDelete(); }}
+                >
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <path d="M3 6h18" />
+                        <path d="M8 6V4h8v2" />
+                        <path d="M10 11v6" />
+                        <path d="M14 11v6" />
+                        <path d="M6 6l1 14h10l1-14" />
+                    </svg>
+                </button>
+            {/if}
+        </div>
+    {/if}
+
+    {#if sendingToVault}
+        <div class="thumb-transfer-overlay" aria-hidden="true">
+            <span class="thumb-transfer-label">Sending to GenVault…</span>
+            <span class="thumb-transfer-bar">
+                <span class="thumb-transfer-bar-fill"></span>
+            </span>
         </div>
     {/if}
 </div>
@@ -257,9 +318,23 @@
         background: rgba(0, 0, 0, 0.7);
         color: #fff;
     }
+    .thumb-overlay-delete:hover:not(:disabled) {
+        border-color: rgba(248, 113, 113, 0.85);
+        color: #fecaca;
+    }
+    .thumb-overlay-delete:disabled {
+        opacity: 0.35;
+        cursor: not-allowed;
+    }
     .thumb-overlay-btn svg {
         width: 14px;
         height: 14px;
+    }
+    .thumb-overlay-btn-active {
+        border-color: color-mix(in srgb, var(--accent) 70%, var(--border));
+        background: color-mix(in srgb, var(--accent) 28%, rgba(0, 0, 0, 0.55));
+        color: var(--accent);
+        opacity: 1;
     }
 
     .thumb-overlay-ul {
@@ -361,10 +436,17 @@
         max-width: 100%;
         overflow: hidden;
         text-overflow: ellipsis;
+        opacity: 0;
+    }
+    .thumb-overlay-filename.thumb-overlay-filename--always {
         opacity: 1;
     }
     :global(.output-thumb:hover) .thumb-overlay-seed,
     :global(.output-thumb:focus-within) .thumb-overlay-seed {
+        opacity: 1;
+    }
+    :global(.output-thumb:hover) .thumb-overlay-filename,
+    :global(.output-thumb:focus-within) .thumb-overlay-filename {
         opacity: 1;
     }
     .thumb-overlay-seed .seed-value {
@@ -389,6 +471,53 @@
         display: flex;
         gap: 6px;
         align-items: center;
+    }
+    .thumb-transfer-overlay {
+        position: absolute;
+        inset: 0;
+        z-index: 4;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 0.5rem;
+        background: color-mix(in srgb, rgba(10, 12, 20, 0.72) 85%, transparent);
+        backdrop-filter: blur(1.5px);
+        pointer-events: none;
+    }
+    .thumb-transfer-label {
+        font-size: 0.74rem;
+        font-weight: 600;
+        letter-spacing: 0.02em;
+        color: rgba(255, 255, 255, 0.96);
+        text-shadow: 0 1px 2px rgba(0, 0, 0, 0.7);
+    }
+    .thumb-transfer-bar {
+        width: min(84%, 170px);
+        height: 5px;
+        border-radius: 999px;
+        overflow: hidden;
+        background: rgba(255, 255, 255, 0.22);
+        border: 1px solid rgba(255, 255, 255, 0.25);
+    }
+    .thumb-transfer-bar-fill {
+        display: block;
+        height: 100%;
+        width: 42%;
+        border-radius: 999px;
+        background: linear-gradient(
+            90deg,
+            rgba(255, 255, 255, 0.25) 0%,
+            color-mix(in srgb, var(--accent) 80%, #9fb4ff) 38%,
+            color-mix(in srgb, var(--accent) 65%, #dbe5ff) 62%,
+            rgba(255, 255, 255, 0.2) 100%
+        );
+        animation: thumb-transfer-slide 1.15s ease-in-out infinite;
+        will-change: transform;
+    }
+    @keyframes thumb-transfer-slide {
+        0% { transform: translateX(-110%); }
+        100% { transform: translateX(250%); }
     }
 
     :global(.output-thumb.output-thumb-audio) .thumb-overlay-ul,
