@@ -20,6 +20,7 @@
         toggleOutputFavoriteEntries,
         type RunWithImages,
     } from '$lib/favorites';
+    import { buildFullMediaUrl, buildThumbnailUrl, resolveOutputMediaType } from '$lib/mediaUrls';
 
     type ProjectOption = { id: string; name: string; headerColor?: string | null; lastUsedAt?: number | null };
     type AppOption = { id: string; title: string };
@@ -335,24 +336,33 @@
     });
 
     function imageUrlFor(item: MediaBrowserItem): string {
+        if (item.source === 'generation' && item.run_id) {
+            return buildFullMediaUrl(
+                { filename: item.filename, subfolder: item.subfolder, type: item.type || 'image' },
+                { apiBase, runId: item.run_id }
+            );
+        }
         const params = new URLSearchParams();
         params.set('filename', item.filename);
         params.set('subfolder', item.subfolder || '');
         params.set('type', item.type || 'image');
-        if (item.source === 'generation' && item.run_id) {
-            params.set('run_id', item.run_id);
-        }
         return `${apiBase}/image?${params.toString()}`;
     }
 
-    /** Raster thumbnails: video bytes are not valid in `<img>`; use WebP preview like the project gallery. */
+    /** Raster thumbnails use WebP previews; audio has no raster thumbnail. */
     function thumbnailUrlFor(item: MediaBrowserItem): string {
-        const base = imageUrlFor(item);
-        const t = (item.type || '').toLowerCase();
-        if (t === 'video' && item.source === 'generation' && item.run_id) {
-            return `${base}&preview=webp`;
+        if (resolveOutputMediaType({ type: item.type }) === 'audio') {
+            return imageUrlFor(item);
         }
-        return base;
+        if (item.source === 'generation' && item.run_id) {
+            return (
+                buildThumbnailUrl(
+                    { filename: item.filename, subfolder: item.subfolder, type: item.type || 'image' },
+                    { apiBase, runId: item.run_id }
+                ) ?? imageUrlFor(item)
+            );
+        }
+        return imageUrlFor(item);
     }
 
     function mediaKind(item: MediaBrowserItem): 'image' | 'video' | 'audio' {
@@ -604,7 +614,7 @@
         return {
             id: `${item.run_id}:${item.output_index}:${item.filename}`,
             url: imageUrlFor(item),
-            thumbnailUrl: mt === 'video' ? thumbnailUrlFor(item) : undefined,
+            thumbnailUrl: mt === 'audio' ? undefined : thumbnailUrlFor(item),
             filename: item.filename,
             mediaType: mt === 'video' ? 'video' : mt === 'audio' ? 'audio' : 'image',
             runId: item.run_id,

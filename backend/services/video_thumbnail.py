@@ -49,7 +49,7 @@ def _resolve_run_dir_for_cache(run_entity: Any) -> Path | None:
     project_id = getattr(run_entity, "project_id", None)
     if not project_id or not group_or_run_id:
         return None
-    return Path(root) / str(project_id) / run_date / str(group_or_run_id)
+    return Path(root.replace("\\", "/")).expanduser() / str(project_id) / run_date / str(group_or_run_id)
 
 
 def thumb_cache_path(

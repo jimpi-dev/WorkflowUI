@@ -95,13 +95,14 @@ docker build -f docker/Dockerfile -t workflowui .
 **Linux / macOS:**
 
 ```bash
-chmod +x install.sh start.sh
+chmod +x install.sh start.sh start-dev.sh
 ./install.sh
 ```
 
 This installs:
-- Backend: `pip install -r backend/requirements.txt`
+- Backend: Python virtualenv (`.venv` in the repo, or `~/.local/share/workflowui/venv` if the project lives on a filesystem without symlinks such as exFAT) and `pip install -r backend/requirements.txt`
 - Frontend: `npm install` in `frontend/`
+- On CachyOS/Arch: `python-pip`, `nodejs`, `npm`, and `ffmpeg` if they are missing
 
 ### 3. Start the application
 
@@ -111,6 +112,12 @@ This installs:
 .\start.ps1
 ```
 
+Developer mode (`APP_ENV=development`):
+
+```powershell
+.\start-dev.ps1
+```
+
 Two windows open (backend + frontend). Close them to stop.
 
 **Linux / macOS:**
@@ -118,6 +125,14 @@ Two windows open (backend + frontend). Close them to stop.
 ```bash
 ./start.sh
 ```
+
+Local development (`APP_ENV=development`, Vite cache cleared):
+
+```bash
+./start-dev.sh
+```
+
+Stop with `Ctrl+C`.
 ---
 
 ## Configuration
@@ -155,7 +170,7 @@ Optional. Copy from `.env.example`:
 
 ### Changing dev ports without CORS issues
 
-- The helper scripts `start.ps1` (Windows) and `start.sh` (Linux/macOS) define backend and frontend dev ports at the top of the file (`BackendPort`/`BACKEND_PORT` and `FrontendPort`/`FRONTEND_PORT`).
+- The helper scripts `start.ps1` / `start-dev.ps1` (Windows) and `start.sh` / `start-dev.sh` (Linux/macOS) define backend and frontend dev ports at the top of the file (`BackendPort`/`BACKEND_PORT` and `FrontendPort`/`FRONTEND_PORT`).
 - When you change these values and run the script:
   - The backend is started on the chosen backend port and gets `WORKFLOWUI_CORS_ORIGINS` set to match the frontend origin(s) on that port.
   - The frontend dev server (Vite/SvelteKit) is started on the chosen frontend port and receives:

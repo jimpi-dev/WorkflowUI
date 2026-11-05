@@ -4,6 +4,7 @@
 	import LightboxDeleteChoiceDialog, {
 		type LightboxDeleteChoice
 	} from '$lib/components/LightboxDeleteChoiceDialog.svelte';
+	import { prefetchMediaUrl, releaseMediaElement } from '$lib/mediaLifecycle';
 	import ThumbnailDeletingOverlay from '$lib/components/ThumbnailDeletingOverlay.svelte';
 
 export type CarouselDeleteKind = 'remote' | 'local' | 'both';
@@ -267,11 +268,35 @@ let {
 		}
 	}
 
+	function resetZoomState() {
+		zoomMode = false;
+		zoom = 1;
+		fitToScreen = true;
+		isPanning = false;
+		baseWidth = 0;
+		resetScroll();
+	}
+
+	function syncBaseWidthFromMedia() {
+		const cur = items[index];
+		if (cur?.mediaType === 'video' && videoEl) {
+			const w = videoEl.videoWidth || videoEl.clientWidth;
+			if (w > 0) baseWidth = w;
+		} else if (imgEl) {
+			const w = imgEl.naturalWidth || imgEl.clientWidth;
+			if (w > 0) baseWidth = w;
+		}
+	}
+
 	function goNext() {
 		if (!items.length) return;
 		loadFailed = false;
 		onIndexChange((index + 1) % items.length);
+		zoomMode = false;
 		zoom = 1;
+		fitToScreen = true;
+		isPanning = false;
+		baseWidth = 0;
 		resetScroll();
 		stopSlideshowTimer();
 	}
@@ -280,7 +305,11 @@ let {
 		if (!items.length) return;
 		loadFailed = false;
 		onIndexChange((index - 1 + items.length) % items.length);
+		zoomMode = false;
 		zoom = 1;
+		fitToScreen = true;
+		isPanning = false;
+		baseWidth = 0;
 		resetScroll();
 		stopSlideshowTimer();
 	}
@@ -289,7 +318,11 @@ let {
 		if (i === index || i < 0 || i >= items.length) return;
 		loadFailed = false;
 		onIndexChange(i);
+		zoomMode = false;
 		zoom = 1;
+		fitToScreen = true;
+		isPanning = false;
+		baseWidth = 0;
 		resetScroll();
 		stopSlideshowTimer();
 	}
@@ -309,9 +342,16 @@ let {
 		}
 	}
 
+	function carouselThumbSrc(item: LightboxItem): string {
+		if (item.mediaType === 'audio') return '';
+		return item.thumbnailUrl ?? item.url;
+	}
+
 	async function handleClose() {
 		stopSlideshowTimer();
 		slideshowActive = false;
+		releaseMediaElement(videoEl);
+		releaseMediaElement(audioEl);
 		await exitFullscreenIfNeeded();
 		onClose();
 	}
@@ -347,9 +387,12 @@ let {
 			zoom = 1;
 			fitToScreen = true;
 			isPanning = false;
+			resetScroll();
 		} else {
 			fitToScreen = false;
+			syncBaseWidthFromMedia();
 			zoom = Math.max(zoom, 1.2);
+			resetScroll();
 		}
 	}
 
@@ -570,12 +613,11 @@ let {
 		if (!open || !items.length || !carouselTrackEl) return;
 		const idx = index;
 		void items.length;
+		baseWidth = 0;
 		tick().then(() => {
 			syncCarouselTrackLayout();
 			scrollCarouselToIndex(idx);
-			const cur = items[idx];
-			if (cur?.mediaType === 'video' && videoEl) baseWidth = videoEl.videoWidth || 640;
-			else if (imgEl) baseWidth = imgEl.naturalWidth;
+			syncBaseWidthFromMedia();
 		});
 	});
 
@@ -644,7 +686,38 @@ let {
 			loadFailed = false;
 			loadFailedCarousel = new Set();
 			loadedCarouselThumbs = new Set();
+			releaseMediaElement(videoEl);
+			releaseMediaElement(audioEl);
+			resetZoomState();
 		}
+	});
+
+	let prefetchAbort: (() => void) | null = null;
+	$effect(() => {
+		if (!open || !items.length) {
+			prefetchAbort?.();
+			prefetchAbort = null;
+			return;
+		}
+		const idx = index;
+		const nextItem = items[(idx + 1) % items.length];
+		prefetchAbort?.();
+		const handle = prefetchMediaUrl(nextItem?.url);
+		prefetchAbort = handle.abort;
+		return () => {
+			handle.abort();
+			prefetchAbort = null;
+		};
+	});
+
+	$effect(() => {
+		if (!open) return;
+		const idx = index;
+		void idx;
+		return () => {
+			releaseMediaElement(videoEl);
+			releaseMediaElement(audioEl);
+		};
 	});
 
 	$effect(() => {
@@ -672,7 +745,10 @@ let {
 
 	const mediaStyle = $derived.by(() => {
 		if (zoomMode) {
-			return `width: ${baseWidth * zoom}px; height: auto;`;
+			if (baseWidth > 0) {
+				return `width: ${baseWidth * zoom}px; height: auto;`;
+			}
+			return 'max-width: none; width: auto; height: auto;';
 		}
 		if (imageFitMode === 'fit') {
 			// Match video “fit” path so the image scales to the scroll viewport (flex min-size is fixed in lightbox.css).
@@ -826,26 +902,32 @@ let {
 								<span>Deleted</span>
 							</div>
 						{:else if isVideo && currentItem}
+							{#key currentItem.id}
 							<video
 								bind:this={videoEl}
 								class="lightbox-media"
 								src={currentItem.url}
+								preload="auto"
 								controls
 								autoplay
 								playsinline
 								loop={videoLoopMode === 'single'}
 								style={videoStyle}
+								onloadedmetadata={() => syncBaseWidthFromMedia()}
 								onended={onVideoEnded}
 								onerror={() => {
 									loadFailed = true;
 								}}
 							><track kind="captions" /></video>
+							{/key}
 						{:else if isAudio && currentItem}
+							{#key currentItem.id}
 							<div class="lightbox-audio-wrap">
 								<audio
 									bind:this={audioEl}
 									class="lightbox-media lightbox-audio"
 									src={currentItem.url}
+									preload="auto"
 									controls
 									autoplay
 									onended={onAudioEnded}
@@ -854,17 +936,21 @@ let {
 									}}
 								></audio>
 							</div>
+							{/key}
 						{:else if currentItem}
+							{#key currentItem.id}
 							<img
 								bind:this={imgEl}
 								src={currentItem.url}
 								alt=""
 								draggable="false"
 								style={mediaStyle}
+								onload={() => syncBaseWidthFromMedia()}
 								onerror={() => {
 									loadFailed = true;
 								}}
 							/>
+							{/key}
 						{/if}
 						{#if currentItem && isSendingToVault?.(currentItem)}
 							<div class="lightbox-transfer-overlay" aria-hidden="true">
@@ -1389,7 +1475,7 @@ let {
 									<span class="lightbox-carousel-thumb-loading" aria-hidden="true"></span>
 								{/if}
 								<img
-									src={item.thumbnailUrl ?? item.url}
+									src={carouselThumbSrc(item)}
 									alt=""
 									draggable="false"
 									onload={() => markCarouselThumbLoaded(item.id)}
@@ -1406,7 +1492,7 @@ let {
 								<span>Audio</span>
 							</span>
 						{:else}
-							<img src={item.url} alt="" draggable="false" onerror={() => markCarouselLoadFailed(item.id)} />
+							<img src={carouselThumbSrc(item)} alt="" draggable="false" onerror={() => markCarouselLoadFailed(item.id)} />
 						{/if}
 					</button>
 				{/each}

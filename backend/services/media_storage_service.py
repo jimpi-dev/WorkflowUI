@@ -573,7 +573,7 @@ class MediaStorageService:
 
             run_date = _format_run_date_ms(run.created_at)
             group_or_run_id = run.run_group_id or run.id
-            run_dir = Path(root) / run.project_id / run_date / group_or_run_id
+            run_dir = Path(root.replace("\\", "/")).expanduser() / run.project_id / run_date / group_or_run_id
             run_dir.mkdir(parents=True, exist_ok=True)
 
             used_names: set[str] = {
@@ -738,7 +738,7 @@ class MediaStorageService:
     def _deleted_outputs_log_path(self) -> Path:
         cfg = get_media_storage_config()
         root = (cfg.root_path or "").strip() or "media_storage"
-        return Path(root) / "_deleted_outputs.jsonl"
+        return Path(root.replace("\\", "/")).expanduser() / "_deleted_outputs.jsonl"
 
     def _get_master_seed_from_run(self, run: Run) -> int | None:
         if not run.metadata_snapshot_json:
@@ -1102,14 +1102,15 @@ class MediaStorageService:
 
     def _resolve_run_dir(self, run: Run) -> Path | None:
         if run.local_path:
-            return Path(run.local_path)
+            # Stored paths may use Windows separators even when the DB is opened on POSIX.
+            return Path(str(run.local_path).replace("\\", "/")).expanduser()
         cfg = get_media_storage_config()
         root = (cfg.root_path or "").strip()
         if not root:
             return None
         run_date = _format_run_date_ms(run.created_at)
         group_or_run_id = run.run_group_id or run.id
-        return Path(root) / run.project_id / run_date / group_or_run_id
+        return Path(root.replace("\\", "/")).expanduser() / run.project_id / run_date / group_or_run_id
 
     def _resolve_saved_filename(self, run_dir: Path, run: Run, index: int) -> str | None:
         for meta_name in (f"metadata.{run.id}.json", "metadata.json"):

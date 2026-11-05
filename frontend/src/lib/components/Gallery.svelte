@@ -10,9 +10,11 @@
         type ThumbSize
     } from '$lib/cookie';
     import ThumbnailOverlay from '$lib/components/ThumbnailOverlay.svelte';
+    import OutputMediaThumb from '$lib/components/OutputMediaThumb.svelte';
     import RunHeaderActions from '$lib/components/RunHeaderActions.svelte';
     import RunAppBadge from '$lib/components/RunAppBadge.svelte';
     import LightboxViewer, { type LightboxItem } from '$lib/components/LightboxViewer.svelte';
+    import { releaseAllMediaIn } from '$lib/mediaLifecycle';
 
     export type GalleryImage = {
         id: string;
@@ -146,6 +148,8 @@
     let lightboxIndex = $state(0);
 
     let playingAudioThumbKey = $state<string | null>(null);
+    let playingVideoThumbKey = $state<string | null>(null);
+    let playingVideoThumbReady = $state(false);
 
     let galleryEl: HTMLDivElement | null = null;
 
@@ -176,6 +180,23 @@
     });
 
     let lightboxRun = $derived(lightboxRunId ? runs.find((r) => r.id === lightboxRunId) ?? null : null);
+
+    function toLightboxItem(img: GalleryImage): LightboxItem {
+        return {
+            id: img.id,
+            url: img.url,
+            thumbnailUrl: img.previewUrl,
+            filename: img.filename,
+            mediaType: img.mediaType,
+            remote_deleted: img.remote_deleted,
+            backendRunId: img.backendRunId,
+            seed: img.seed,
+            executionTimeSec: img.executionTimeSec,
+            outputIndex: img.outputIndex
+        };
+    }
+
+    let lightboxViewerItems = $derived(lightboxImages.map(toLightboxItem));
 
 
     function groupByOutputIndex(images: GalleryImage[]): [string, GalleryImage[]][] {
@@ -306,7 +327,10 @@
 
         document.querySelectorAll('audio').forEach((a) => a.pause());
         document.querySelectorAll('video').forEach((v) => v.pause());
+        releaseAllMediaIn();
         playingAudioThumbKey = null;
+        playingVideoThumbKey = null;
+        playingVideoThumbReady = false;
 
         markThumbLoaded(run.id, image.id);
 
@@ -359,8 +383,8 @@
     function setRunVisible(runId: string) {
         visibleRunIds = new Set(visibleRunIds).add(runId);
     }
-    function thumbSrc(_thumbKey: string, url: string): string {
-        return url;
+    function runThumbsVisible(runId: string): boolean {
+        return visibleRunIds.has(runId);
     }
     let loadedThumbIds = $state<Set<string>>(new Set());
     function markThumbLoaded(runId: string, imgId: string) {
@@ -770,8 +794,15 @@
                                                 if ((e.target as HTMLElement).closest('.output-thumb-audio-play-btn, .output-thumb-audio-controls-wrap')) return;
                                                 if (!isRemoteDeleted && !isDeleting && (!hasActiveSeedFilter(run.id) || inFilter)) openLightboxFromRun(run, img);
                                             }}
-                                                onmouseenter={(e) => { if (img.mediaType === 'video') (e.currentTarget as HTMLElement).querySelector('video')?.play(); }}
-                                                onmouseleave={(e) => { if (img.mediaType === 'video') (e.currentTarget as HTMLElement).querySelector('video')?.pause(); }}
+                                                onmouseenter={() => {
+                                                    if (img.mediaType !== 'video' || isRemoteDeleted || isDeleting) return;
+                                                    playingVideoThumbReady = false;
+                                                    playingVideoThumbKey = thumbKey;
+                                                }}
+                                                onmouseleave={() => {
+                                                    if (img.mediaType !== 'video' || playingVideoThumbKey !== thumbKey) return;
+                                                    playingVideoThumbKey = null;
+                                                }}
                                             >
                                                 <span class="thumb-loading" class:hide={isLoaded} aria-hidden="true">
                                                     <span class="thumb-loading-spinner" aria-hidden="true"></span>
@@ -809,71 +840,21 @@
                                                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M8 6l1 14h6l1-14"/></svg>
                                                             <span>Deleted</span>
                                                         </div>
-                                                    {:else if img.mediaType === 'video'}
-                                                        <video
-                                                            src={thumbSrc(thumbKey, img.url)}
-                                                            preload="auto"
-                                                            muted
-                                                            playsinline
-                                                            loop
-                                                            aria-hidden="true"
-                                                            onloadeddata={(e) => {
-                                                                const v = e.currentTarget;
-                                                                if (v) { v.currentTime = 0; v.pause(); }
-                                                                markThumbLoaded(run.id, img.id);
-                                                            }}
-                                                            onloadedmetadata={(e) => {
-                                                                const v = e.currentTarget;
-                                                                if (v) { v.currentTime = 0; v.pause(); }
-                                                                markThumbLoaded(run.id, img.id);
-                                                            }}
-                                                            onerror={() => markThumbLoaded(run.id, img.id)}
-                                                        ></video>
-                                                        <span class="output-thumb-play" aria-hidden="true" title="Play video">
-                                                            <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>
-                                                        </span>
-                                                    {:else if img.mediaType === 'audio'}
-                                                        <div class="output-thumb-audio-preview">
-                                                            <div class="output-thumb-audio-center" aria-hidden="true">
-                                                                <div class="output-thumb-audio-visual">
-                                                                    <svg class="output-thumb-audio-icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-                                                                        <path d="M12 3v9.28c-.47-.17-.97-.28-1.5-.28C8.01 12 6 14.01 6 16.5S8.01 21 10.5 21c2.31 0 4.2-1.75 4.45-4H15V6h4V3h-7z"/>
-                                                                    </svg>
-                                                                    <span class="output-thumb-audio-label">AUDIO</span>
-                                                                    <button
-                                                                        type="button"
-                                                                        class="output-thumb-audio-play-btn"
-                                                                        title="Play audio"
-                                                                        aria-label="Play audio"
-                                                                    >
-                                                                        <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>
-                                                                    </button>
-                                                                </div>
-                                                            </div>
-                                                            <div class="output-thumb-audio-controls-wrap">
-                                                                <audio
-                                                                    src={thumbSrc(thumbKey, img.url)}
-                                                                    preload="metadata"
-                                                                    controls
-                                                                    playsinline
-                                                                    onloadeddata={() => markThumbLoaded(run.id, img.id)}
-                                                                    onplay={(e) => {
-                                                                        const el = e.currentTarget as HTMLAudioElement;
-                                                                        document.querySelectorAll('audio').forEach((a) => { if (a !== el) a.pause(); });
-                                                                        playingAudioThumbKey = thumbKey;
-                                                                    }}
-                                                                    onpause={() => {
-                                                                        playingAudioThumbKey = null;
-                                                                    }}
-                                                                ></audio>
-                                                            </div>
-                                                        </div>
                                                     {:else}
-                                                        <img
-                                                            src={thumbSrc(thumbKey, img.previewUrl ?? img.url)}
-                                                            alt=""
-                                                            onload={() => markThumbLoaded(run.id, img.id)}
-                                                            onerror={() => markThumbLoaded(run.id, img.id)}
+                                                        <OutputMediaThumb
+                                                            mediaType={img.mediaType ?? 'image'}
+                                                            thumbnailUrl={img.previewUrl}
+                                                            fullUrl={img.url}
+                                                            visible={runThumbsVisible(run.id)}
+                                                            videoPlaying={playingVideoThumbKey === thumbKey}
+                                                            onVideoReady={() => {
+                                                                if (playingVideoThumbKey === thumbKey) playingVideoThumbReady = true;
+                                                            }}
+                                                            onLoad={() => markThumbLoaded(run.id, img.id)}
+                                                            onError={() => markThumbLoaded(run.id, img.id)}
+                                                            onAudioPlayChange={(playing) => {
+                                                                playingAudioThumbKey = playing ? thumbKey : null;
+                                                            }}
                                                         />
                                                     {/if}
                                                 </ThumbnailOverlay>
@@ -899,7 +880,7 @@
 
 <LightboxViewer
     open={lightboxOpen}
-    items={lightboxImages as LightboxItem[]}
+    items={lightboxViewerItems}
     index={lightboxIndex}
     onIndexChange={(i) => { lightboxIndex = i; }}
     onClose={closeLightbox}
@@ -1324,15 +1305,15 @@
         box-shadow: 0 0 0 1px #222;
     }
 
-    .output-thumb img,
-    .output-thumb video {
+    .output-thumb :global(img),
+    .output-thumb :global(video) {
         width: 100%;
         height: 100%;
         object-fit: cover;
         display: block;
     }
-    .output-section-body.thumb-fit-contain .output-thumb img,
-    .output-section-body.thumb-fit-contain .output-thumb video {
+    .output-section-body.thumb-fit-contain .output-thumb :global(img),
+    .output-section-body.thumb-fit-contain .output-thumb :global(video) {
         object-fit: contain;
         background: #0b0b0b;
     }

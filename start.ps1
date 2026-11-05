@@ -10,6 +10,14 @@ $FrontendPort = 5173
 
 $corsOrigins = "http://localhost:$FrontendPort,http://127.0.0.1:$FrontendPort"
 
+$VenvPython = Join-Path $RootDir ".venv\Scripts\python.exe"
+if (Test-Path $VenvPython) {
+    $UvicornCmd = "& '$VenvPython' -m uvicorn"
+} else {
+    Write-Warning "No .venv found. Falling back to uvicorn on PATH. Run .\install.ps1 for a local virtualenv."
+    $UvicornCmd = "uvicorn"
+}
+
 function Stop-ProcessOnPort {
     param ([int]$Port)
     $conn = Get-NetTCPConnection -LocalPort $Port -ErrorAction SilentlyContinue
@@ -30,7 +38,7 @@ Stop-ProcessOnPort -Port $FrontendPort
 Start-Sleep -Seconds 1
 
 Write-Host "Starting backend (FastAPI) on port $BackendPort with APP_ENV=production ..."
-Start-Process powershell -ArgumentList "-NoExit", "-Command", "cd '$RootDir\backend'; `$env:APP_ENV='production'; `$env:WORKFLOWUI_CORS_ORIGINS='$corsOrigins'; uvicorn main:app --reload --port $BackendPort"
+Start-Process powershell -ArgumentList "-NoExit", "-Command", "cd '$RootDir\backend'; `$env:APP_ENV='production'; `$env:WORKFLOWUI_CORS_ORIGINS='$corsOrigins'; $UvicornCmd main:app --reload --port $BackendPort"
 
 Start-Sleep -Seconds 2
 

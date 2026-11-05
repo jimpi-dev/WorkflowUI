@@ -8,6 +8,7 @@ import { get } from 'svelte/store';
 	import { THUMB_SCALE_MAX, THUMB_SCALE_MIN, getThumbFitModeCookie, getThumbSizeCookie, setThumbFitModeCookie, setThumbSizeCookie, getThumbShowFilenameCookie, setThumbShowFilenameCookie, getNotesCollapsedCookie, setNotesCollapsedCookie, getLeftPanelCollapsedCookie, setLeftPanelCollapsedCookie, getSkipDeleteConfirmCookie, setSkipDeleteConfirmCookie, type ThumbFitMode, type DeleteConfirmKey } from '$lib/cookie';
 	import SendToAppDialog from '$lib/components/SendToAppDialog.svelte';
 	import MoveRunsDialog from '$lib/components/MoveRunsDialog.svelte';
+	import SyncRunsToGenVaultDialog from '$lib/components/SyncRunsToGenVaultDialog.svelte';
 	import ThumbnailOverlay from '$lib/components/ThumbnailOverlay.svelte';
 	import ThumbnailDeletingOverlay from '$lib/components/ThumbnailDeletingOverlay.svelte';
 	import {
@@ -31,6 +32,7 @@ import { get } from 'svelte/store';
 	import { genVaultExistsByRunOutputs, pushRunOutputToGenVault } from '$lib/api/genvault';
 	import { createGenVaultExistsPoller, type GenVaultExistsPoller } from '$lib/genvault/existsPoller';
 	import { genvaultEnabled } from '$lib/stores/genvaultEnabled';
+	import { genvaultOnline } from '$lib/stores/genvaultOnline';
 	import { toastError, toastSuccess } from '$lib/stores/toast';
 	import {
 		favoritesListChanged,
@@ -44,6 +46,15 @@ import { get } from 'svelte/store';
 		toggleOutputFavoriteEntries,
 		type RunWithImages,
 	} from '$lib/favorites';
+	import { createLightboxDeleteQueue, resolveLightboxOutputIndex } from '$lib/lightboxDelete';
+	import OutputMediaThumb from '$lib/components/OutputMediaThumb.svelte';
+	import {
+		buildFullMediaUrl,
+		buildThumbnailUrl,
+		resolveOutputMediaType,
+		type MediaOutputRef
+	} from '$lib/mediaUrls';
+	import { releaseAllMediaIn } from '$lib/mediaLifecycle';
 
 	let { data }: {
 		data: {
@@ -137,7 +148,11 @@ import { get } from 'svelte/store';
 		pushingGenVaultKeys = new Set([...pushingGenVaultKeys, key]);
 		try {
 			const res = await pushRunOutputToGenVault(runId, outputIndex);
-			toastSuccess(res?.uploaded?.duplicate ? 'Bild ist bereits in GenVault gespeichert.' : 'An GenVault gesendet.');
+			if (res?.skipped) {
+				toastSuccess('Bild ist bereits in GenVault gespeichert.');
+			} else {
+				toastSuccess(res?.uploaded?.duplicate ? 'Bild ist bereits in GenVault gespeichert.' : 'An GenVault gesendet.');
+			}
 			outputInVault = { ...outputInVault, [key]: true };
 		} catch (e) {
 			toastError(e instanceof Error ? e.message : 'Send to GenVault failed.');
@@ -146,6 +161,74 @@ import { get } from 'svelte/store';
 			next.delete(key);
 			pushingGenVaultKeys = next;
 		}
+	}
+
+	function getSyncableRunIdsFromGroup(group: { runs: ApiRun[] }): string[] {
+		return group.runs
+			.filter((r) => r.status === 'done' || r.status === 'cancelled')
+			.filter((r) => (r.images ?? []).some((img) => !img.remote_deleted))
+			.map((r) => r.id);
+	}
+
+	function openGenVaultSyncForRuns(runIds: string[]) {
+		const syncable = runIds.filter((id) => {
+			const run = runs.find((r) => r.id === id);
+			if (!run) return false;
+			return (
+				(run.status === 'done' || run.status === 'cancelled') &&
+				(run.images ?? []).some((img) => !img.remote_deleted)
+			);
+		});
+		if (syncable.length === 0) {
+			toastError('Keine synchronisierbaren Runs ausgewählt.');
+			return;
+		}
+		genVaultSyncRunIds = syncable;
+		genVaultSyncDialogOpen = true;
+	}
+
+	function openGenVaultSyncForGroup(group: { runs: ApiRun[] }) {
+		openGenVaultSyncForRuns(getSyncableRunIdsFromGroup(group));
+	}
+
+	function handleGenVaultSynced({
+		syncedRunIds,
+		skippedOutputs,
+		uploadedOutputs,
+	}: {
+		syncedRunIds: string[];
+		skippedOutputs: number;
+		uploadedOutputs: number;
+	}) {
+		const next = { ...outputInVault };
+		for (const runId of syncedRunIds) {
+			const run = runs.find((r) => r.id === runId);
+			if (!run) continue;
+			for (const [i] of (run.images ?? []).entries()) {
+				next[`${runId}:${i}`] = true;
+			}
+		}
+		outputInVault = next;
+		const n = syncedRunIds.length;
+		const parts: string[] = [];
+		if (uploadedOutputs > 0) parts.push(`${uploadedOutputs} hochgeladen`);
+		if (skippedOutputs > 0) parts.push(`${skippedOutputs} bereits vorhanden`);
+		const detail = parts.length ? ` (${parts.join(', ')})` : '';
+		toastSuccess(
+			n === 1 ? `Run mit GenVault synchronisiert${detail}.` : `${n} Runs mit GenVault synchronisiert${detail}.`
+		);
+	}
+
+	function handleGenVaultDeleted(deletedRunIds: string[]) {
+		if (deletedRunIds.length === 0) return;
+		const deleted = new Set(deletedRunIds);
+		runs = runs.filter((r) => !deleted.has(r.id));
+		selectedRunIds = new Set([...selectedRunIds].filter((id) => !deleted.has(id)));
+		const nextFav = filterFavoritesForDeletedRuns([...favorites], deleted);
+		if (nextFav.length !== favorites.size) void saveFavoritesMetadata(nextFav);
+		void loadStats();
+		const n = deletedRunIds.length;
+		toastSuccess(n === 1 ? 'Run nach Synchronisation gelöscht.' : `${n} Runs nach Synchronisation gelöscht.`);
 	}
 
 	async function refreshGenVaultStatusForProject() {
@@ -202,7 +285,6 @@ import { get } from 'svelte/store';
 		genVaultExistsPoller = null;
 	});
 	let mediaResolutionByImageKey = $state<Record<string, { width: number; height: number }>>({});
-	const videoResolutionFetchInFlight = new Set<string>();
 	function setMediaResolution(key: string, width: number, height: number) {
 		if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) return;
 		const w = Math.round(width);
@@ -238,28 +320,6 @@ import { get } from 'svelte/store';
 		playingVideoThumbReady = true;
 		markThumbLoaded(groupId, runId, index);
 	}
-	function preloadVideoResolutionOnce(runId: string, index: number, url: string) {
-		if (!browser) return;
-		const key = imageKey(runId, index);
-		if (mediaResolutionByImageKey[key] || videoResolutionFetchInFlight.has(key)) return;
-		videoResolutionFetchInFlight.add(key);
-		const el = document.createElement('video');
-		el.preload = 'metadata';
-		el.muted = true;
-		el.playsInline = true;
-		const cleanup = () => {
-			el.removeAttribute('src');
-			el.load();
-			videoResolutionFetchInFlight.delete(key);
-		};
-		el.onloadedmetadata = () => {
-			setMediaResolution(key, el.videoWidth, el.videoHeight);
-			cleanup();
-		};
-		el.onerror = cleanup;
-		el.src = url;
-	}
-
 
 	let playingAudioThumbKey = $state<string | null>(null);
 	let playingVideoThumbKey = $state<string | null>(null);
@@ -272,6 +332,8 @@ import { get } from 'svelte/store';
 
 	let selectedRunIds = $state<Set<string>>(new Set());
 	let moveDialogOpen = $state(false);
+	let genVaultSyncDialogOpen = $state(false);
+	let genVaultSyncRunIds = $state<string[]>([]);
 
 	let metadataPanelRunId = $state<string | null>(null);
 	let metadataPanelMode = $state<'output' | 'run'>('output');
@@ -1674,32 +1736,18 @@ let runsScrollTopBeforeFocus = $state<number | null>(null);
 		}
 	});
 
-	function mediaType(img: { filename?: string; subfolder?: string; type?: string }): 'image' | 'video' | 'audio' {
-		const t = (img?.type ?? '').toLowerCase();
-		if (t === 'video') return 'video';
-		if (t === 'audio') return 'audio';
-		return 'image';
+	function mediaType(img: MediaOutputRef): 'image' | 'video' | 'audio' {
+		return resolveOutputMediaType(img);
 	}
-	function imageUrl(img: { filename: string; subfolder?: string; type?: string }, runId?: string) {
-		const subfolder = img.subfolder ?? '';
-		const type = img.type ?? 'output';
-		let url = `${apiBase}/image?filename=${encodeURIComponent(img.filename)}&subfolder=${encodeURIComponent(subfolder)}&type=${encodeURIComponent(type)}`;
-		if (runId) url += `&run_id=${encodeURIComponent(runId)}`;
-		if (runId && data.embedWorkflowuiMetadataOnDownload) url += '&embed_workflowui_metadata=1';
-		return url;
+	const mediaUrlOpts = $derived({
+		apiBase,
+		embedWorkflowuiMetadata: !!data.embedWorkflowuiMetadataOnDownload
+	});
+	function imageUrl(img: MediaOutputRef, runId?: string) {
+		return buildFullMediaUrl(img, { ...mediaUrlOpts, runId });
 	}
-	function previewImageUrl(img: { filename: string; subfolder?: string; type?: string }, runId?: string) {
-		return imageUrl(img, runId) + '&preview=webp';
-	}
-	// Preview thumbnails for video must not request `embed_workflowui_metadata=1`, because
-	// thumbnails are not meant to carry WorkflowUI metadata chunks.
-	function videoThumbnailPreviewUrl(img: { filename: string; subfolder?: string; type?: string }, runId?: string) {
-		const subfolder = img.subfolder ?? '';
-		const type = img.type ?? 'output';
-		let url = `${apiBase}/image?filename=${encodeURIComponent(img.filename)}&subfolder=${encodeURIComponent(subfolder)}&type=${encodeURIComponent(type)}`;
-		if (runId) url += `&run_id=${encodeURIComponent(runId)}`;
-		url += '&preview=webp';
-		return url;
+	function thumbnailUrl(img: MediaOutputRef, runId?: string) {
+		return buildThumbnailUrl(img, { apiBase, runId });
 	}
 
 	function openAppInProject(appSlug: string) {
@@ -1950,10 +1998,6 @@ let runsScrollTopBeforeFocus = $state<number | null>(null);
 			},
 			destroy: teardown,
 		};
-	}
-	function thumbSrc(thumbKey: string, url: string): string | undefined {
-		if (filterActive) return url;
-		return visibleThumbKeys[thumbKey] ? url : undefined;
 	}
 	
 	const THUMB_REVEAL_BATCH_SIZE = 8;
@@ -2484,6 +2528,11 @@ let lightboxDeletePending = $state<
 	let lightboxFavoriteDeletePending = $state<null | { item: LightboxItem; kind: 'local' | 'remote' | 'both' }>(
 		null
 	);
+	const lightboxDeleteQueue = createLightboxDeleteQueue();
+
+	function enqueueLightboxDelete(task: () => Promise<void>): Promise<void> {
+		return lightboxDeleteQueue.enqueue(task);
+	}
 	let runsScrollEl = $state<HTMLDivElement | null>(null);
 	$effect(() => {
 		if (runsScrollEl) return;
@@ -2503,7 +2552,7 @@ let lightboxDeletePending = $state<
 				const hasLocal = run.local_storage_status === 'saved' || run.local_storage_status === 'partial';
 				const hasRemote = !remote_deleted;
 				const fullUrl = imageUrl(img, run.id);
-				const thumbUrl = mt === 'video' ? videoThumbnailPreviewUrl(img, run.id) : undefined;
+				const thumbUrl = thumbnailUrl(img, run.id);
 				list.push({
 					id: imageKey(run.id, i),
 					url: fullUrl,
@@ -2578,6 +2627,7 @@ let lightboxDeletePending = $state<
 	) {
 		document.querySelectorAll('audio').forEach((a) => a.pause());
 		document.querySelectorAll('video').forEach((v) => v.pause());
+		releaseAllMediaIn();
 		playingAudioThumbKey = null;
 		playingVideoThumbKey = null;
 		playingVideoThumbReady = false;
@@ -2640,60 +2690,64 @@ let lightboxDeletePending = $state<
 	}
 
 	async function deleteLightboxLocal(item: LightboxItem) {
-		const runId = item.runId;
-		const index = item.outputIndex;
-		if (!runId || index == null) return;
-	const hadRemote = item.hasRemote ?? !item.remote_deleted;
-		if (!hadRemote) advanceLightboxPastRemovingItem(item);
-		await deleteLocalImage(runId, index);
-	if (!hadRemote) {
-		// This was the last copy (local-only); remove from lightbox.
-		applyLightboxDeletion(item);
-		return;
-	}
-	const currentIdx = lightboxImages.findIndex((x) => x.id === item.id);
-	if (currentIdx !== -1) {
-		const updated: LightboxItem = { ...lightboxImages[currentIdx], hasLocal: false };
-		const next = [...lightboxImages];
-		next[currentIdx] = updated;
-		lightboxImages = next;
-	}
-	refreshLightboxImagesFromGroup();
+		return enqueueLightboxDelete(async () => {
+			const resolved = resolveLightboxOutputIndex(item, resolveRunForFavorites);
+			if (!resolved) return;
+			const { runId, index } = resolved;
+			const hadRemote = item.hasRemote ?? !item.remote_deleted;
+			if (!hadRemote) advanceLightboxPastRemovingItem(item);
+			await deleteLocalImage(runId, index);
+			if (!hadRemote) {
+				applyLightboxDeletion(item);
+				return;
+			}
+			const currentIdx = lightboxImages.findIndex((x) => x.id === item.id);
+			if (currentIdx !== -1) {
+				const updated: LightboxItem = { ...lightboxImages[currentIdx], hasLocal: false };
+				const next = [...lightboxImages];
+				next[currentIdx] = updated;
+				lightboxImages = next;
+			}
+			refreshLightboxImagesFromGroup();
+		});
 	}
 
 	async function deleteLightboxRemote(item: LightboxItem) {
-		const runId = item.runId;
-		const index = item.outputIndex;
-		if (!runId || index == null) return;
-	const hadLocal = item.hasLocal ?? true;
-		if (!hadLocal) advanceLightboxPastRemovingItem(item);
-		await deleteRemoteImage(runId, index);
-	if (!hadLocal) {
-		// This was the last copy (remote-only); remove from lightbox.
-		applyLightboxDeletion(item);
-		return;
-	}
-	const currentIdx = lightboxImages.findIndex((x) => x.id === item.id);
-	if (currentIdx !== -1) {
-		const updated: LightboxItem = {
-			...lightboxImages[currentIdx],
-			hasRemote: false,
-			remote_deleted: true
-		};
-		const next = [...lightboxImages];
-		next[currentIdx] = updated;
-		lightboxImages = next;
-	}
-	refreshLightboxImagesFromGroup();
+		return enqueueLightboxDelete(async () => {
+			const resolved = resolveLightboxOutputIndex(item, resolveRunForFavorites);
+			if (!resolved) return;
+			const { runId, index } = resolved;
+			const hadLocal = item.hasLocal ?? true;
+			if (!hadLocal) advanceLightboxPastRemovingItem(item);
+			await deleteRemoteImage(runId, index);
+			if (!hadLocal) {
+				applyLightboxDeletion(item);
+				return;
+			}
+			const currentIdx = lightboxImages.findIndex((x) => x.id === item.id);
+			if (currentIdx !== -1) {
+				const updated: LightboxItem = {
+					...lightboxImages[currentIdx],
+					hasRemote: false,
+					remote_deleted: true
+				};
+				const next = [...lightboxImages];
+				next[currentIdx] = updated;
+				lightboxImages = next;
+			}
+			refreshLightboxImagesFromGroup();
+		});
 	}
 
 	async function deleteLightboxBoth(item: LightboxItem) {
-		const runId = item.runId;
-		const index = item.outputIndex;
-		if (!runId || index == null) return;
-		advanceLightboxPastRemovingItem(item);
-		const ok = await deleteBothImage(runId, index);
-		if (ok) applyLightboxDeletion(item);
+		return enqueueLightboxDelete(async () => {
+			const resolved = resolveLightboxOutputIndex(item, resolveRunForFavorites);
+			if (!resolved) return;
+			const { runId, index } = resolved;
+			advanceLightboxPastRemovingItem(item);
+			const ok = await deleteBothImage(runId, index);
+			if (ok) applyLightboxDeletion(item);
+		});
 	}
 
 	function proceedLightboxDeletePrompt(item: LightboxItem, kind: 'local' | 'remote' | 'both') {
@@ -3240,6 +3294,18 @@ let lightboxDeletePending = $state<
 									>
 										Move to project
 									</button>
+									{#if $genvaultEnabled && $genvaultOnline}
+										<button
+											type="button"
+											class="move-to-project-btn genvault-sync-btn"
+											disabled={selectedRunIds.size === 0}
+											title={selectedRunIds.size === 0 ? 'Runs über die Checkbox auswählen, dann an GenVault senden' : `${selectedRunIds.size} Run(s) an GenVault senden`}
+											aria-label={selectedRunIds.size === 0 ? 'Runs auswählen um an GenVault zu senden' : 'Ausgewählte Runs an GenVault senden'}
+											onclick={() => openGenVaultSyncForRuns(Array.from(selectedRunIds))}
+										>
+											Sync to GenVault
+										</button>
+									{/if}
 									<span class="gallery-size-divider" aria-hidden="true"></span>
 								</div>
 							{/if}
@@ -3362,6 +3428,18 @@ let lightboxDeletePending = $state<
 											>
 												Move to project
 											</button>
+											{#if $genvaultEnabled && $genvaultOnline}
+												<button
+													type="button"
+													class="move-to-project-btn genvault-sync-btn"
+													disabled={selectedRunIds.size === 0}
+													title={selectedRunIds.size === 0 ? 'Runs über die Checkbox auswählen, dann an GenVault senden' : `${selectedRunIds.size} Run(s) an GenVault senden`}
+													aria-label={selectedRunIds.size === 0 ? 'Runs auswählen um an GenVault zu senden' : 'Ausgewählte Runs an GenVault senden'}
+													onclick={() => openGenVaultSyncForRuns(Array.from(selectedRunIds))}
+												>
+													Sync to GenVault
+												</button>
+											{/if}
 										{/if}
 
 										<div class="collapse-all-actions">
@@ -3532,7 +3610,7 @@ let lightboxDeletePending = $state<
 								<div class="run-title">
 									<label
 										class="move-runs-group-checkbox-wrap"
-										title="Select runs in this group to move to another project"
+										title="Runs in dieser Gruppe auswählen (Verschieben oder GenVault-Sync)"
 										onclick={(e) => e.stopPropagation()}
 										onkeydown={(e) => e.stopPropagation()}
 									>
@@ -3637,6 +3715,10 @@ let lightboxDeletePending = $state<
 									fullscreenTitle="Focus this run in fullscreen (Esc to exit)"
 									collapseIcon={collapsedGroups.has(group.groupId) ? '▸' : '▾'}
 									hasSelection={hasGroupSelection}
+									showGenVaultSync={$genvaultEnabled && $genvaultOnline === true}
+									genVaultSyncDisabled={getSyncableRunIdsFromGroup(group).length === 0}
+									onGenVaultSync={() => openGenVaultSyncForGroup(group)}
+									genVaultSyncTitle={getSyncableRunIdsFromGroup(group).length === 0 ? 'Keine synchronisierbaren Outputs in diesem Run' : 'Alle Outputs dieses Runs an GenVault senden'}
 								/>
 							</header>
 							{#if group.status === 'running'}
@@ -3840,84 +3922,33 @@ let lightboxDeletePending = $state<
 																		Remove from run
 																	</button>
 																</div>
-															{:else if isVideo}
-																{#if playingVideoThumbKey === thumbKey}
-																	<video
-																		src={imageUrl(item, run.id)}
-																		preload="metadata"
-																		autoplay
-																		muted
-																		playsinline
-																		loop
-																		aria-hidden="true"
-																		onloadedmetadata={(e) => onVideoThumbMetadataLoad(group.groupId, run.id, origI, thumbKey, e)}
-																		onerror={() => {
-																			if (playingVideoThumbKey !== thumbKey) return;
-																			playingVideoThumbReady = true;
-																			markThumbLoaded(group.groupId, run.id, origI);
-																			markThumbLoadFailed(thumbKey);
-																		}}
-																	></video>
-																{:else}
-																	<img
-																		src={thumbSrc(thumbKey, videoThumbnailPreviewUrl(item, run.id))}
-																		alt=""
-																		loading="lazy"
-																		onload={() => {
-																			markThumbLoaded(group.groupId, run.id, origI);
-																			preloadVideoResolutionOnce(run.id, origI, imageUrl(item, run.id));
-																		}}
-																		onerror={() => { markThumbLoaded(group.groupId, run.id, origI); markThumbLoadFailed(thumbKey); }}
-																	/>
-																{/if}
-																<span class="output-thumb-play" aria-hidden="true" title="Play video">
-																	<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>
-																</span>
-															{:else if isAudio}
-																<div class="output-thumb-audio-preview">
-																	<div class="output-thumb-audio-center" aria-hidden="true">
-																		<div class="output-thumb-audio-visual">
-																			<svg class="output-thumb-audio-icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-																				<path d="M12 3v9.28c-.47-.17-.97-.28-1.5-.28C8.01 12 6 14.01 6 16.5S8.01 21 10.5 21c2.31 0 4.2-1.75 4.45-4H15V6h4V3h-7z"/>
-																			</svg>
-																			<span class="output-thumb-audio-label">AUDIO</span>
-																			<button
-																				type="button"
-																				class="output-thumb-audio-play-btn"
-																				title="Play audio"
-																				aria-label="Play audio"
-																			>
-																				<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>
-																			</button>
-																		</div>
-																	</div>
-																	<div class="output-thumb-audio-controls-wrap">
-																		<audio
-																			src={thumbSrc(thumbKey, imageUrl(item, run.id))}
-																			preload="metadata"
-																			controls
-																			playsinline
-																			onloadeddata={() => markThumbLoaded(group.groupId, run.id, origI)}
-																			onloadedmetadata={() => markThumbLoaded(group.groupId, run.id, origI)}
-																			onerror={() => { markThumbLoaded(group.groupId, run.id, origI); markThumbLoadFailed(thumbKey); }}
-																			onplay={(e) => {
-																				const el = e.currentTarget as HTMLAudioElement;
-																				document.querySelectorAll('audio').forEach((a) => { if (a !== el) a.pause(); });
-																				playingAudioThumbKey = thumbKey;
-																			}}
-																			onpause={() => {
-																				playingAudioThumbKey = null;
-																			}}
-																		></audio>
-																	</div>
-																</div>
 															{:else}
-																<img
-																	src={thumbSrc(thumbKey, imageUrl(item, run.id))}
-																	alt=""
-																	loading="lazy"
-																	onload={(e) => onImageThumbLoad(group.groupId, run.id, origI, e)}
-																	onerror={() => { markThumbLoaded(group.groupId, run.id, origI); markThumbLoadFailed(thumbKey); }}
+																<OutputMediaThumb
+																	mediaType={isVideo ? 'video' : isAudio ? 'audio' : 'image'}
+																	thumbnailUrl={thumbnailUrl(item, run.id)}
+																	fullUrl={imageUrl(item, run.id)}
+																	visible={filterActive || !!visibleThumbKeys[thumbKey]}
+																	videoPlaying={playingVideoThumbKey === thumbKey}
+																	onVideoMetadata={(e) =>
+																		onVideoThumbMetadataLoad(group.groupId, run.id, origI, thumbKey, e)}
+																	onVideoReady={() => {
+																		if (playingVideoThumbKey === thumbKey) playingVideoThumbReady = true;
+																	}}
+																	onVideoError={() => {
+																		if (playingVideoThumbKey !== thumbKey) return;
+																		playingVideoThumbReady = true;
+																		markThumbLoaded(group.groupId, run.id, origI);
+																		markThumbLoadFailed(thumbKey);
+																	}}
+																	onLoad={() => markThumbLoaded(group.groupId, run.id, origI)}
+																	onError={() => {
+																		markThumbLoaded(group.groupId, run.id, origI);
+																		markThumbLoadFailed(thumbKey);
+																	}}
+																	onImageLoad={(e) => onImageThumbLoad(group.groupId, run.id, origI, e)}
+																	onAudioPlayChange={(playing) => {
+																		playingAudioThumbKey = playing ? thumbKey : null;
+																	}}
 																/>
 															{/if}
 														</ThumbnailOverlay>
@@ -3984,6 +4015,15 @@ let lightboxDeletePending = $state<
 				selectedRunIds = new Set();
 				moveDialogOpen = false;
 			}}
+		/>
+	{/if}
+	{#if genVaultSyncDialogOpen}
+		<SyncRunsToGenVaultDialog
+			open={genVaultSyncDialogOpen}
+			runIds={genVaultSyncRunIds}
+			onClose={() => { genVaultSyncDialogOpen = false; genVaultSyncRunIds = []; }}
+			onSynced={handleGenVaultSynced}
+			onDeleted={handleGenVaultDeleted}
 		/>
 	{/if}
 	{#if data.project && deleteProjectDialogOpen}
@@ -5767,15 +5807,15 @@ let lightboxDeletePending = $state<
 	.output-thumb.output-thumb-local-storage {
 		box-shadow: 0 0 0 2px #d4af37;
 	}
-	.output-thumb img,
-	.output-thumb video {
+	.output-thumb :global(img),
+	.output-thumb :global(video) {
 		width: 100%;
 		height: 100%;
 		object-fit: cover;
 		display: block;
 	}
-	.output-section-body.thumb-fit-contain .output-thumb img,
-	.output-section-body.thumb-fit-contain .output-thumb video {
+	.output-section-body.thumb-fit-contain .output-thumb :global(img),
+	.output-section-body.thumb-fit-contain .output-thumb :global(video) {
 		object-fit: contain;
 		background: #0b0b0b;
 	}

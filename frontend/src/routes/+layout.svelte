@@ -19,7 +19,8 @@
 	import { getApiBase } from '$lib/config';
 	import { authState } from '$lib/stores/auth';
 	import { quickRunsProject } from '$lib/stores/quickRunsProject';
-	import { resetGenVaultEnabledToDefault, setGenVaultEnabledFromConfig } from '$lib/stores/genvaultEnabled';
+	import { genvaultEnabled, resetGenVaultEnabledToDefault, setGenVaultEnabledFromConfig } from '$lib/stores/genvaultEnabled';
+	import { genvaultOnline, startGenVaultHealthPolling, stopGenVaultHealthPolling } from '$lib/stores/genvaultOnline';
 	import { tick, onMount } from 'svelte';
 	let { children } = $props();
 
@@ -128,6 +129,21 @@
 			(!$authState.enabled || $authState.authenticated) && !isLoginPath(path);
 		if (!canWatchQueue) return;
 		return ensureQueueWatching();
+	});
+
+	$effect(() => {
+		if (!$authState.loaded) return;
+		const path = $page.url.pathname;
+		const canPoll =
+			(!$authState.enabled || $authState.authenticated) &&
+			!isLoginPath(path) &&
+			$genvaultEnabled;
+		if (canPoll) {
+			startGenVaultHealthPolling();
+			return () => stopGenVaultHealthPolling();
+		}
+		stopGenVaultHealthPolling();
+		genvaultOnline.set(false);
 	});
 
 	$effect(() => {

@@ -21,6 +21,7 @@ from services.mp4_metadata import inject_workflowui_metadata as inject_workflowu
 from dependencies import COMFY_URL, INPUT_DATA_DIR, get_db, get_media_storage_service, get_run_queue_state, get_vault_input_repo
 from services.vault_input_access import ensure_can_read_input_file
 from services.media_storage_service import MediaStorageService
+from services.image_thumbnail import get_or_create_image_thumbnail_webp_bytes
 from services.video_thumbnail import get_or_create_video_thumbnail_webp_bytes
 
 logger = logging.getLogger(__name__)
@@ -396,10 +397,7 @@ def load_run_output_content_bytes(
             if run_repo is not None:
                 ensure_can_read_input_file(ctx, filename.strip(), get_vault_input_repo(), run_repo)
         return input_path.read_bytes(), _media_type_for_path(input_path)
-    is_video_thumbnail_preview = (
-        (preview or "").strip().lower() == "webp"
-        and (type or "").strip().lower() == "video"
-    )
+    want_webp_preview = (preview or "").strip().lower() == "webp"
     content: bytes | None
     media_type: str
     if run_id:
@@ -427,10 +425,12 @@ def load_run_output_content_bytes(
                 break
         if not matched_ent:
             raise HTTPException(status_code=404, detail="Image not found")
-        if is_video_thumbnail_preview:
+        stored_for_local = (matched_ent.get("type") or matched_ent.get("kind") or "output").strip().lower()
+        local_path = service.get_local_image_path(run_id, filename, subfolder or "", stored_for_local)
+
+        if want_webp_preview and stored_for_local == "video":
             if matched_index is None:
                 raise HTTPException(status_code=404, detail="Video preview not found")
-            # Always pass Comfy base URL so thumbnails can fall back to ComfyUI /view?preview=webp when ffmpeg is unavailable.
             comfy_url = None
             with state.queue_lock:
                 if run_id in state.runs and state.runs[run_id].get("comfyui_url"):
@@ -439,9 +439,6 @@ def load_run_output_content_bytes(
                 run_repo = get_db()[3]
                 run = run_repo.get_run(run_id) if run_repo else None
                 comfy_url = _normalize_comfy_url(run.comfyui_url or COMFY_URL) if run and run.comfyui_url else COMFY_URL
-        stored_for_local = (matched_ent.get("type") or matched_ent.get("kind") or "output").strip().lower()
-        local_path = service.get_local_image_path(run_id, filename, subfolder or "", stored_for_local)
-        if is_video_thumbnail_preview:
             input_video_path = local_path if local_path is not None and local_path.is_file() else None
             thumb_bytes = get_or_create_video_thumbnail_webp_bytes(
                 run_entity=run_entity,
@@ -455,7 +452,19 @@ def load_run_output_content_bytes(
             assert thumb_bytes is not None
             return thumb_bytes, "image/webp"
 
-        if local_path is not None and local_path.is_file():
+        if want_webp_preview and stored_for_local not in ("video", "audio"):
+            if local_path is not None and local_path.is_file():
+                try:
+                    thumb_bytes = get_or_create_image_thumbnail_webp_bytes(
+                        run_entity=run_entity,
+                        output_index=matched_index or 0,
+                        input_image_path=local_path,
+                    )
+                    return thumb_bytes, "image/webp"
+                except Exception as e:
+                    logger.warning("Local image thumbnail failed, falling back to ComfyUI preview: %s", e)
+            content = None
+        elif local_path is not None and local_path.is_file():
             logger.info("GET /image: serving from local storage %s", local_path)
             media_type = _media_type_for_path(local_path)
             content = local_path.read_bytes()
@@ -545,4 +554,7 @@ def get_image(
                     content = inject_workflowui_metadata_mp3(content, json_str)
                 elif type == "video":
                     content = inject_workflowui_metadata_mp4(content, json_str)
-    return Response(content=content, media_type=media_type)
+    headers: dict[str, str] = {}
+    if (preview or "").strip().lower() == "webp":
+        headers["Cache-Control"] = "private, max-age=86400"
+    return Response(content=content, media_type=media_type, headers=headers)

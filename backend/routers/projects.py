@@ -257,7 +257,7 @@ def delete_project(project_id: str, body: dict | None = None, db=Depends(get_db)
     media_storage = get_media_storage_config()
     media_service = get_media_storage_service()
     root_path = (media_storage.root_path or "").strip()
-    project_dir = Path(root_path) / project_id if root_path else None
+    project_dir = Path(root_path.replace("\\", "/")).expanduser() / project_id if root_path else None
     if keep == "remote":
         if project_dir and project_dir.exists():
             try:
@@ -612,8 +612,8 @@ def move_runs_to_project(
         for run in runs_to_move:
             run_date = _format_run_date_ms(run.created_at)
             group_or_run_id = run.run_group_id or run.id
-            old_dir = Path(root) / project_id / run_date / group_or_run_id
-            new_dir = Path(root) / target_project_id / run_date / group_or_run_id
+            old_dir = Path(root.replace("\\", "/")).expanduser() / project_id / run_date / group_or_run_id
+            new_dir = Path(root.replace("\\", "/")).expanduser() / target_project_id / run_date / group_or_run_id
             if old_dir.exists() and old_dir.is_dir():
                 try:
                     new_dir.parent.mkdir(parents=True, exist_ok=True)
@@ -633,7 +633,7 @@ def move_runs_to_project(
         for run in runs_to_move:
             run_date = _format_run_date_ms(run.created_at)
             group_or_run_id = run.run_group_id or run.id
-            new_path = Path(root) / target_project_id / run_date / group_or_run_id
+            new_path = Path(root.replace("\\", "/")).expanduser() / target_project_id / run_date / group_or_run_id
             if new_path.exists():
                 run_repo.update_run(run.id, local_path=str(new_path))
 

@@ -55,6 +55,11 @@
 		fullscreenTitle = 'Focus this run in fullscreen (Esc to exit)',
 		collapseIcon = '▾',
 		hasSelection = false,
+		showGenVaultSync = false,
+		genVaultSyncDisabled = false,
+		genVaultSyncLoading = false,
+		onGenVaultSync = undefined as (() => void) | undefined,
+		genVaultSyncTitle = 'Alle Outputs dieses Runs an GenVault senden',
 	}: {
 		storageSummary?: StorageSummary;
 		localStorageBytes?: number | null;
@@ -94,6 +99,11 @@
 		fullscreenTitle?: string;
 		collapseIcon?: string;
 		hasSelection?: boolean;
+		showGenVaultSync?: boolean;
+		genVaultSyncDisabled?: boolean;
+		genVaultSyncLoading?: boolean;
+		onGenVaultSync?: () => void;
+		genVaultSyncTitle?: string;
 	} = $props();
 
 	const storageTooltip = $derived(
@@ -180,6 +190,30 @@
 						{/if}
 						<span class="run-menu-item-label">Save</span>
 					</button>
+
+					{#if showGenVaultSync && onGenVaultSync}
+						<button
+							type="button"
+							class="run-menu-item-btn"
+							disabled={!runActionsAllowed || genVaultSyncDisabled}
+							onclick={(e) => { e.stopPropagation(); onGenVaultSync(); }}
+							title={genVaultSyncTitle}
+							aria-label="Sync to GenVault"
+						>
+							{#if genVaultSyncLoading}
+								<svg class="icon spinner" viewBox="0 0 24 24" aria-hidden="true">
+									<circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-dasharray="28 10"/>
+								</svg>
+							{:else}
+								<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+									<rect x="3" y="3" width="18" height="18" rx="2" />
+									<path d="M8 12h8" />
+									<path d="M12 8v8" />
+								</svg>
+							{/if}
+							<span class="run-menu-item-label">GenVault</span>
+						</button>
+					{/if}
 
 					<button
 						type="button"
@@ -338,6 +372,29 @@
 						</svg>
 					{/if}
 				</button>
+				{#if showGenVaultSync && onGenVaultSync}
+					<button
+						type="button"
+						class="run-action-btn"
+						disabled={!runActionsAllowed || genVaultSyncDisabled}
+						onclick={(e) => { e.stopPropagation(); onGenVaultSync(); }}
+						title={genVaultSyncTitle}
+						aria-label="Sync to GenVault"
+					>
+						{#if genVaultSyncLoading}
+							<svg class="icon spinner" viewBox="0 0 24 24" aria-hidden="true">
+								<circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-dasharray="28 10"/>
+							</svg>
+						{:else}
+							<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+								<rect x="3" y="3" width="18" height="18" rx="2" />
+								<path d="M8 12h8" />
+								<path d="M12 8v8" />
+							</svg>
+						{/if}
+						<span class="run-action-label">GenVault</span>
+					</button>
+				{/if}
 				<button
 					type="button"
 					class="run-action-btn"

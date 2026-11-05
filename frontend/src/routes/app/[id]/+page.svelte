@@ -22,6 +22,7 @@
     import { createGenVaultExistsPoller, type GenVaultExistsPoller } from '$lib/genvault/existsPoller';
     import { genvaultEnabled } from '$lib/stores/genvaultEnabled';
     import { toastError, toastSuccess } from '$lib/stores/toast';
+    import { buildFullMediaUrl, buildThumbnailUrl } from '$lib/mediaUrls';
 
     let { data } = $props();
     let currentProject = $state<{ id: string; name: string } | null>(null);
@@ -824,15 +825,19 @@
             (img: { filename: string; subfolder?: string; type?: string; kind?: string; remote_deleted?: boolean }, index: number) => {
                 const subfolder = img.subfolder ?? '';
                 const type = img.type ?? img.kind ?? 'output';
-                let url = `${apiBase}/image?filename=${encodeURIComponent(img.filename)}&subfolder=${encodeURIComponent(subfolder)}&type=${encodeURIComponent(type)}&run_id=${encodeURIComponent(backendRunId)}`;
-                if (data.embedWorkflowuiMetadataOnDownload) url += '&embed_workflowui_metadata=1';
+                const ref = { filename: img.filename, subfolder, type };
+                const url = buildFullMediaUrl(ref, {
+                    apiBase,
+                    runId: backendRunId,
+                    embedWorkflowuiMetadata: !!data.embedWorkflowuiMetadataOnDownload
+                });
                 const isVideo = type === 'video';
                 const isAudio = type === 'audio';
                 const mediaType = isVideo ? 'video' : isAudio ? 'audio' : 'image';
                 return {
                     id: `${backendRunId}-${index}`,
                     url,
-                    previewUrl: isVideo || isAudio ? undefined : `${url}&preview=webp`,
+                    previewUrl: buildThumbnailUrl(ref, { apiBase, runId: backendRunId }),
                     filename: img.filename,
                     promptId: run.prompt_id ?? backendRunId,
                     backendRunId,
