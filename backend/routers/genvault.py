@@ -6,6 +6,7 @@ import requests
 from fastapi import APIRouter, Depends, HTTPException
 
 from authz import ensure_run_access, require_user
+from config import get_genvault_config
 from dependencies import get_db, get_media_storage_service, get_run_queue_state, INPUT_DATA_DIR, get_vault_input_repo
 from routers.execution import load_run_output_content_bytes
 from services.vault_input_access import ensure_can_read_input_file
@@ -19,6 +20,11 @@ router = APIRouter(dependencies=[Depends(require_user)])
 
 def _genvault_url() -> str:
     return (os.environ.get("GENVAULT_URL") or "http://localhost:8090").rstrip("/")
+
+
+def _require_genvault_enabled() -> None:
+    if not get_genvault_config().enabled:
+        raise HTTPException(status_code=404, detail="GenVault is disabled")
 
 
 def _pick_run_media_entry(run_entity: Any, output_index: int) -> dict[str, Any]:
@@ -57,6 +63,7 @@ def _embed_workflowui_metadata_if_needed(content: bytes, filename: str, type_hin
 
 @router.get("/genvault/url")
 def get_genvault_url() -> dict[str, str]:
+    _require_genvault_enabled()
     return {"url": _genvault_url()}
 
 
@@ -68,6 +75,7 @@ def push_from_run(
     db=Depends(get_db),
     ctx=Depends(require_user),
 ):
+    _require_genvault_enabled()
     run_id = str(payload.get("run_id") or "").strip()
     output_index = payload.get("output_index")
     if not run_id:
@@ -126,6 +134,7 @@ def push_input(
     db=Depends(get_db),
     ctx=Depends(require_user),
 ):
+    _require_genvault_enabled()
     filename = str(payload.get("filename") or "").strip()
     if not filename:
         raise HTTPException(status_code=400, detail="filename is required")
@@ -161,6 +170,7 @@ def push_input(
 
 @router.post("/genvault/exists")
 def genvault_exists(payload: dict[str, Any]):
+    _require_genvault_enabled()
     try:
         res = requests.post(f"{_genvault_url()}/api/exists", json=payload, timeout=30)
     except requests.RequestException as e:

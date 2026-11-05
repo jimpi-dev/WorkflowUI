@@ -2,33 +2,32 @@
 	import { onMount, onDestroy } from 'svelte';
 	import { queuePanelOpen } from '$lib/stores/queuePanelOpen';
 	import { queuePanelWidth } from '$lib/stores/queuePanelWidth';
+	import { queueState, queueItemCount } from '$lib/stores/queueState';
 	import { getQueueGroupsCollapsedCookie, setQueueGroupsCollapsedCookie, getQueuePanelWidthCookie, setQueuePanelWidthCookie } from '$lib/cookie';
 	import {
-		getQueue,
 		pauseQueue,
 		startQueue,
 		cancelRun,
 		retryRun,
 		reorderRun,
 		moveRun,
-		type QueueResponse,
 		type QueueItem,
 		type QueueDetailInput
 	} from '$lib/queueApi';
 
-	let queue = $state<QueueResponse | null>(null);
-	let loading = $state(true);
-	let error = $state<string | null>(null);
 	let actionLoading = $state<Set<string>>(new Set());
 	let collapseAllByDefault = $state(getQueueGroupsCollapsedCookie());
 	let collapsedGroups = $state<Set<string>>(new Set());
 	let prevQueueGroupKeys = $state<string | undefined>(undefined);
 
-	const POLL_MS = 2500;
+	const queue = $derived($queueState.queue);
+	const loading = $derived($queueState.loading);
+	const queueError = $derived($queueState.error);
+	let actionError = $state<string | null>(null);
+	const error = $derived(actionError ?? queueError);
+
 	const QUEUE_PANEL_MIN_WIDTH = 280;
 	const QUEUE_PANEL_MAX_WIDTH_RATIO = 0.33;
-	let pollId: ReturnType<typeof setInterval> | null = null;
-
 	let resizing = $state(false);
 	let selectedRunId = $state<string | null>(null);
 	let expandedDetailsRunId = $state<string | null>(null);
@@ -66,40 +65,6 @@
 		document.addEventListener('mouseup', onUp);
 	}
 
-	async function fetchQueue() {
-		try {
-			queue = await getQueue();
-			error = null;
-		} catch (e) {
-			error = e instanceof Error ? e.message : 'Failed to load queue';
-			queue = null;
-		} finally {
-			loading = false;
-		}
-	}
-
-	function startPolling() {
-		if (pollId) return;
-		pollId = setInterval(fetchQueue, POLL_MS);
-	}
-
-	function stopPolling() {
-		if (pollId) {
-			clearInterval(pollId);
-			pollId = null;
-		}
-	}
-
-	$effect(() => {
-		if ($queuePanelOpen) {
-			loading = true;
-			fetchQueue();
-			startPolling();
-		} else {
-			stopPolling();
-		}
-	});
-
 	$effect(() => {
 		const groups = queuedByGroup;
 		const keys = groups.map((g) => g.groupKey).sort().join(',');
@@ -127,7 +92,6 @@
 			window.removeEventListener('resize', onWindowResize);
 		}
 		if (hoverTimer) clearTimeout(hoverTimer);
-		stopPolling();
 	});
 
 	function closePanel() {
@@ -206,30 +170,30 @@
 	}
 
 	async function onPause() {
+		actionError = null;
 		try {
 			await pauseQueue();
-			await fetchQueue();
 		} catch (e) {
-			error = e instanceof Error ? e.message : 'Pause failed';
+			actionError = e instanceof Error ? e.message : 'Pause failed';
 		}
 	}
 
 	async function onStart() {
+		actionError = null;
 		try {
 			await startQueue();
-			await fetchQueue();
 		} catch (e) {
-			error = e instanceof Error ? e.message : 'Start failed';
+			actionError = e instanceof Error ? e.message : 'Start failed';
 		}
 	}
 
 	async function onCancel(runId: string) {
 		actionLoading = new Set([...actionLoading, runId]);
+		actionError = null;
 		try {
 			await cancelRun(runId);
-			await fetchQueue();
 		} catch (e) {
-			error = e instanceof Error ? e.message : 'Cancel failed';
+			actionError = e instanceof Error ? e.message : 'Cancel failed';
 		} finally {
 			actionLoading = new Set([...actionLoading].filter((id) => id !== runId));
 		}
@@ -237,11 +201,11 @@
 
 	async function onRetry(runId: string) {
 		actionLoading = new Set([...actionLoading, runId]);
+		actionError = null;
 		try {
 			await retryRun(runId);
-			await fetchQueue();
 		} catch (e) {
-			error = e instanceof Error ? e.message : 'Retry failed';
+			actionError = e instanceof Error ? e.message : 'Retry failed';
 		} finally {
 			actionLoading = new Set([...actionLoading].filter((id) => id !== runId));
 		}
@@ -249,11 +213,11 @@
 
 	async function onReorder(runId: string, direction: 'up' | 'down') {
 		actionLoading = new Set([...actionLoading, `${runId}-${direction}`]);
+		actionError = null;
 		try {
 			await reorderRun(runId, direction);
-			await fetchQueue();
 		} catch (e) {
-			error = e instanceof Error ? e.message : 'Reorder failed';
+			actionError = e instanceof Error ? e.message : 'Reorder failed';
 		} finally {
 			actionLoading = new Set([...actionLoading].filter((id) => id !== `${runId}-${direction}`));
 		}
@@ -261,11 +225,11 @@
 
 	async function onMoveRun(runId: string, newPosition: number) {
 		actionLoading = new Set([...actionLoading, `${runId}-move`]);
+		actionError = null;
 		try {
 			await moveRun(runId, newPosition);
-			await fetchQueue();
 		} catch (e) {
-			error = e instanceof Error ? e.message : 'Move failed';
+			actionError = e instanceof Error ? e.message : 'Move failed';
 		} finally {
 			actionLoading = new Set([...actionLoading].filter((id) => id !== `${runId}-move`));
 		}
@@ -279,7 +243,6 @@
 				// continue with rest
 			}
 		}
-		await fetchQueue();
 	}
 
 	const CLEAR_QUEUE_MESSAGE =
@@ -300,7 +263,6 @@
 				// continue with rest
 			}
 		}
-		await fetchQueue();
 	}
 
 	let draggedRunId = $state<string | null>(null);
@@ -394,7 +356,6 @@
 			for (let i = 0; i < runIds.length; i++) {
 				await moveRun(runIds[i], targetPosition + i);
 			}
-			await fetchQueue();
 		} else {
 			const runId = e.dataTransfer?.getData('text/plain');
 			if (!runId || runId === targetRunId) return;
@@ -430,9 +391,7 @@
 		}
 	}
 
-	const totalCount = $derived(
-		queue ? (queue.running ? 1 : 0) + (queue.queued?.length ?? 0) : 0
-	);
+	const totalCount = $derived(queueItemCount(queue));
 	const hasItems = $derived(totalCount > 0);
 
 	type QueuedGroup = { groupKey: string; appTitle: string; appHeaderColor: string | null; projectId: string | null; projectTitle: string | null; items: QueueItem[] };
@@ -502,7 +461,7 @@
 							· 1 running
 						{/if}
 						{#if (queue?.queued?.length ?? 0) > 0}
-							{queue.queued.length} queued
+							{queue?.queued?.length ?? 0} queued
 						{/if}
 					{:else if !loading}
 						Empty
